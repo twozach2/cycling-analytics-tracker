@@ -50,6 +50,7 @@ test("removes starter preview metadata and dependencies", async () => {
   assert.doesNotMatch(packageJson, /react-loading-skeleton/);
   assert.match(dashboard, /label: "Plan today"/);
   assert.doesNotMatch(dashboard, /label: "Phase [23]"/);
+  assert.doesNotMatch(dashboard, /Not valid for this ride type/);
   await assert.rejects(access(new URL("app/_sites-preview/SkeletonPreview.tsx", templateRoot)));
   await assert.rejects(access(new URL("app/_sites-preview/preview.css", templateRoot)));
 });

@@ -74,20 +74,38 @@ export function deriveStreamMetrics(samples: ActivitySample[]) {
     : null;
 
   const paired = samples.filter((sample) => sample.power !== null && sample.power > 0 && sample.heartRate !== null && sample.heartRate > 0);
-  const pairedPower = paired.map((sample) => sample.power!);
-  const pairedPowerMean = pairedPower.length ? pairedPower.reduce((sum, value) => sum + value, 0) / pairedPower.length : null;
-  const powerStddev = pairedPowerMean === null ? null : Math.sqrt(pairedPower.reduce((sum, value) => sum + ((value - pairedPowerMean) ** 2), 0) / pairedPower.length);
-  const sufficientlySteady = pairedPowerMean !== null && powerStddev !== null && powerStddev / pairedPowerMean <= 0.25;
   let aerobicDecouplingPercent: number | null = null;
-  if (paired.length >= 20 && sufficientlySteady) {
-    const midpoint = Math.floor(paired.length / 2);
+  if (paired.length >= 40) {
+    const bucketCount = 10;
+    const buckets = Array.from({ length: bucketCount }, () => [] as ActivitySample[]);
+    const timed = paired.filter((sample) => sample.time !== null).sort((a, b) => a.time! - b.time!);
+    const firstTime = timed.at(0)?.time ?? null;
+    const lastTime = timed.at(-1)?.time ?? null;
+    const useTimeBuckets = timed.length >= paired.length * 0.8 && firstTime !== null && lastTime !== null && lastTime > firstTime;
+    const ordered = useTimeBuckets ? timed : paired;
+    ordered.forEach((sample, index) => {
+      const progress = useTimeBuckets
+        ? (sample.time! - firstTime!) / (lastTime! - firstTime!)
+        : index / Math.max(1, ordered.length - 1);
+      buckets[Math.min(bucketCount - 1, Math.floor(progress * bucketCount))].push(sample);
+    });
     const efficiency = (values: ActivitySample[]) => {
       const power = average(values.map((sample) => sample.power));
       const heartRate = average(values.map((sample) => sample.heartRate));
       return power !== null && heartRate !== null && heartRate > 0 ? power / heartRate : null;
     };
-    const first = efficiency(paired.slice(0, midpoint));
-    const second = efficiency(paired.slice(midpoint));
+    const median = (values: number[]) => {
+      if (!values.length) return null;
+      const sorted = [...values].sort((a, b) => a - b);
+      const midpoint = Math.floor(sorted.length / 2);
+      return sorted.length % 2 ? sorted[midpoint] : (sorted[midpoint - 1] + sorted[midpoint]) / 2;
+    };
+    const bucketEfficiencies = buckets.map((bucket) => bucket.length >= 4 ? efficiency(bucket) : null);
+    const midpoint = Math.floor(bucketCount / 2);
+    const firstValues = bucketEfficiencies.slice(0, midpoint).filter((value): value is number => value !== null);
+    const secondValues = bucketEfficiencies.slice(midpoint).filter((value): value is number => value !== null);
+    const first = firstValues.length >= 3 ? median(firstValues) : null;
+    const second = secondValues.length >= 3 ? median(secondValues) : null;
     if (first !== null && second !== null && first > 0) aerobicDecouplingPercent = round(((first - second) / first) * 100);
   }
 

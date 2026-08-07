@@ -141,6 +141,7 @@ export async function POST(request: Request) {
   const ftp = profile?.ftp ?? 165;
   const fileStore = (env as unknown as { RIDE_FILES: R2Bucket }).RIDE_FILES;
   const streamCandidates: Array<{ activity: StravaActivity; rideId: string }> = [];
+  const storedStreamCandidates: Array<{ activity: StravaActivity; rideId: string; r2Key: string }> = [];
   let imported = 0;
   let updated = 0;
   let skipped = 0;
@@ -213,16 +214,44 @@ export async function POST(request: Request) {
         trainingLoad: derived.trainingLoad,
         trainingLoadIsEstimated: derived.trainingLoadIsEstimated,
         variabilityIndex: normalizedPower !== null && averagePower !== null && averagePower > 0 ? normalizedPower / averagePower : null,
-        algorithmVersion: "phase3.1",
+        algorithmVersion: "phase3.2",
         dataQuality: "medium",
       });
       imported += 1;
     }
 
-    const [storedStream] = await db.select({ rideId: activityStreams.rideId }).from(activityStreams)
+    const [storedStream] = await db.select({ rideId: activityStreams.rideId, r2Key: activityStreams.r2Key }).from(activityStreams)
       .where(eq(activityStreams.rideId, rideId))
       .limit(1);
-    if (!storedStream) streamCandidates.push({ activity, rideId });
+    if (storedStream?.r2Key) storedStreamCandidates.push({ activity, rideId, r2Key: storedStream.r2Key });
+    else streamCandidates.push({ activity, rideId });
+  }
+
+  let streamsReprocessed = 0;
+  for (const candidate of storedStreamCandidates) {
+    try {
+      const storedObject = await fileStore.get(candidate.r2Key);
+      if (!storedObject) continue;
+      const streams = JSON.parse(await storedObject.text()) as StreamSet;
+      const samples = samplesFromStreams(streams, candidate.activity.start_date);
+      if (!samples.length) continue;
+      const streamMetrics = deriveStreamMetrics(samples);
+      await db.update(rideMetrics).set({
+        aerobicDecouplingPercent: streamMetrics.aerobicDecouplingPercent,
+        cadenceStddev: streamMetrics.cadenceStddev,
+        cadenceTargetPercent: streamMetrics.cadenceTargetPercent,
+        cadenceAcceptablePercent: streamMetrics.cadenceAcceptablePercent,
+        cadenceLowPercent: streamMetrics.cadenceLowPercent,
+        cadenceHighPercent: streamMetrics.cadenceHighPercent,
+        first15HeartRateBpm: streamMetrics.first15HeartRate,
+        final15HeartRateBpm: streamMetrics.final15HeartRate,
+        algorithmVersion: "phase3.2",
+        dataQuality: "high",
+      }).where(eq(rideMetrics.rideId, candidate.rideId));
+      streamsReprocessed += 1;
+    } catch {
+      // A missing or malformed stored stream should not prevent new rides from syncing.
+    }
   }
 
   let streamsImported = 0;
@@ -265,7 +294,7 @@ export async function POST(request: Request) {
       cadenceHighPercent: streamMetrics.cadenceHighPercent,
       first15HeartRateBpm: streamMetrics.first15HeartRate,
       final15HeartRateBpm: streamMetrics.final15HeartRate,
-      algorithmVersion: "phase3.1",
+      algorithmVersion: "phase3.2",
       dataQuality: "high",
     }).where(eq(rideMetrics.rideId, candidate.rideId));
     if (bests.length) {
@@ -283,6 +312,7 @@ export async function POST(request: Request) {
     skipped,
     activitiesScanned,
     streamsImported,
+    streamsReprocessed,
     streamFailures,
     streamDeferred: Math.max(0, streamCandidates.length - attemptedStreams),
     historyStart: new Date(afterEpoch * 1000).toISOString(),

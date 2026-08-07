@@ -872,7 +872,7 @@ function Overview({ selectedRide, rides, openRide, setView, isDemo, currentFtp }
         </div>
         <div className="ride-analysis-grid">
           <div className="analysis-tile"><span>Intensity</span><strong>{selectedRide.intensityFactor.toFixed(2)} <small>IF</small></strong><p>{selectedRide.normalizedPower ? "Normalized power available" : "Estimated from average power"}</p></div>
-          <div className="analysis-tile"><span>Aerobic durability</span><strong>{selectedRide.decoupling === null ? "—" : `${selectedRide.decoupling.toFixed(1)}%`} <small>drift</small></strong><p>{selectedRide.decoupling === null ? "Not valid for this ride type" : selectedRide.decoupling < 5 ? "Good durability" : "Moderate drift"}</p></div>
+          <div className="analysis-tile"><span>Aerobic durability</span><strong>{selectedRide.decoupling === null ? "—" : `${selectedRide.decoupling.toFixed(1)}%`} <small>drift</small></strong><p>{selectedRide.decoupling === null ? "Needs detailed power + heart-rate data" : selectedRide.variabilityIndex && selectedRide.variabilityIndex > 1.05 ? "Directional estimate · variable pacing" : selectedRide.decoupling < 5 ? "Good durability" : "Moderate drift"}</p></div>
           <div className="analysis-tile"><span>Power variability</span><strong>{selectedRide.variabilityIndex?.toFixed(2) ?? "—"} <small>VI</small></strong><p>{selectedRide.variabilityIndex && selectedRide.variabilityIndex <= 1.05 ? "Very steady pacing" : "Variable effort"}</p></div>
         </div>
         <blockquote>{selectedRide.note}</blockquote>
@@ -1285,6 +1285,7 @@ function ConnectedSources({ refreshRides }: { refreshRides: () => Promise<void> 
         imported?: number;
         skipped?: number;
         streamsImported?: number;
+        streamsReprocessed?: number;
         streamFailures?: number;
         streamDeferred?: number;
         error?: string;
@@ -1297,9 +1298,10 @@ function ConnectedSources({ refreshRides }: { refreshRides: () => Promise<void> 
         ? `${payload.imported ?? 0} rides saved from the last six months · ${payload.skipped ?? 0} already stored`
         : `${payload.imported ?? 0} new rides saved · ${payload.skipped ?? 0} existing rides checked`;
       const streamNote = payload.streamsImported ? ` · ${payload.streamsImported} detailed streams added` : "";
+      const reprocessedNote = payload.streamsReprocessed ? ` · ${payload.streamsReprocessed} stored rides recalculated` : "";
       const deferredNote = payload.streamDeferred ? ` · ${payload.streamDeferred} detailed streams will fill in on a later import` : "";
       const failureNote = payload.streamFailures ? ` · ${payload.streamFailures} stream requests unavailable` : "";
-      setActionMessage(`${base}${streamNote}${deferredNote}${failureNote}`);
+      setActionMessage(`${base}${streamNote}${reprocessedNote}${deferredNote}${failureNote}`);
     } catch (error) {
       setActionState("error");
       setActionMessage(error instanceof Error ? error.message : "Strava sync failed.");
@@ -1424,7 +1426,7 @@ function Methodology({ currentFtp }: { currentFtp: number }) {
     { id: "01", title: "Power / HR ratio", formula: "average power ÷ average heart rate", note: "Contextual efficiency signal for comparable steady rides." },
     { id: "02", title: "Intensity factor", formula: "normalized power ÷ FTP", note: "Average power is used only as an explicitly marked estimate." },
     { id: "03", title: "Training load", formula: "hours × intensity² × 100", note: "A transparent TSS-like load, not a licensed physiological diagnosis." },
-    { id: "04", title: "Aerobic decoupling", formula: "change in power / HR between halves", note: "Shown only when the ride is sufficiently steady and continuous." },
+    { id: "04", title: "Aerobic decoupling", formula: "median interval efficiency · first half vs second half", note: "Ten equal-duration intervals reduce distortion from normal surges and coasting; variable rides remain directional." },
     { id: "05", title: "Load ratio", formula: "7-day load ÷ 28-day weekly average", note: "A review signal for abrupt changes, never an exact injury threshold." },
     { id: "06", title: "Readiness", formula: "recovery time + load + check-in", note: "A weighted, explainable score. Pain caps the result and overrides hard-ride advice." },
     { id: "07", title: "FTP prediction", formula: "20–60 min best power × duration factor", note: "A conservative range from recorded efforts, with confidence tied to available evidence." },

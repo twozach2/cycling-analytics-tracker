@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { derivePowerDuration, type ActivitySample } from "../lib/activity-parser.ts";
+import { derivePowerDuration, deriveStreamMetrics, type ActivitySample } from "../lib/activity-parser.ts";
 import { buildWeeklyPlan, predictFtp, projectFtpGoal, recommendWorkout } from "../lib/phase3.ts";
 
 test("derives rolling power evidence from timestamped samples", () => {
@@ -16,6 +16,35 @@ test("derives rolling power evidence from timestamped samples", () => {
   }));
   const bests = derivePowerDuration(samples);
   assert.equal(bests.find((best) => best.durationSeconds === 1200)?.bestPowerWatts, 200);
+});
+
+test("derives interval-smoothed durability from a variable ride", () => {
+  const samples: ActivitySample[] = Array.from({ length: 1200 }, (_, second) => ({
+    time: second * 1000,
+    power: second % 2 === 0 ? 80 : 220,
+    heartRate: second < 600 ? 140 : 150,
+    cadence: 88,
+    distance: second * 8,
+    elevation: null,
+    latitude: null,
+    longitude: null,
+  }));
+  const metrics = deriveStreamMetrics(samples);
+  assert.equal(metrics.aerobicDecouplingPercent, 6.7);
+});
+
+test("requires enough paired intervals for durability", () => {
+  const samples: ActivitySample[] = Array.from({ length: 20 }, (_, second) => ({
+    time: second * 1000,
+    power: 150,
+    heartRate: 140,
+    cadence: null,
+    distance: null,
+    elevation: null,
+    latitude: null,
+    longitude: null,
+  }));
+  assert.equal(deriveStreamMetrics(samples).aerobicDecouplingPercent, null);
 });
 
 test("FTP prediction returns a range and evidence rather than false precision", () => {
