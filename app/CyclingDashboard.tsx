@@ -9,8 +9,9 @@ import {
   recommendRecovery,
   type SubjectiveRecovery,
 } from "@/lib/metrics";
+import { buildWeeklyPlan, projectFtpGoal, recommendWorkout } from "@/lib/phase3";
 
-type View = "overview" | "rides" | "analysis" | "import" | "settings";
+type View = "overview" | "rides" | "analysis" | "phase3" | "import" | "settings";
 type DataMode = "loading" | "demo" | "saved" | "unavailable";
 
 type Ride = {
@@ -212,8 +213,9 @@ const navItems: Array<{ id: View; label: string; glyph: string }> = [
   { id: "overview", label: "Today", glyph: "01" },
   { id: "rides", label: "Ride log", glyph: "02" },
   { id: "analysis", label: "Phase 2", glyph: "03" },
-  { id: "import", label: "Import", glyph: "04" },
-  { id: "settings", label: "Method", glyph: "05" },
+  { id: "phase3", label: "Phase 3", glyph: "04" },
+  { id: "import", label: "Import", glyph: "05" },
+  { id: "settings", label: "Method", glyph: "06" },
 ];
 
 const miles = (meters: number | null) =>
@@ -319,6 +321,7 @@ export default function CyclingDashboard() {
   const [rides, setRides] = useState(initialRides);
   const [selectedRideId, setSelectedRideId] = useState(initialRides[0].id);
   const [dataMode, setDataMode] = useState<DataMode>("loading");
+  const [currentFtp, setCurrentFtp] = useState(165);
   const [syncNote, setSyncNote] = useState("");
   const [rideFilter, setRideFilter] = useState("All rides");
   const [search, setSearch] = useState("");
@@ -358,6 +361,37 @@ export default function CyclingDashboard() {
         if (active) setDataMode("unavailable");
       });
     return () => { active = false; };
+  }, []);
+
+  useEffect(() => {
+    void fetch("/api/phase3", { cache: "no-store" })
+      .then(async (response) => ({ response, payload: await response.json() as { currentFtpWatts?: number } }))
+      .then(({ response, payload }) => {
+        if (response.ok && payload.currentFtpWatts) setCurrentFtp(payload.currentFtpWatts);
+      })
+      .catch(() => undefined);
+  }, []);
+
+  useEffect(() => {
+    const url = new URL(window.location.href);
+    const integration = url.searchParams.get("integration");
+    if (!integration?.startsWith("strava-")) return;
+    const messages: Record<string, string> = {
+      "strava-connected": "Strava connected · Ready to sync",
+      "strava-denied": "Strava connection cancelled",
+      "strava-scope": "Strava activity permission was not granted",
+      "strava-expired": "Strava connection expired · Try again",
+      "strava-failed": "Strava connection failed · Try again",
+      "strava-setup": "Strava app credentials still need configuration",
+      "strava-invalid": "Strava returned an invalid connection response",
+    };
+    const timer = window.setTimeout(() => {
+      setView("phase3");
+      setSyncNote(messages[integration] ?? "Strava connection updated");
+      url.searchParams.delete("integration");
+      window.history.replaceState({}, "", `${url.pathname}${url.search}${url.hash}`);
+    }, 0);
+    return () => window.clearTimeout(timer);
   }, []);
 
   useEffect(() => {
@@ -402,9 +436,9 @@ export default function CyclingDashboard() {
         averagePowerWatts: selectedRide.averagePower,
         normalizedPowerWatts: selectedRide.normalizedPower,
         averageHeartRateBpm: selectedRide.averageHeartRate,
-        ftpWatts: 165,
+        ftpWatts: currentFtp,
       }),
-    [selectedRide],
+    [currentFtp, selectedRide],
   );
   const recent72HourLoad = useMemo(() => {
     const timestamps = rides.map((ride) => Date.parse(ride.date)).filter(Number.isFinite);
@@ -489,6 +523,11 @@ export default function CyclingDashboard() {
       cadenceHighPercent: 1,
       first15HeartRate: 128,
       final15HeartRate: 135,
+      powerDuration: [
+        { durationSeconds: 300, bestPowerWatts: 128 },
+        { durationSeconds: 1200, bestPowerWatts: 118 },
+        { durationSeconds: 3600, bestPowerWatts: 112 },
+      ],
       sampleCount: 3672,
       warnings: [],
     });
@@ -513,7 +552,7 @@ export default function CyclingDashboard() {
       averagePowerWatts: detected.averagePower,
       normalizedPowerWatts: detected.normalizedPower,
       averageHeartRateBpm: detected.averageHeartRate,
-      ftpWatts: 165,
+      ftpWatts: currentFtp,
     });
     const date = detected.startedAt ? new Date(detected.startedAt) : new Date();
     const ride: Ride = {
@@ -588,7 +627,7 @@ export default function CyclingDashboard() {
             averagePowerWatts: detected.averagePower,
             maximumPowerWatts: detected.maximumPower,
             normalizedPowerWatts: detected.normalizedPower,
-            ftpAtRideWatts: 165,
+            ftpAtRideWatts: currentFtp,
             sourceTrainingLoad: detected.sourceTrainingLoad,
             aerobicDecouplingPercent: detected.aerobicDecouplingPercent,
             variabilityIndex: detected.variabilityIndex,
@@ -599,6 +638,7 @@ export default function CyclingDashboard() {
             cadenceHighPercent: detected.cadenceHighPercent,
             first15HeartRateBpm: detected.first15HeartRate,
             final15HeartRateBpm: detected.final15HeartRate,
+            powerDuration: detected.powerDuration,
           }),
         });
         const saved = await saveResponse.json() as { duplicate?: boolean; error?: string };
@@ -648,14 +688,14 @@ export default function CyclingDashboard() {
         </nav>
         <div className="athlete-card">
           <div className="athlete-avatar">ZT</div>
-          <div><strong>Personal profile</strong><span>FTP 165 W</span></div>
+          <div><strong>Personal profile</strong><span>FTP {currentFtp} W</span></div>
         </div>
       </aside>
 
       <section className="content-shell">
         <header className="topbar">
           <div>
-            <span className="eyebrow">{view === "overview" ? "Thursday · August 6" : "Phase 2 workspace"}</span>
+            <span className="eyebrow">{view === "overview" ? "Thursday · August 6" : `${view === "phase3" ? "Phase 3" : "Analytics"} workspace`}</span>
             <h1>{view === "overview" ? "Ride with the trend." : navItems.find((item) => item.id === view)?.label}</h1>
           </div>
           <div className="top-actions">
@@ -683,6 +723,7 @@ export default function CyclingDashboard() {
             openRide={openRide}
             setView={setView}
             isDemo={dataMode !== "saved"}
+            currentFtp={currentFtp}
           />
         )}
         {view === "rides" && (
@@ -696,7 +737,15 @@ export default function CyclingDashboard() {
             openRide={openRide}
           />
         )}
-        {view === "analysis" && <PhaseTwo rides={rides} />}
+        {view === "analysis" && <PhaseTwo rides={rides} currentFtp={currentFtp} />}
+        {view === "phase3" && <PhaseThree rides={rides} recovery={recovery} currentFtp={currentFtp} setCurrentFtp={setCurrentFtp} refreshRides={async () => {
+          const savedRides = await fetchSavedRides();
+          if (savedRides.length) {
+            setRides(savedRides);
+            setSelectedRideId(savedRides[0].id);
+            setDataMode("saved");
+          }
+        }} />}
         {view === "import" && (
           <ImportRide
             detected={detected}
@@ -719,13 +768,13 @@ export default function CyclingDashboard() {
             onReset={resetImport}
           />
         )}
-        {view === "settings" && <Methodology />}
+        {view === "settings" && <Methodology currentFtp={currentFtp} />}
       </section>
     </main>
   );
 }
 
-function Overview({ selectedRide, recommendation, recovery, setRecovery, recoverySaveState, saveRecovery, rides, openRide, setView, isDemo }: {
+function Overview({ selectedRide, recommendation, recovery, setRecovery, recoverySaveState, saveRecovery, rides, openRide, setView, isDemo, currentFtp }: {
   selectedRide: Ride;
   recommendation: ReturnType<typeof recommendRecovery>;
   recovery: SubjectiveRecovery;
@@ -736,6 +785,7 @@ function Overview({ selectedRide, recommendation, recovery, setRecovery, recover
   openRide: (ride: Ride) => void;
   setView: (view: View) => void;
   isDemo: boolean;
+  currentFtp: number;
 }) {
   const dayMs = 24 * 60 * 60 * 1000;
   const rideTimestamps = rides.map((ride) => Date.parse(ride.date)).filter(Number.isFinite);
@@ -814,7 +864,7 @@ function Overview({ selectedRide, recommendation, recovery, setRecovery, recover
       </section>
 
       <section className="metric-ribbon">
-        <MetricCard label="Current FTP" value="165" unit="W" change="Used for load estimates" tone="lime" />
+        <MetricCard label="Current FTP" value={String(currentFtp)} unit="W" change="Used for load estimates" tone="lime" />
         <MetricCard label="7-day load" value={String(sevenDayLoad)} unit="pts" change={loadDelta === null ? "First full week in view" : `${loadDelta >= 0 ? "↑" : "↓"} ${Math.abs(loadDelta)}% vs prior week`} tone="cream" />
         <MetricCard label="Aerobic efficiency" value={currentEfficiency ? currentEfficiency.toFixed(2) : "—"} unit="W/bpm" change={efficiencyDelta === null ? "Needs two power + HR rides" : `${efficiencyDelta >= 0 ? "↑" : "↓"} ${Math.abs(efficiencyDelta).toFixed(1)}% across visible rides`} tone="sky" />
         <MetricCard label="Training time" value={trainingLabel} unit="last 7 days" change={`${currentWeekRides.length} ${currentWeekRides.length === 1 ? "ride" : "rides"} completed`} tone="coral" />
@@ -905,7 +955,7 @@ function RideLog({ rides, allRides, filter, setFilter, search, setSearch, openRi
   );
 }
 
-function PhaseTwo({ rides }: { rides: Ride[] }) {
+function PhaseTwo({ rides, currentFtp }: { rides: Ride[]; currentFtp: number }) {
   const dayMs = 24 * 60 * 60 * 1000;
   const timestamps = rides.map((ride) => Date.parse(ride.date)).filter(Number.isFinite);
   const anchorMs = timestamps.length ? Math.max(...timestamps) : 0;
@@ -970,7 +1020,7 @@ function PhaseTwo({ rides }: { rides: Ride[] }) {
       </section>
 
       <section className="benchmark-card panel">
-        <div className="section-heading"><div><span className="eyebrow">Zone 2 benchmark</span><h2>110 W · 60 minutes</h2></div><span className="small-badge">85–90 rpm</span></div>
+        <div className="section-heading"><div><span className="eyebrow">Zone 2 benchmark</span><h2>{Math.round(currentFtp * 2 / 3)} W · 60 minutes</h2></div><span className="small-badge">85–90 rpm</span></div>
         {latestBenchmark ? <>
           <div className="benchmark-score"><div><span>Latest efficiency</span><strong>{latestBenchmark.powerHeartRateRatio ? latestBenchmark.powerHeartRateRatio.toFixed(3) : "—"}</strong><small>W / bpm · {latestBenchmark.dateLabel}</small></div>{previousBenchmark && <div><span>vs previous</span><strong>{percentChange(latestBenchmark.powerHeartRateRatio, previousBenchmark.powerHeartRateRatio)}</strong><small>{previousBenchmark.dateLabel}</small></div>}</div>
           <div className="benchmark-details"><Stat label="Average HR" value={latestBenchmark.averageHeartRate ? String(latestBenchmark.averageHeartRate) : "—"} unit="bpm" /><Stat label="First 15 min" value={latestBenchmark.first15HeartRate ? latestBenchmark.first15HeartRate.toFixed(0) : "—"} unit="bpm" /><Stat label="Final 15 min" value={latestBenchmark.final15HeartRate ? latestBenchmark.final15HeartRate.toFixed(0) : "—"} unit="bpm" /><Stat label="Cadence σ" value={latestBenchmark.cadenceStddev ? latestBenchmark.cadenceStddev.toFixed(1) : "—"} unit="rpm" /></div>
@@ -1004,6 +1054,193 @@ function PhaseTwo({ rides }: { rides: Ride[] }) {
 
 function DistributionRow({ label, value, tone }: { label: string; value: number; tone: string }) {
   return <div className="distribution-row"><span>{label}</span><div><i className={tone} style={{ width: `${Math.max(1, Math.min(100, value))}%` }} /></div><strong>{value.toFixed(0)}%</strong></div>;
+}
+
+type PhaseThreeInsights = {
+  currentFtpWatts: number;
+  ftpHistory: Array<{ effectiveAt: string; ftpWatts: number; source: string }>;
+  prediction: { minimumWatts: number | null; maximumWatts: number | null; midpointWatts: number | null; confidence: string; signals: string[] };
+  goal: { id: string; targetFtpWatts: number; createdAt: string } | null;
+  integrations: {
+    strava: { configured: boolean; connected: boolean; displayName: string | null; lastSyncedAt: string | null };
+    garmin: { status: string; detail: string };
+  };
+};
+
+function PhaseThree({ rides, recovery, currentFtp, setCurrentFtp, refreshRides }: {
+  rides: Ride[];
+  recovery: SubjectiveRecovery;
+  currentFtp: number;
+  setCurrentFtp: (value: number) => void;
+  refreshRides: () => Promise<void>;
+}) {
+  const [insights, setInsights] = useState<PhaseThreeInsights | null>(null);
+  const [goalTarget, setGoalTarget] = useState(200);
+  const [ftpInput, setFtpInput] = useState(currentFtp);
+  const [actionState, setActionState] = useState<"idle" | "working" | "success" | "error">("idle");
+  const [actionMessage, setActionMessage] = useState("");
+
+  const loadInsights = async () => {
+    const response = await fetch("/api/phase3", { cache: "no-store" });
+    const payload = await response.json() as PhaseThreeInsights & { error?: string };
+    if (!response.ok) throw new Error(payload.error ?? "Phase 3 insights could not be loaded.");
+    setInsights(payload);
+    setCurrentFtp(payload.currentFtpWatts);
+    setFtpInput(payload.currentFtpWatts);
+    if (payload.goal) setGoalTarget(payload.goal.targetFtpWatts);
+  };
+
+  useEffect(() => {
+    let active = true;
+    void fetch("/api/phase3", { cache: "no-store" })
+      .then(async (response) => ({ response, payload: await response.json() as PhaseThreeInsights & { error?: string } }))
+      .then(({ response, payload }) => {
+        if (!active) return;
+        if (!response.ok) throw new Error(payload.error ?? "Phase 3 insights could not be loaded.");
+        setInsights(payload);
+        setCurrentFtp(payload.currentFtpWatts);
+        setFtpInput(payload.currentFtpWatts);
+        if (payload.goal) setGoalTarget(payload.goal.targetFtpWatts);
+      })
+      .catch(() => { if (active) setActionMessage("Saved insights are temporarily unavailable."); });
+    return () => { active = false; };
+  }, [setCurrentFtp]);
+
+  const postAction = async (body: object, successMessage: string) => {
+    setActionState("working");
+    setActionMessage("");
+    try {
+      const response = await fetch("/api/phase3", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
+      const payload = await response.json() as { error?: string };
+      if (!response.ok) throw new Error(payload.error ?? "The update could not be saved.");
+      await loadInsights();
+      setActionState("success");
+      setActionMessage(successMessage);
+    } catch (error) {
+      setActionState("error");
+      setActionMessage(error instanceof Error ? error.message : "The update could not be saved.");
+    }
+  };
+
+  const syncStrava = async () => {
+    setActionState("working");
+    setActionMessage("Syncing the latest rides and streams…");
+    try {
+      const response = await fetch("/api/integrations/strava/sync", { method: "POST" });
+      const payload = await response.json() as { imported?: number; skipped?: number; streamFailures?: number; error?: string };
+      if (!response.ok) throw new Error(payload.error ?? "Strava sync failed.");
+      await refreshRides();
+      await loadInsights();
+      setActionState("success");
+      setActionMessage(`${payload.imported ?? 0} new rides imported · ${payload.skipped ?? 0} already present${payload.streamFailures ? ` · ${payload.streamFailures} without streams` : ""}`);
+    } catch (error) {
+      setActionState("error");
+      setActionMessage(error instanceof Error ? error.message : "Strava sync failed.");
+    }
+  };
+
+  const disconnectStrava = async () => {
+    setActionState("working");
+    try {
+      const response = await fetch("/api/integrations/strava/disconnect", { method: "POST" });
+      const payload = await response.json() as { error?: string };
+      if (!response.ok) throw new Error(payload.error ?? "Strava could not be disconnected.");
+      await loadInsights();
+      setActionState("success");
+      setActionMessage("Strava access was revoked. Synced rides remain in your private log.");
+    } catch (error) {
+      setActionState("error");
+      setActionMessage(error instanceof Error ? error.message : "Strava could not be disconnected.");
+    }
+  };
+
+  const dayMs = 24 * 60 * 60 * 1000;
+  const timestamps = rides.map((ride) => Date.parse(ride.date)).filter(Number.isFinite);
+  const anchorMs = timestamps.length ? Math.max(...timestamps) : Date.parse("2026-08-07");
+  const block = (startDaysAgo: number, endDaysAgo: number) => {
+    const blockRides = rides.filter((ride) => {
+      const timestamp = Date.parse(ride.date);
+      return timestamp <= anchorMs - (endDaysAgo * dayMs) && timestamp > anchorMs - (startDaysAgo * dayMs);
+    });
+    const powered = blockRides.filter((ride) => ride.averagePower > 0);
+    const efficient = blockRides.filter((ride) => ride.powerHeartRateRatio > 0);
+    return {
+      rides: blockRides.length,
+      hours: blockRides.reduce((sum, ride) => sum + ride.movingTimeSeconds, 0) / 3600,
+      load: blockRides.reduce((sum, ride) => sum + ride.trainingLoad, 0),
+      averagePower: powered.length ? powered.reduce((sum, ride) => sum + ride.averagePower, 0) / powered.length : 0,
+      efficiency: efficient.length ? efficient.reduce((sum, ride) => sum + ride.powerHeartRateRatio, 0) / efficient.length : 0,
+    };
+  };
+  const currentBlock = block(42, 0);
+  const priorBlock = block(84, 42);
+  const acuteLoad = block(7, 0).load;
+  const chronicLoad = block(28, 0).load / 4;
+  const loadRatio = chronicLoad > 0 ? acuteLoad / chronicLoad : null;
+  const latestHardRide = rides.filter((ride) => ride.type === "Tempo" || ride.type === "Threshold").sort((a, b) => Date.parse(b.date) - Date.parse(a.date))[0];
+  const readiness = calculateReadiness({
+    hoursSinceLastHardRide: latestHardRide ? Math.max(0, (anchorMs - Date.parse(latestHardRide.date)) / (60 * 60 * 1000)) : 72,
+    acuteChronicRatio: loadRatio,
+    subjective: recovery,
+  });
+  const planningInput = { readinessScore: readiness.score, kneePain: recovery.kneePain ?? 0, acuteChronicRatio: loadRatio, recentHardSessions: block(7, 0).rides ? rides.filter((ride) => (ride.type === "Tempo" || ride.type === "Threshold") && Date.parse(ride.date) > anchorMs - (7 * dayMs)).length : 0 };
+  const workout = recommendWorkout(planningInput);
+  const weeklyPlan = buildWeeklyPlan(planningInput);
+  const prediction = insights?.prediction;
+  const projectedFromFtp = prediction?.midpointWatts ?? currentFtp;
+  const projection = projectFtpGoal(projectedFromFtp, goalTarget, new Date(anchorMs).toISOString());
+  const change = (current: number, previous: number, suffix = "") => previous ? `${current >= previous ? "+" : ""}${(current - previous).toFixed(1)}${suffix}` : "—";
+  const projectionDate = (date: string | null) => date ? new Date(`${date}T12:00:00Z`).toLocaleDateString("en-US", { month: "short", year: "numeric", timeZone: "UTC" }) : "—";
+
+  return (
+    <div className="phase-three-layout">
+      <section className="phase-three-hero panel-dark">
+        <div><span className="eyebrow light">Phase 3 · foresight with guardrails</span><h2>Turn history into<br />the next useful move.</h2></div>
+        <div className="forecast-stamp"><span>Readiness</span><strong>{readiness.score}</strong><small>{readiness.label}</small></div>
+      </section>
+
+      {actionMessage && <div className={`phase-action-message ${actionState}`}>{actionMessage}</div>}
+
+      <section className="connections-card panel full-width">
+        <div className="section-heading"><div><span className="eyebrow">Connected sources</span><h2>Bring activities in automatically</h2></div><span className="small-badge">private account</span></div>
+        <div className="connection-grid">
+          <article className="connection-tile"><div className="connection-mark strava">S</div><div><strong>Strava</strong><span>{insights?.integrations.strava.connected ? `Connected${insights.integrations.strava.displayName ? ` · ${insights.integrations.strava.displayName}` : ""}` : insights?.integrations.strava.configured ? "Ready to connect with read-only activity access" : "App registration credentials are still needed"}</span>{insights?.integrations.strava.lastSyncedAt && <small>Last sync {new Date(insights.integrations.strava.lastSyncedAt).toLocaleString()}</small>}</div><div className="connection-actions">{insights?.integrations.strava.connected ? <><button className="primary-button" onClick={() => void syncStrava()} disabled={actionState === "working"}>Sync latest 10</button><button className="text-button" onClick={() => void disconnectStrava()} disabled={actionState === "working"}>Disconnect</button></> : <button className="primary-button strava-button" onClick={() => window.location.assign("/api/integrations/strava/start")} disabled={!insights?.integrations.strava.configured}>Connect with Strava</button>}</div></article>
+          <article className="connection-tile"><div className="connection-mark garmin">G</div><div><strong>Garmin Connect</strong><span>Cloud sync requires Garmin Developer Program approval.</span><small>Garmin FIT files already receive full stream analysis.</small></div><a className="secondary-link" href="https://developer.garmin.com/gc-developer-program/activity-api/" target="_blank" rel="noreferrer">Application details ↗</a></article>
+        </div>
+      </section>
+
+      <section className="ftp-forecast panel">
+        <div className="section-heading"><div><span className="eyebrow">Automatic FTP prediction</span><h2>{prediction?.minimumWatts !== null && prediction?.minimumWatts !== undefined ? `${prediction.minimumWatts}–${prediction.maximumWatts} W` : "More evidence needed"}</h2></div><span className="small-badge">{prediction?.confidence ?? "loading"} confidence</span></div>
+        <div className="forecast-scale"><i style={{ width: `${Math.min(100, Math.max(4, ((prediction?.midpointWatts ?? currentFtp) / Math.max(250, goalTarget)) * 100))}%` }} /></div>
+        <div className="signal-list">{(prediction?.signals ?? ["Import a ride with 20–60 minutes of recorded power."]).map((signal) => <span key={signal}>· {signal}</span>)}</div>
+        <div className="confirm-ftp"><label><span>Working FTP</span><input type="number" min="50" max="500" value={ftpInput} onChange={(event) => setFtpInput(Number(event.target.value))} /></label>{prediction?.midpointWatts && <button className="text-button" onClick={() => setFtpInput(prediction.midpointWatts!)}>Use midpoint</button>}<button className="primary-button" onClick={() => void postAction({ action: "record_ftp", ftpWatts: ftpInput }, `Working FTP updated to ${ftpInput} W.`)} disabled={actionState === "working"}>Confirm FTP</button></div>
+        <p className="chart-note"><i /> Predictions are advisory ranges. Your working FTP changes only after you confirm it.</p>
+      </section>
+
+      <section className="goal-card panel">
+        <div className="section-heading"><div><span className="eyebrow">Goal projection</span><h2>{goalTarget} W FTP</h2></div></div>
+        <div className="goal-control"><label><span>Target</span><select value={goalTarget} onChange={(event) => setGoalTarget(Number(event.target.value))}>{[175, 200, 225, 250].map((target) => <option key={target} value={target}>{target} W</option>)}</select></label><button className="secondary-button" onClick={() => void postAction({ action: "set_goal", targetFtpWatts: goalTarget }, `${goalTarget} W goal saved.`)} disabled={actionState === "working"}>Save goal</button></div>
+        <div className="projection-list"><div><span>Aggressive</span><strong>{projectionDate(projection.aggressiveDate)}</strong></div><div><span>Current trend</span><strong>{projectionDate(projection.currentTrendDate)}</strong></div><div><span>Conservative</span><strong>{projectionDate(projection.conservativeDate)}</strong></div></div>
+        <p>{projection.disclaimer}</p>
+      </section>
+
+      <section className="workout-card panel">
+        <div className="section-heading"><div><span className="eyebrow">Recommended next workout</span><h2>{workout.primary}</h2></div><span className={`readiness-score tone-${readiness.tone}`}>{readiness.score}</span></div>
+        <p>{workout.detail}</p><div className="avoid-strip"><span>Avoid today</span><strong>{workout.avoid}</strong></div>
+      </section>
+
+      <section className="block-card panel">
+        <div className="section-heading"><div><span className="eyebrow">Training-block comparison</span><h2>Recent 6 weeks vs prior 6</h2></div></div>
+        <div className="block-table"><span>Metric</span><span>Prior</span><span>Recent</span><span>Change</span><strong>Rides</strong><span>{priorBlock.rides}</span><span>{currentBlock.rides}</span><b>{change(currentBlock.rides, priorBlock.rides)}</b><strong>Hours</strong><span>{priorBlock.hours.toFixed(1)}</span><span>{currentBlock.hours.toFixed(1)}</span><b>{change(currentBlock.hours, priorBlock.hours, "h")}</b><strong>Avg power</strong><span>{priorBlock.averagePower.toFixed(0)} W</span><span>{currentBlock.averagePower.toFixed(0)} W</span><b>{change(currentBlock.averagePower, priorBlock.averagePower, " W")}</b><strong>W / bpm</strong><span>{priorBlock.efficiency.toFixed(3)}</span><span>{currentBlock.efficiency.toFixed(3)}</span><b>{change(currentBlock.efficiency, priorBlock.efficiency)}</b><strong>Load</strong><span>{priorBlock.load.toFixed(0)}</span><span>{currentBlock.load.toFixed(0)}</span><b>{change(currentBlock.load, priorBlock.load)}</b></div>
+      </section>
+
+      <section className="weekly-plan panel full-width">
+        <div className="section-heading"><div><span className="eyebrow">Generated week</span><h2>A useful plan, not a rigid prescription</h2></div><span className="small-badge">adapts to check-in + load</span></div>
+        <div className="week-grid">{weeklyPlan.map((day, index) => <article key={day.day} className={index === 0 ? "today" : ""}><span>{day.day}</span><strong>{day.session}</strong><small>{day.purpose}</small></article>)}</div>
+        <p className="chart-note"><i /> Regenerate the guidance by updating the recovery check-in or importing new training. Stop for pain or unusual symptoms.</p>
+      </section>
+    </div>
+  );
 }
 
 function ImportRide({ detected, filename, error, isReading, isSaving, isDragging, hasFile, rideType, setRideType, routeName, setRouteName, setIsDragging, fileInput, onFileChange, onDrop, onDemo, onAdd, onReset }: {
@@ -1077,7 +1314,7 @@ function ReviewField({ label, value }: { label: string; value: string }) {
   return <label className="review-field"><span>{label}</span><input value={value} readOnly /></label>;
 }
 
-function Methodology() {
+function Methodology({ currentFtp }: { currentFtp: number }) {
   const methods = [
     { id: "01", title: "Power / HR ratio", formula: "average power ÷ average heart rate", note: "Contextual efficiency signal for comparable steady rides." },
     { id: "02", title: "Intensity factor", formula: "normalized power ÷ FTP", note: "Average power is used only as an explicitly marked estimate." },
@@ -1085,6 +1322,8 @@ function Methodology() {
     { id: "04", title: "Aerobic decoupling", formula: "change in power / HR between halves", note: "Shown only when the ride is sufficiently steady and continuous." },
     { id: "05", title: "Load ratio", formula: "7-day load ÷ 28-day weekly average", note: "A review signal for abrupt changes, never an exact injury threshold." },
     { id: "06", title: "Readiness", formula: "recovery time + load + check-in", note: "A weighted, explainable score. Pain caps the result and overrides hard-ride advice." },
+    { id: "07", title: "FTP prediction", formula: "20–60 min best power × duration factor", note: "A conservative range from recorded efforts, with confidence tied to available evidence." },
+    { id: "08", title: "Goal scenarios", formula: "watts remaining ÷ monthly scenario", note: "Multiple clearly labeled estimates; never a promised achievement date." },
   ];
-  return <div className="method-layout"><section className="method-hero panel-dark"><span className="eyebrow light">Explainable by design</span><h2>No mystery score.</h2><p>Every recommendation is assembled from visible inputs, conservative rules, and versioned calculations. Pain always overrides the number.</p><div className="version-stamp"><span>Current ruleset</span><strong>phase2.0</strong></div></section><section className="method-list panel"><div className="section-heading"><div><span className="eyebrow">Metric dictionary</span><h2>What the app calculates</h2></div></div>{methods.map((method) => <article key={method.id} className="method-row"><span>{method.id}</span><div><strong>{method.title}</strong><code>{method.formula}</code><p>{method.note}</p></div></article>)}</section><section className="config-card panel"><div className="section-heading"><div><span className="eyebrow">Athlete configuration</span><h2>Current working values</h2></div></div><div className="config-grid"><Stat label="FTP" value="165" unit="W" /><Stat label="Zone 2 target" value="110" unit="W" /><Stat label="Cadence band" value="85–90" unit="rpm" /><Stat label="Next milestone" value="175" unit="W" /></div><p className="chart-note"><i /> These working values are recorded with calculations; editable athlete settings are planned for a later release.</p></section></div>;
+  return <div className="method-layout"><section className="method-hero panel-dark"><span className="eyebrow light">Explainable by design</span><h2>No mystery score.</h2><p>Every recommendation is assembled from visible inputs, conservative rules, and versioned calculations. Pain always overrides the number.</p><div className="version-stamp"><span>Current ruleset</span><strong>phase3.0</strong></div></section><section className="method-list panel"><div className="section-heading"><div><span className="eyebrow">Metric dictionary</span><h2>What the app calculates</h2></div></div>{methods.map((method) => <article key={method.id} className="method-row"><span>{method.id}</span><div><strong>{method.title}</strong><code>{method.formula}</code><p>{method.note}</p></div></article>)}</section><section className="config-card panel"><div className="section-heading"><div><span className="eyebrow">Athlete configuration</span><h2>Current working values</h2></div></div><div className="config-grid"><Stat label="FTP" value={String(currentFtp)} unit="W" /><Stat label="Zone 2 target" value={String(Math.round(currentFtp * 2 / 3))} unit="W" /><Stat label="Cadence band" value="85–90" unit="rpm" /><Stat label="Next milestone" value="175" unit="W" /></div><p className="chart-note"><i /> FTP and goals can now be updated from Phase 3; each calculation records the working value used.</p></section></div>;
 }

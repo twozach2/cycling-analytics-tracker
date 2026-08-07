@@ -151,6 +151,53 @@ export const ftpHistory = sqliteTable(
   (table) => [index("idx_ftp_history_rider_effective").on(table.riderId, table.effectiveAt)],
 );
 
+export const riderGoals = sqliteTable(
+  "rider_goals",
+  {
+    id: text("id").primaryKey(),
+    riderId: text("rider_id").notNull().references(() => riders.id, { onDelete: "cascade" }),
+    targetFtpWatts: integer("target_ftp_watts").notNull(),
+    status: text("status", { enum: ["active", "achieved", "archived"] }).notNull().default("active"),
+    createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+    achievedAt: text("achieved_at"),
+  },
+  (table) => [index("idx_rider_goals_rider_status").on(table.riderId, table.status)],
+);
+
+export const externalConnections = sqliteTable(
+  "external_connections",
+  {
+    id: text("id").primaryKey(),
+    riderId: text("rider_id").notNull().references(() => riders.id, { onDelete: "cascade" }),
+    provider: text("provider", { enum: ["strava", "garmin"] }).notNull(),
+    externalAthleteId: text("external_athlete_id"),
+    displayName: text("display_name"),
+    accessToken: text("access_token"),
+    refreshToken: text("refresh_token"),
+    expiresAt: integer("expires_at"),
+    scopes: text("scopes").notNull().default(""),
+    lastSyncedAt: text("last_synced_at"),
+    createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+    updatedAt: text("updated_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+  },
+  (table) => [
+    uniqueIndex("idx_external_connections_rider_provider").on(table.riderId, table.provider),
+    uniqueIndex("idx_external_connections_provider_athlete").on(table.provider, table.externalAthleteId),
+  ],
+);
+
+export const oauthStates = sqliteTable(
+  "oauth_states",
+  {
+    state: text("state").primaryKey(),
+    riderId: text("rider_id").notNull().references(() => riders.id, { onDelete: "cascade" }),
+    provider: text("provider", { enum: ["strava"] }).notNull(),
+    expiresAt: integer("expires_at").notNull(),
+    createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+  },
+  (table) => [index("idx_oauth_states_rider_expires").on(table.riderId, table.expiresAt)],
+);
+
 export const recoveryLogs = sqliteTable(
   "recovery_logs",
   {

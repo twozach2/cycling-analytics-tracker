@@ -1,7 +1,7 @@
 import { and, desc, eq } from "drizzle-orm";
 import { getChatGPTUser } from "../../chatgpt-auth";
 import { getDb } from "../../../db";
-import { rideMetrics, rides, sourceFiles } from "../../../db/schema";
+import { powerDuration, rideMetrics, rides, sourceFiles } from "../../../db/schema";
 import { deriveRideMetrics, recommendRecovery } from "../../../lib/metrics";
 
 async function riderIdFor(request: Request) {
@@ -53,6 +53,7 @@ type RidePayload = {
   cadenceHighPercent?: number | null;
   first15HeartRateBpm?: number | null;
   final15HeartRateBpm?: number | null;
+  powerDuration?: Array<{ durationSeconds: number; bestPowerWatts: number }>;
 };
 
 export async function POST(request: Request) {
@@ -139,6 +140,10 @@ export async function POST(request: Request) {
     final15HeartRateBpm: payload.final15HeartRateBpm,
     dataQuality: payload.normalizedPowerWatts == null ? "medium" : "high",
   });
+  const durationRows = (payload.powerDuration ?? [])
+    .filter((entry) => Number.isFinite(entry.durationSeconds) && entry.durationSeconds > 0 && Number.isFinite(entry.bestPowerWatts) && entry.bestPowerWatts > 0)
+    .map((entry) => ({ rideId: id, durationSeconds: Math.round(entry.durationSeconds), bestPowerWatts: entry.bestPowerWatts }));
+  if (durationRows.length) await db.insert(powerDuration).values(durationRows).onConflictDoNothing();
 
   return Response.json({ rideId: id, metrics: finalMetrics, recovery, duplicate: false }, { status: 201 });
 }

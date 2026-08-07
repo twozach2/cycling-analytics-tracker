@@ -21,11 +21,12 @@ export type DetectedActivity = {
   cadenceHighPercent: number | null;
   first15HeartRate: number | null;
   final15HeartRate: number | null;
+  powerDuration: Array<{ durationSeconds: number; bestPowerWatts: number }>;
   sampleCount: number;
   warnings: string[];
 };
 
-type Sample = {
+export type ActivitySample = {
   time: number | null;
   latitude: number | null;
   longitude: number | null;
@@ -64,7 +65,7 @@ const round = (value: number, digits = 1) => {
   return Math.round(value * scale) / scale;
 };
 
-function streamMetrics(samples: Sample[]) {
+export function deriveStreamMetrics(samples: ActivitySample[]) {
   const cadence = samples.map((sample) => sample.cadence).filter((value): value is number => value !== null && value > 0);
   const cadenceMean = cadence.length ? cadence.reduce((sum, value) => sum + value, 0) / cadence.length : null;
   const cadenceStddev = cadenceMean === null ? null : Math.sqrt(cadence.reduce((sum, value) => sum + ((value - cadenceMean) ** 2), 0) / cadence.length);
@@ -80,7 +81,7 @@ function streamMetrics(samples: Sample[]) {
   let aerobicDecouplingPercent: number | null = null;
   if (paired.length >= 20 && sufficientlySteady) {
     const midpoint = Math.floor(paired.length / 2);
-    const efficiency = (values: Sample[]) => {
+    const efficiency = (values: ActivitySample[]) => {
       const power = average(values.map((sample) => sample.power));
       const heartRate = average(values.map((sample) => sample.heartRate));
       return power !== null && heartRate !== null && heartRate > 0 ? power / heartRate : null;
@@ -108,7 +109,32 @@ function streamMetrics(samples: Sample[]) {
   };
 }
 
-const haversineMeters = (a: Sample, b: Sample) => {
+export function derivePowerDuration(samples: ActivitySample[]) {
+  const powerSamples = samples
+    .filter((sample): sample is ActivitySample & { time: number; power: number } => sample.time !== null && sample.power !== null && sample.power >= 0)
+    .sort((a, b) => a.time - b.time);
+  if (powerSamples.length < 2) return [];
+  const targets = [5, 15, 30, 60, 120, 300, 480, 1200, 1800, 2700, 3600];
+
+  return targets.flatMap((durationSeconds) => {
+    const targetMs = durationSeconds * 1000;
+    let left = 0;
+    let sum = 0;
+    let best = 0;
+    for (let right = 0; right < powerSamples.length; right += 1) {
+      sum += powerSamples[right].power;
+      while (left + 1 < right && powerSamples[right].time - powerSamples[left + 1].time >= targetMs) {
+        sum -= powerSamples[left].power;
+        left += 1;
+      }
+      const span = powerSamples[right].time - powerSamples[left].time;
+      if (span >= targetMs * 0.95) best = Math.max(best, sum / (right - left + 1));
+    }
+    return best > 0 ? [{ durationSeconds, bestPowerWatts: round(best) }] : [];
+  });
+}
+
+const haversineMeters = (a: ActivitySample, b: ActivitySample) => {
   if (
     a.latitude === null ||
     a.longitude === null ||
@@ -136,7 +162,7 @@ export function parseXmlActivity(xmlText: string, filename: string): DetectedAct
   );
   if (!trackpoints.length) throw new Error("No timed track points were found in this file.");
 
-  const samples: Sample[] = trackpoints.map((point) => {
+  const samples: ActivitySample[] = trackpoints.map((point) => {
     const latitude =
       numberOrNull(point.getAttribute("lat")) ??
       numberOrNull(textByLocalName(point, ["latitudedegrees"]));
@@ -181,7 +207,7 @@ export function parseXmlActivity(xmlText: string, filename: string): DetectedAct
   if (!distance) warnings.push("Distance could not be detected");
 
   const fileBase = filename.replace(/\.(gpx|tcx)$/i, "").replace(/[_-]+/g, " ");
-  const streams = streamMetrics(samples);
+  const streams = deriveStreamMetrics(samples);
   return {
     name: fileBase || "Imported ride",
     startedAt: firstTime !== null ? new Date(firstTime).toISOString() : "",
@@ -198,6 +224,7 @@ export function parseXmlActivity(xmlText: string, filename: string): DetectedAct
     sourceTrainingLoad: null,
     ...streams,
     variabilityIndex: null,
+    powerDuration: derivePowerDuration(samples),
     sampleCount: samples.length,
     warnings,
   };
@@ -245,7 +272,7 @@ export async function parseFitActivity(buffer: ArrayBuffer, filename: string): P
   const powerValues = records.map((record) => fitNumber(record.power));
   const heartRateValues = records.map((record) => fitNumber(record.heartRate));
   const cadenceValues = records.map((record) => fitNumber(record.cadence));
-  const recordSamples: Sample[] = records.map((record) => ({
+  const recordSamples: ActivitySample[] = records.map((record) => ({
     time: fitDate(record.timestamp)?.getTime() ?? null,
     latitude: null,
     longitude: null,
@@ -272,7 +299,7 @@ export async function parseFitActivity(buffer: ArrayBuffer, filename: string): P
   const fileBase = filename.replace(/\.fit$/i, "").replace(/[_-]+/g, " ");
   const averagePower = fitNumber(session?.avgPower) ?? average(powerValues);
   const normalizedPower = fitNumber(session?.normalizedPower);
-  const streams = streamMetrics(recordSamples);
+  const streams = deriveStreamMetrics(recordSamples);
   return {
     name: fileBase || "Imported FIT ride",
     startedAt: startedAt?.toISOString() ?? "",
@@ -289,6 +316,7 @@ export async function parseFitActivity(buffer: ArrayBuffer, filename: string): P
     sourceTrainingLoad: fitNumber(session?.trainingStressScore),
     ...streams,
     variabilityIndex: normalizedPower !== null && averagePower !== null && averagePower > 0 ? round(normalizedPower / averagePower, 2) : null,
+    powerDuration: derivePowerDuration(recordSamples),
     sampleCount: records.length,
     warnings,
   };

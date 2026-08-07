@@ -27,6 +27,7 @@ test("server-renders the cycling analytics dashboard", async () => {
   assert.match(html, /Before your next hard ride/);
   assert.match(html, /Power \/ heart-rate trend/);
   assert.match(html, /Import ride/);
+  assert.match(html, /Phase 3/);
   assert.doesNotMatch(html, /codex-preview|react-loading-skeleton|Your site is taking shape/i);
 });
 
