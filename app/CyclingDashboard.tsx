@@ -1,17 +1,16 @@
 "use client";
 
-import { ChangeEvent, DragEvent, useEffect, useMemo, useRef, useState } from "react";
+import { ChangeEvent, DragEvent, useEffect, useRef, useState } from "react";
 import { parseActivityFile, type DetectedActivity } from "@/lib/activity-parser";
 import {
   calculateReadiness,
   deriveRideMetrics,
   formatDuration,
-  recommendRecovery,
   type SubjectiveRecovery,
 } from "@/lib/metrics";
 import { buildWeeklyPlan, projectFtpGoal, recommendWorkout } from "@/lib/phase3";
 
-type View = "overview" | "rides" | "analysis" | "phase3" | "import" | "settings";
+type View = "dashboard" | "plan" | "rides" | "import" | "method";
 type DataMode = "loading" | "demo" | "saved" | "unavailable";
 
 type Ride = {
@@ -210,12 +209,11 @@ const powerDuration = [
 ];
 
 const navItems: Array<{ id: View; label: string; glyph: string }> = [
-  { id: "overview", label: "Today", glyph: "01" },
-  { id: "rides", label: "Ride log", glyph: "02" },
-  { id: "analysis", label: "Phase 2", glyph: "03" },
-  { id: "phase3", label: "Phase 3", glyph: "04" },
-  { id: "import", label: "Import", glyph: "05" },
-  { id: "settings", label: "Method", glyph: "06" },
+  { id: "dashboard", label: "Dashboard", glyph: "01" },
+  { id: "plan", label: "Plan today", glyph: "02" },
+  { id: "rides", label: "Ride log", glyph: "03" },
+  { id: "import", label: "Import", glyph: "04" },
+  { id: "method", label: "Method", glyph: "05" },
 ];
 
 const miles = (meters: number | null) =>
@@ -317,7 +315,7 @@ async function fetchSavedRides() {
 }
 
 export default function CyclingDashboard() {
-  const [view, setView] = useState<View>("overview");
+  const [view, setView] = useState<View>("dashboard");
   const [rides, setRides] = useState(initialRides);
   const [selectedRideId, setSelectedRideId] = useState(initialRides[0].id);
   const [dataMode, setDataMode] = useState<DataMode>("loading");
@@ -386,7 +384,7 @@ export default function CyclingDashboard() {
       "strava-invalid": "Strava returned an invalid connection response",
     };
     const timer = window.setTimeout(() => {
-      setView("phase3");
+      setView("import");
       setSyncNote(messages[integration] ?? "Strava connection updated");
       url.searchParams.delete("integration");
       window.history.replaceState({}, "", `${url.pathname}${url.search}${url.hash}`);
@@ -429,30 +427,6 @@ export default function CyclingDashboard() {
   };
 
   const selectedRide = rides.find((ride) => ride.id === selectedRideId) ?? rides[0];
-  const currentMetrics = useMemo(
-    () =>
-      deriveRideMetrics({
-        movingTimeSeconds: selectedRide.movingTimeSeconds,
-        averagePowerWatts: selectedRide.averagePower,
-        normalizedPowerWatts: selectedRide.normalizedPower,
-        averageHeartRateBpm: selectedRide.averageHeartRate,
-        ftpWatts: currentFtp,
-      }),
-    [currentFtp, selectedRide],
-  );
-  const recent72HourLoad = useMemo(() => {
-    const timestamps = rides.map((ride) => Date.parse(ride.date)).filter(Number.isFinite);
-    const anchor = timestamps.length ? Math.max(...timestamps) : 0;
-    return rides.reduce((sum, ride) => {
-      const timestamp = Date.parse(ride.date);
-      return Number.isFinite(timestamp) && timestamp >= anchor - (72 * 60 * 60 * 1000) ? sum + ride.trainingLoad : sum;
-    }, 0);
-  }, [rides]);
-  const recommendation = useMemo(
-    () => recommendRecovery(currentMetrics, selectedRide.movingTimeSeconds, recent72HourLoad, recovery),
-    [currentMetrics, recent72HourLoad, recovery, selectedRide.movingTimeSeconds],
-  );
-
   const filteredRides = rides.filter((ride) => {
     const matchesType = rideFilter === "All rides" || ride.type === rideFilter;
     const query = search.trim().toLowerCase();
@@ -462,7 +436,7 @@ export default function CyclingDashboard() {
 
   const openRide = (ride: Ride) => {
     setSelectedRideId(ride.id);
-    setView("overview");
+    setView("dashboard");
   };
 
   const handleFiles = async (files: FileList | File[]) => {
@@ -651,7 +625,7 @@ export default function CyclingDashboard() {
         setDataMode("saved");
         setSyncNote(saved.duplicate ? "Already imported · Duplicate skipped" : "Saved just now · Private");
       }
-      setView("overview");
+      setView("dashboard");
       resetImport();
     } catch (error) {
       setImportError(error instanceof Error ? error.message : "The ride could not be saved.");
@@ -666,10 +640,27 @@ export default function CyclingDashboard() {
       ? syncNote || "Saved rides · Private"
       : syncNote || (dataMode === "unavailable" ? "Demo data · Save unavailable" : "Demo data · Not saved");
 
+  const refreshSavedRides = async () => {
+    const savedRides = await fetchSavedRides();
+    if (savedRides.length) {
+      setRides(savedRides);
+      setSelectedRideId(savedRides[0].id);
+      setDataMode("saved");
+    }
+  };
+
+  const pageMeta: Record<View, { eyebrow: string; title: string }> = {
+    dashboard: { eyebrow: "Your training at a glance", title: "Ride with the trend." },
+    plan: { eyebrow: "Readiness + next steps", title: "Plan today" },
+    rides: { eyebrow: "Your complete history", title: "Ride log" },
+    import: { eyebrow: "Files + connected sources", title: "Import" },
+    method: { eyebrow: "Transparent calculations", title: "Method" },
+  };
+
   return (
     <main className="app-shell">
       <aside className="side-rail">
-        <button className="brand" onClick={() => setView("overview")} aria-label="Cycling Analytics home">
+        <button className="brand" onClick={() => setView("dashboard")} aria-label="Cycling Analytics home">
           <span className="brand-mark">CA</span>
           <span className="brand-copy"><strong>Cycling</strong><span>Analytics</span></span>
         </button>
@@ -695,8 +686,8 @@ export default function CyclingDashboard() {
       <section className="content-shell">
         <header className="topbar">
           <div>
-            <span className="eyebrow">{view === "overview" ? "Thursday · August 6" : `${view === "phase3" ? "Phase 3" : "Analytics"} workspace`}</span>
-            <h1>{view === "overview" ? "Ride with the trend." : navItems.find((item) => item.id === view)?.label}</h1>
+            <span className="eyebrow">{pageMeta[view].eyebrow}</span>
+            <h1>{pageMeta[view].title}</h1>
           </div>
           <div className="top-actions">
             <span className={`sync-status mode-${dataMode}`}><i /> {syncLabel}</span>
@@ -707,25 +698,26 @@ export default function CyclingDashboard() {
         {dataMode !== "saved" && (
           <div className={`data-banner mode-${dataMode}`} role="status">
             <strong>{dataMode === "loading" ? "Checking your private ride log…" : "You’re viewing fictional demo rides."}</strong>
-            <span>{dataMode === "loading" ? "Saved activities will appear automatically." : "Import a FIT, TCX, or GPX file to replace every demo with your own saved data."}</span>
+            <span>{dataMode === "loading" ? "Saved activities will appear automatically." : "Import a ride or sync Strava to replace every demo with your own saved data."}</span>
           </div>
         )}
 
-        {view === "overview" && (
-          <Overview
-            selectedRide={selectedRide}
-            recommendation={recommendation}
-            recovery={recovery}
-            setRecovery={setRecovery}
-            recoverySaveState={recoverySaveState}
-            saveRecovery={saveRecovery}
-            rides={rides}
-            openRide={openRide}
-            setView={setView}
-            isDemo={dataMode !== "saved"}
-            currentFtp={currentFtp}
-          />
-        )}
+        {view === "dashboard" && <div className="dashboard-stack">
+          <Overview selectedRide={selectedRide} rides={rides} openRide={openRide} setView={setView} isDemo={dataMode !== "saved"} currentFtp={currentFtp} />
+          <details className="performance-drawer">
+            <summary><span><strong>Performance details</strong><small>Route comparisons, benchmarks, cadence, and workload</small></span><i>+</i></summary>
+            <PerformanceDetails rides={rides} currentFtp={currentFtp} />
+          </details>
+        </div>}
+        {view === "plan" && <PlanToday
+          rides={rides}
+          recovery={recovery}
+          setRecovery={setRecovery}
+          recoverySaveState={recoverySaveState}
+          saveRecovery={saveRecovery}
+          currentFtp={currentFtp}
+          setCurrentFtp={setCurrentFtp}
+        />}
         {view === "rides" && (
           <RideLog
             rides={filteredRides}
@@ -737,50 +729,39 @@ export default function CyclingDashboard() {
             openRide={openRide}
           />
         )}
-        {view === "analysis" && <PhaseTwo rides={rides} currentFtp={currentFtp} />}
-        {view === "phase3" && <PhaseThree rides={rides} recovery={recovery} currentFtp={currentFtp} setCurrentFtp={setCurrentFtp} refreshRides={async () => {
-          const savedRides = await fetchSavedRides();
-          if (savedRides.length) {
-            setRides(savedRides);
-            setSelectedRideId(savedRides[0].id);
-            setDataMode("saved");
-          }
-        }} />}
         {view === "import" && (
-          <ImportRide
-            detected={detected}
-            filename={importName}
-            error={importError}
-            isReading={isReading}
-            isSaving={isSaving}
-            hasFile={pendingFile !== null}
-            rideType={rideType}
-            setRideType={setRideType}
-            routeName={routeName}
-            setRouteName={setRouteName}
-            isDragging={isDragging}
-            setIsDragging={setIsDragging}
-            fileInput={fileInput}
-            onFileChange={handleFileChange}
-            onDrop={handleDrop}
-            onDemo={loadDemoImport}
-            onAdd={addDetectedRide}
-            onReset={resetImport}
-          />
+          <div className="import-page-stack">
+            <ConnectedSources refreshRides={refreshSavedRides} />
+            <ImportRide
+              detected={detected}
+              filename={importName}
+              error={importError}
+              isReading={isReading}
+              isSaving={isSaving}
+              hasFile={pendingFile !== null}
+              rideType={rideType}
+              setRideType={setRideType}
+              routeName={routeName}
+              setRouteName={setRouteName}
+              isDragging={isDragging}
+              setIsDragging={setIsDragging}
+              fileInput={fileInput}
+              onFileChange={handleFileChange}
+              onDrop={handleDrop}
+              onDemo={loadDemoImport}
+              onAdd={addDetectedRide}
+              onReset={resetImport}
+            />
+          </div>
         )}
-        {view === "settings" && <Methodology currentFtp={currentFtp} />}
+        {view === "method" && <Methodology currentFtp={currentFtp} />}
       </section>
     </main>
   );
 }
 
-function Overview({ selectedRide, recommendation, recovery, setRecovery, recoverySaveState, saveRecovery, rides, openRide, setView, isDemo, currentFtp }: {
+function Overview({ selectedRide, rides, openRide, setView, isDemo, currentFtp }: {
   selectedRide: Ride;
-  recommendation: ReturnType<typeof recommendRecovery>;
-  recovery: SubjectiveRecovery;
-  setRecovery: (value: SubjectiveRecovery) => void;
-  recoverySaveState: "idle" | "saving" | "saved" | "error";
-  saveRecovery: () => Promise<void>;
   rides: Ride[];
   openRide: (ride: Ride) => void;
   setView: (view: View) => void;
@@ -818,15 +799,6 @@ function Overview({ selectedRide, recommendation, recovery, setRecovery, recover
   });
   const loadScale = Math.max(100, ...weeklyLoadValues);
   const twentyEightDayAverage = Math.round(weeklyLoadValues.slice(-4).reduce((sum, load) => sum + load, 0) / 4);
-  const latestHardRide = rides
-    .filter((ride) => ride.type === "Tempo" || ride.type === "Threshold")
-    .sort((a, b) => Date.parse(b.date) - Date.parse(a.date))[0];
-  const hoursSinceLastHardRide = latestHardRide ? Math.max(0, (anchorMs - Date.parse(latestHardRide.date)) / (60 * 60 * 1000)) : 72;
-  const readiness = calculateReadiness({
-    hoursSinceLastHardRide,
-    acuteChronicRatio: twentyEightDayAverage > 0 ? sevenDayLoad / twentyEightDayAverage : null,
-    subjective: recovery,
-  });
   const selectedPowerData = isDemo ? powerDuration : [
     { label: "Peak", watts: selectedRide.maximumPower, best: selectedRide.maximumPower },
     { label: "Norm", watts: selectedRide.normalizedPower ?? 0, best: selectedRide.normalizedPower ?? 0 },
@@ -836,42 +808,20 @@ function Overview({ selectedRide, recommendation, recovery, setRecovery, recover
 
   return (
     <div className="dashboard-grid">
-      <section className="recovery-hero panel-dark">
-        <div className="hero-topline">
-          <span className={`status-pill ${recommendation.status.replace(" ", "-")}`}><i /> {recommendation.status}</span>
-          <span className="confidence">Ruleset v1.1 · medium confidence</span>
-        </div>
-        <div className="hero-copy">
-          <span className="eyebrow light">Before your next hard ride</span>
-          <div className="recovery-number"><strong>{recommendation.minimumHours}–{recommendation.maximumHours}</strong><span>hours</span></div>
-          <p>{recommendation.nextSession}</p>
-        </div>
-        <div className="reason-strip">
-          {recommendation.reasons.slice(0, 3).map((reason, index) => <div key={reason}><span>0{index + 1}</span><strong>{reason}</strong></div>)}
-        </div>
-      </section>
-
-      <section className="checkin-card panel">
-        <div className="section-heading compact"><div><span className="eyebrow">Morning check-in</span><h2>How are the legs?</h2></div><span className={`readiness-score tone-${readiness.tone}`}>{readiness.score}</span></div>
-        <div className="segmented-control" role="group" aria-label="Leg freshness">
-          {(["fresh", "normal", "heavy", "dead"] as const).map((value) => <button key={value} className={recovery.legFreshness === value ? "selected" : ""} onClick={() => setRecovery({ ...recovery, legFreshness: value })}>{value}</button>)}
-        </div>
-        <div className="range-row"><span><strong>Sleep</strong><small>{recovery.sleepQuality}/5</small></span><input aria-label="Sleep quality" type="range" min="1" max="5" value={recovery.sleepQuality} onChange={(event) => setRecovery({ ...recovery, sleepQuality: Number(event.target.value) })} /></div>
-        <div className="range-row"><span><strong>Motivation</strong><small>{recovery.motivation}/5</small></span><input aria-label="Motivation" type="range" min="1" max="5" value={recovery.motivation} onChange={(event) => setRecovery({ ...recovery, motivation: Number(event.target.value) })} /></div>
-        <div className="range-row"><span><strong>Soreness</strong><small>{recovery.soreness}/10</small></span><input aria-label="General soreness" type="range" min="0" max="10" value={recovery.soreness} onChange={(event) => setRecovery({ ...recovery, soreness: Number(event.target.value) })} /></div>
-        <div className="range-row"><span><strong>Knee pain</strong><small>{recovery.kneePain}/10</small></span><input aria-label="Knee pain" type="range" min="0" max="10" value={recovery.kneePain} onChange={(event) => setRecovery({ ...recovery, kneePain: Number(event.target.value) })} /></div>
-        <div className="readiness-summary"><div><strong>{readiness.label}</strong><span>{recoverySaveState === "saved" ? "Private check-in saved" : recoverySaveState === "error" ? "Save failed · try again" : "Pain overrides the score"}</span></div><button className="text-button" onClick={() => void saveRecovery()} disabled={recoverySaveState === "saving"}>{recoverySaveState === "saving" ? "Saving…" : "Save check-in"}</button></div>
-      </section>
-
       <section className="metric-ribbon">
         <MetricCard label="Current FTP" value={String(currentFtp)} unit="W" change="Used for load estimates" tone="lime" />
         <MetricCard label="7-day load" value={String(sevenDayLoad)} unit="pts" change={loadDelta === null ? "First full week in view" : `${loadDelta >= 0 ? "↑" : "↓"} ${Math.abs(loadDelta)}% vs prior week`} tone="cream" />
-        <MetricCard label="Aerobic efficiency" value={currentEfficiency ? currentEfficiency.toFixed(2) : "—"} unit="W/bpm" change={efficiencyDelta === null ? "Needs two power + HR rides" : `${efficiencyDelta >= 0 ? "↑" : "↓"} ${Math.abs(efficiencyDelta).toFixed(1)}% across visible rides`} tone="sky" />
+        <MetricCard label="Watts / heartbeat" value={currentEfficiency ? currentEfficiency.toFixed(2) : "—"} unit="W/bpm" change={efficiencyDelta === null ? "Needs two power + HR rides" : `${efficiencyDelta >= 0 ? "↑" : "↓"} ${Math.abs(efficiencyDelta).toFixed(1)}% across visible rides`} tone="sky" />
         <MetricCard label="Training time" value={trainingLabel} unit="last 7 days" change={`${currentWeekRides.length} ${currentWeekRides.length === 1 ? "ride" : "rides"} completed`} tone="coral" />
       </section>
 
       <section className="trend-card panel span-two">
-        <div className="section-heading"><div><span className="eyebrow">Aerobic efficiency</span><h2>Power / heart-rate trend</h2></div>{efficiencyDelta !== null && <span className="delta-positive">{efficiencyDelta >= 0 ? "+" : ""}{efficiencyDelta.toFixed(1)}%</span>}</div>
+        <div className="section-heading"><div><span className="eyebrow">Watts / heartbeat</span><h2>Power-to-heart-rate trend</h2></div>{efficiencyDelta !== null && <span className="delta-positive">{efficiencyDelta >= 0 ? "+" : ""}{efficiencyDelta.toFixed(1)}%</span>}</div>
+        <div className="efficiency-summary">
+          <span>Selected power <strong>{selectedRide.averagePower ? `${selectedRide.averagePower} W` : "—"}</strong></span>
+          <span>Selected heart rate <strong>{selectedRide.averageHeartRate ? `${selectedRide.averageHeartRate} bpm` : "—"}</strong></span>
+          <span>Efficiency <strong>{selectedRide.powerHeartRateRatio ? `${selectedRide.powerHeartRateRatio.toFixed(2)} W/bpm` : "—"}</strong></span>
+        </div>
         {efficiencyRides.length ? <div className="efficiency-chart" aria-label="Power to heart-rate ratio across recent rides">
           {efficiencyRides.map((ride) => <div className="trend-column" key={ride.id}><span className="trend-value">{ride.powerHeartRateRatio.toFixed(2)}</span><div className="trend-track"><i style={{ height: `${Math.max(12, ((ride.powerHeartRateRatio - efficiencyMin + 0.02) / (efficiencyRange + 0.02)) * 100)}%` }} /></div><small>{ride.dateLabel}</small></div>)}
         </div> : <div className="chart-empty">Power and heart-rate data from the same ride are needed for this trend.</div>}
@@ -917,6 +867,28 @@ function Overview({ selectedRide, recommendation, recovery, setRecovery, recover
   );
 }
 
+function RecoveryCheckIn({ recovery, setRecovery, recoverySaveState, saveRecovery, readiness }: {
+  recovery: SubjectiveRecovery;
+  setRecovery: (value: SubjectiveRecovery) => void;
+  recoverySaveState: "idle" | "saving" | "saved" | "error";
+  saveRecovery: () => Promise<void>;
+  readiness: ReturnType<typeof calculateReadiness>;
+}) {
+  return (
+    <section className="checkin-card panel">
+      <div className="section-heading compact"><div><span className="eyebrow">Morning check-in</span><h2>How are the legs?</h2></div><span className={`readiness-score tone-${readiness.tone}`}>{readiness.score}</span></div>
+      <div className="segmented-control" role="group" aria-label="Leg freshness">
+        {(["fresh", "normal", "heavy", "dead"] as const).map((value) => <button key={value} className={recovery.legFreshness === value ? "selected" : ""} onClick={() => setRecovery({ ...recovery, legFreshness: value })}>{value}</button>)}
+      </div>
+      <div className="range-row"><span><strong>Sleep</strong><small>{recovery.sleepQuality}/5</small></span><input aria-label="Sleep quality" type="range" min="1" max="5" value={recovery.sleepQuality} onChange={(event) => setRecovery({ ...recovery, sleepQuality: Number(event.target.value) })} /></div>
+      <div className="range-row"><span><strong>Motivation</strong><small>{recovery.motivation}/5</small></span><input aria-label="Motivation" type="range" min="1" max="5" value={recovery.motivation} onChange={(event) => setRecovery({ ...recovery, motivation: Number(event.target.value) })} /></div>
+      <div className="range-row"><span><strong>Soreness</strong><small>{recovery.soreness}/10</small></span><input aria-label="General soreness" type="range" min="0" max="10" value={recovery.soreness} onChange={(event) => setRecovery({ ...recovery, soreness: Number(event.target.value) })} /></div>
+      <div className="range-row"><span><strong>Knee pain</strong><small>{recovery.kneePain}/10</small></span><input aria-label="Knee pain" type="range" min="0" max="10" value={recovery.kneePain} onChange={(event) => setRecovery({ ...recovery, kneePain: Number(event.target.value) })} /></div>
+      <div className="readiness-summary"><div><strong>{readiness.label}</strong><span>{recoverySaveState === "saved" ? "Private check-in saved" : recoverySaveState === "error" ? "Save failed · try again" : "Pain overrides the score"}</span></div><button className="text-button" onClick={() => void saveRecovery()} disabled={recoverySaveState === "saving"}>{recoverySaveState === "saving" ? "Saving…" : "Save check-in"}</button></div>
+    </section>
+  );
+}
+
 function MetricCard({ label, value, unit, change, tone }: { label: string; value: string; unit: string; change: string; tone: string }) {
   return <article className={`metric-card tone-${tone}`}><span>{label}</span><div><strong>{value}</strong><small>{unit}</small></div><p>{change}</p></article>;
 }
@@ -955,7 +927,7 @@ function RideLog({ rides, allRides, filter, setFilter, search, setSearch, openRi
   );
 }
 
-function PhaseTwo({ rides, currentFtp }: { rides: Ride[]; currentFtp: number }) {
+function PerformanceDetails({ rides, currentFtp }: { rides: Ride[]; currentFtp: number }) {
   const dayMs = 24 * 60 * 60 * 1000;
   const timestamps = rides.map((ride) => Date.parse(ride.date)).filter(Number.isFinite);
   const anchorMs = timestamps.length ? Math.max(...timestamps) : 0;
@@ -998,7 +970,7 @@ function PhaseTwo({ rides, currentFtp }: { rides: Ride[]; currentFtp: number }) 
   return (
     <div className="phase-two-layout">
       <section className="phase-two-hero panel-dark">
-        <div><span className="eyebrow light">Phase 2 · durability and readiness</span><h2>Compare the work.<br />Understand the cost.</h2></div>
+        <div><span className="eyebrow light">Performance details</span><h2>Compare like with like.</h2></div>
         <p>Repeated routes, controlled Zone 2 benchmarks, cadence stability, and workload context now use the rides in your log. Missing stream data stays visibly unavailable.</p>
       </section>
 
@@ -1067,12 +1039,14 @@ type PhaseThreeInsights = {
   };
 };
 
-function PhaseThree({ rides, recovery, currentFtp, setCurrentFtp, refreshRides }: {
+function PlanToday({ rides, recovery, setRecovery, recoverySaveState, saveRecovery, currentFtp, setCurrentFtp }: {
   rides: Ride[];
   recovery: SubjectiveRecovery;
+  setRecovery: (value: SubjectiveRecovery) => void;
+  recoverySaveState: "idle" | "saving" | "saved" | "error";
+  saveRecovery: () => Promise<void>;
   currentFtp: number;
   setCurrentFtp: (value: number) => void;
-  refreshRides: () => Promise<void>;
 }) {
   const [insights, setInsights] = useState<PhaseThreeInsights | null>(null);
   const [goalTarget, setGoalTarget] = useState(200);
@@ -1085,7 +1059,7 @@ function PhaseThree({ rides, recovery, currentFtp, setCurrentFtp, refreshRides }
   const loadInsights = async () => {
     const response = await fetch("/api/phase3", { cache: "no-store" });
     const payload = await response.json() as PhaseThreeInsights & { error?: string };
-    if (!response.ok) throw new Error(payload.error ?? "Phase 3 insights could not be loaded.");
+    if (!response.ok) throw new Error(payload.error ?? "Training insights could not be loaded.");
     setInsights(payload);
     setCurrentFtp(payload.currentFtpWatts);
     setFtpInput(payload.currentFtpWatts);
@@ -1098,7 +1072,7 @@ function PhaseThree({ rides, recovery, currentFtp, setCurrentFtp, refreshRides }
       .then(async (response) => ({ response, payload: await response.json() as PhaseThreeInsights & { error?: string } }))
       .then(({ response, payload }) => {
         if (!active) return;
-        if (!response.ok) throw new Error(payload.error ?? "Phase 3 insights could not be loaded.");
+        if (!response.ok) throw new Error(payload.error ?? "Training insights could not be loaded.");
         setInsights(payload);
         setCurrentFtp(payload.currentFtpWatts);
         setFtpInput(payload.currentFtpWatts);
@@ -1162,58 +1136,6 @@ function PhaseThree({ rides, recovery, currentFtp, setCurrentFtp, refreshRides }
     }
   };
 
-  const syncStrava = async (mode: "new" | "six_months") => {
-    setActionState("working");
-    setActionMessage(mode === "six_months"
-      ? "Importing six months of Strava rides… Summaries are saved first, then detailed streams are added within the rate limit."
-      : "Checking Strava for new rides…");
-    try {
-      const response = await fetch("/api/integrations/strava/sync", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ mode }),
-      });
-      const payload = await response.json() as {
-        imported?: number;
-        updated?: number;
-        skipped?: number;
-        streamsImported?: number;
-        streamFailures?: number;
-        streamDeferred?: number;
-        error?: string;
-      };
-      if (!response.ok) throw new Error(payload.error ?? "Strava sync failed.");
-      await refreshRides();
-      await loadInsights();
-      setActionState("success");
-      const base = mode === "six_months"
-        ? `${payload.imported ?? 0} rides saved from the last six months · ${payload.skipped ?? 0} already stored`
-        : `${payload.imported ?? 0} new rides saved · ${payload.skipped ?? 0} existing rides checked`;
-      const streamNote = payload.streamsImported ? ` · ${payload.streamsImported} detailed streams added` : "";
-      const deferredNote = payload.streamDeferred ? ` · ${payload.streamDeferred} detailed streams will fill in on a later import` : "";
-      const failureNote = payload.streamFailures ? ` · ${payload.streamFailures} stream requests unavailable` : "";
-      setActionMessage(`${base}${streamNote}${deferredNote}${failureNote}`);
-    } catch (error) {
-      setActionState("error");
-      setActionMessage(error instanceof Error ? error.message : "Strava sync failed.");
-    }
-  };
-
-  const disconnectStrava = async () => {
-    setActionState("working");
-    try {
-      const response = await fetch("/api/integrations/strava/disconnect", { method: "POST" });
-      const payload = await response.json() as { error?: string };
-      if (!response.ok) throw new Error(payload.error ?? "Strava could not be disconnected.");
-      await loadInsights();
-      setActionState("success");
-      setActionMessage("Strava access was revoked. Synced rides remain in your private log.");
-    } catch (error) {
-      setActionState("error");
-      setActionMessage(error instanceof Error ? error.message : "Strava could not be disconnected.");
-    }
-  };
-
   const dayMs = 24 * 60 * 60 * 1000;
   const timestamps = rides.map((ride) => Date.parse(ride.date)).filter(Number.isFinite);
   const anchorMs = timestamps.length ? Math.max(...timestamps) : Date.parse("2026-08-07");
@@ -1255,33 +1177,23 @@ function PhaseThree({ rides, recovery, currentFtp, setCurrentFtp, refreshRides }
   return (
     <div className="phase-three-layout">
       <section className="phase-three-hero panel-dark">
-        <div><span className="eyebrow light">Phase 3 · foresight with guardrails</span><h2>Turn history into<br />the next useful move.</h2></div>
+        <div><span className="eyebrow light">Plan today · adapts with your check-in</span><h2>{workout.primary}</h2><p className="plan-hero-detail">{workout.detail}</p></div>
         <div className="forecast-stamp"><span>Readiness</span><strong>{readiness.score}</strong><small>{readiness.label}</small></div>
       </section>
 
       {actionMessage && <div className={`phase-action-message ${actionState}`}>{actionMessage}</div>}
 
-      <section className="connections-card panel full-width">
-        <div className="section-heading"><div><span className="eyebrow">Connected sources</span><h2>Bring activities in automatically</h2></div><span className="small-badge">private account</span></div>
-        <div className="connection-grid">
-          <article className="connection-tile strava-source">
-            <div className="connection-mark strava">S</div>
-            <div>
-              <strong>Strava</strong>
-              <span>{insights?.integrations.strava.connected ? `Connected${insights.integrations.strava.displayName ? ` · ${insights.integrations.strava.displayName}` : ""}` : insights?.integrations.strava.configured ? "Ready to connect with read-only activity access" : "App registration credentials are still needed"}</span>
-              {insights?.integrations.strava.connected && <small>Six-month history and new-ride sync use Strava IDs to prevent duplicates.</small>}
-              {insights?.integrations.strava.lastSyncedAt && <small>Last sync {new Date(insights.integrations.strava.lastSyncedAt).toLocaleString()}</small>}
-            </div>
-            <div className="connection-actions">
-              {insights?.integrations.strava.connected ? <>
-                <button className="primary-button" onClick={() => void syncStrava("new")} disabled={actionState === "working"}>Sync new rides</button>
-                <button className="secondary-button" onClick={() => void syncStrava("six_months")} disabled={actionState === "working"}>Import last 6 months</button>
-                <button className="text-button" onClick={() => void disconnectStrava()} disabled={actionState === "working"}>Disconnect</button>
-              </> : <button className="primary-button strava-button" onClick={() => window.location.assign("/api/integrations/strava/start")} disabled={!insights?.integrations.strava.configured}>Connect with Strava</button>}
-            </div>
-          </article>
-          <article className="connection-tile"><div className="connection-mark garmin">G</div><div><strong>Garmin Connect</strong><span>Cloud sync requires Garmin Developer Program approval.</span><small>Garmin FIT files already receive full stream analysis.</small></div><a className="secondary-link" href="https://developer.garmin.com/gc-developer-program/activity-api/" target="_blank" rel="noreferrer">Application details ↗</a></article>
-        </div>
+      <RecoveryCheckIn recovery={recovery} setRecovery={setRecovery} recoverySaveState={recoverySaveState} saveRecovery={saveRecovery} readiness={readiness} />
+
+      <section className="workout-card panel">
+        <div className="section-heading"><div><span className="eyebrow">Why this choice</span><h2>Keep the guardrails visible</h2></div></div>
+        <p>{workout.detail}</p><div className="avoid-strip"><span>Avoid today</span><strong>{workout.avoid}</strong></div>
+      </section>
+
+      <section className="weekly-plan panel full-width">
+        <div className="section-heading"><div><span className="eyebrow">The next seven days</span><h2>A useful plan, not a rigid prescription</h2></div><span className="small-badge">adapts to check-in + load</span></div>
+        <div className="week-grid">{weeklyPlan.map((day, index) => <article key={day.day} className={index === 0 ? "today" : ""}><span>{day.day}</span><strong>{day.session}</strong><small>{day.purpose}</small></article>)}</div>
+        <p className="chart-note"><i /> Regenerate the guidance by updating the recovery check-in or importing new training. Stop for pain or unusual symptoms.</p>
       </section>
 
       <section className="ftp-forecast panel">
@@ -1300,22 +1212,115 @@ function PhaseThree({ rides, recovery, currentFtp, setCurrentFtp, refreshRides }
         <p>{projection.disclaimer}</p>
       </section>
 
-      <section className="workout-card panel">
-        <div className="section-heading"><div><span className="eyebrow">Recommended next workout</span><h2>{workout.primary}</h2></div><span className={`readiness-score tone-${readiness.tone}`}>{readiness.score}</span></div>
-        <p>{workout.detail}</p><div className="avoid-strip"><span>Avoid today</span><strong>{workout.avoid}</strong></div>
-      </section>
-
       <section className="block-card panel">
         <div className="section-heading"><div><span className="eyebrow">Training-block comparison</span><h2>Recent 6 weeks vs prior 6</h2></div></div>
         <div className="block-table"><span>Metric</span><span>Prior</span><span>Recent</span><span>Change</span><strong>Rides</strong><span>{priorBlock.rides}</span><span>{currentBlock.rides}</span><b>{change(currentBlock.rides, priorBlock.rides)}</b><strong>Hours</strong><span>{priorBlock.hours.toFixed(1)}</span><span>{currentBlock.hours.toFixed(1)}</span><b>{change(currentBlock.hours, priorBlock.hours, "h")}</b><strong>Avg power</strong><span>{priorBlock.averagePower.toFixed(0)} W</span><span>{currentBlock.averagePower.toFixed(0)} W</span><b>{change(currentBlock.averagePower, priorBlock.averagePower, " W")}</b><strong>W / bpm</strong><span>{priorBlock.efficiency.toFixed(3)}</span><span>{currentBlock.efficiency.toFixed(3)}</span><b>{change(currentBlock.efficiency, priorBlock.efficiency)}</b><strong>Load</strong><span>{priorBlock.load.toFixed(0)}</span><span>{currentBlock.load.toFixed(0)}</span><b>{change(currentBlock.load, priorBlock.load)}</b></div>
       </section>
 
-      <section className="weekly-plan panel full-width">
-        <div className="section-heading"><div><span className="eyebrow">Generated week</span><h2>A useful plan, not a rigid prescription</h2></div><span className="small-badge">adapts to check-in + load</span></div>
-        <div className="week-grid">{weeklyPlan.map((day, index) => <article key={day.day} className={index === 0 ? "today" : ""}><span>{day.day}</span><strong>{day.session}</strong><small>{day.purpose}</small></article>)}</div>
-        <p className="chart-note"><i /> Regenerate the guidance by updating the recovery check-in or importing new training. Stop for pain or unusual symptoms.</p>
-      </section>
     </div>
+  );
+}
+
+function ConnectedSources({ refreshRides }: { refreshRides: () => Promise<void> }) {
+  const [insights, setInsights] = useState<PhaseThreeInsights | null>(null);
+  const [actionState, setActionState] = useState<"idle" | "working" | "success" | "error">("idle");
+  const [actionMessage, setActionMessage] = useState("");
+
+  const loadInsights = async () => {
+    const response = await fetch("/api/phase3", { cache: "no-store" });
+    const payload = await response.json() as PhaseThreeInsights & { error?: string };
+    if (!response.ok) throw new Error(payload.error ?? "Connected sources could not be loaded.");
+    setInsights(payload);
+  };
+
+  useEffect(() => {
+    let active = true;
+    void fetch("/api/phase3", { cache: "no-store" })
+      .then(async (response) => ({ response, payload: await response.json() as PhaseThreeInsights & { error?: string } }))
+      .then(({ response, payload }) => {
+        if (!active) return;
+        if (!response.ok) throw new Error(payload.error ?? "Connected sources could not be loaded.");
+        setInsights(payload);
+      })
+      .catch(() => { if (active) setActionMessage("Connection status is temporarily unavailable."); });
+    return () => { active = false; };
+  }, []);
+
+  const syncStrava = async (mode: "new" | "six_months") => {
+    setActionState("working");
+    setActionMessage(mode === "six_months"
+      ? "Importing six months of Strava rides… Summaries are saved first, then detailed streams are added within the rate limit."
+      : "Checking Strava for new rides…");
+    try {
+      const response = await fetch("/api/integrations/strava/sync", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ mode }),
+      });
+      const payload = await response.json() as {
+        imported?: number;
+        skipped?: number;
+        streamsImported?: number;
+        streamFailures?: number;
+        streamDeferred?: number;
+        error?: string;
+      };
+      if (!response.ok) throw new Error(payload.error ?? "Strava sync failed.");
+      await refreshRides();
+      await loadInsights();
+      setActionState("success");
+      const base = mode === "six_months"
+        ? `${payload.imported ?? 0} rides saved from the last six months · ${payload.skipped ?? 0} already stored`
+        : `${payload.imported ?? 0} new rides saved · ${payload.skipped ?? 0} existing rides checked`;
+      const streamNote = payload.streamsImported ? ` · ${payload.streamsImported} detailed streams added` : "";
+      const deferredNote = payload.streamDeferred ? ` · ${payload.streamDeferred} detailed streams will fill in on a later import` : "";
+      const failureNote = payload.streamFailures ? ` · ${payload.streamFailures} stream requests unavailable` : "";
+      setActionMessage(`${base}${streamNote}${deferredNote}${failureNote}`);
+    } catch (error) {
+      setActionState("error");
+      setActionMessage(error instanceof Error ? error.message : "Strava sync failed.");
+    }
+  };
+
+  const disconnectStrava = async () => {
+    setActionState("working");
+    try {
+      const response = await fetch("/api/integrations/strava/disconnect", { method: "POST" });
+      const payload = await response.json() as { error?: string };
+      if (!response.ok) throw new Error(payload.error ?? "Strava could not be disconnected.");
+      await loadInsights();
+      setActionState("success");
+      setActionMessage("Strava access was revoked. Synced rides remain in your private log.");
+    } catch (error) {
+      setActionState("error");
+      setActionMessage(error instanceof Error ? error.message : "Strava could not be disconnected.");
+    }
+  };
+
+  return (
+    <section className="connections-card panel full-width">
+      <div className="section-heading"><div><span className="eyebrow">Connected sources</span><h2>Bring activities in automatically</h2></div><span className="small-badge">private account</span></div>
+      {actionMessage && <div className={`phase-action-message ${actionState}`}>{actionMessage}</div>}
+      <div className="connection-grid">
+        <article className="connection-tile strava-source">
+          <div className="connection-mark strava">S</div>
+          <div>
+            <strong>Strava</strong>
+            <span>{insights?.integrations.strava.connected ? `Connected${insights.integrations.strava.displayName ? ` · ${insights.integrations.strava.displayName}` : ""}` : insights?.integrations.strava.configured ? "Ready to connect with read-only activity access" : "App registration credentials are still needed"}</span>
+            {insights?.integrations.strava.connected && <small>Six-month history and new-ride sync use Strava IDs to prevent duplicates.</small>}
+            {insights?.integrations.strava.lastSyncedAt && <small>Last sync {new Date(insights.integrations.strava.lastSyncedAt).toLocaleString()}</small>}
+          </div>
+          <div className="connection-actions">
+            {insights?.integrations.strava.connected ? <>
+              <button className="primary-button" onClick={() => void syncStrava("new")} disabled={actionState === "working"}>Sync new rides</button>
+              <button className="secondary-button" onClick={() => void syncStrava("six_months")} disabled={actionState === "working"}>Import last 6 months</button>
+              <button className="text-button" onClick={() => void disconnectStrava()} disabled={actionState === "working"}>Disconnect</button>
+            </> : <button className="primary-button strava-button" onClick={() => window.location.assign("/api/integrations/strava/start")} disabled={!insights?.integrations.strava.configured}>Connect with Strava</button>}
+          </div>
+        </article>
+        <article className="connection-tile"><div className="connection-mark garmin">G</div><div><strong>Garmin Connect</strong><span>Cloud sync requires Garmin Developer Program approval.</span><small>Garmin FIT files already receive full stream analysis.</small></div><a className="secondary-link" href="https://developer.garmin.com/gc-developer-program/activity-api/" target="_blank" rel="noreferrer">Application details ↗</a></article>
+      </div>
+    </section>
   );
 }
 
@@ -1401,5 +1406,5 @@ function Methodology({ currentFtp }: { currentFtp: number }) {
     { id: "07", title: "FTP prediction", formula: "20–60 min best power × duration factor", note: "A conservative range from recorded efforts, with confidence tied to available evidence." },
     { id: "08", title: "Goal scenarios", formula: "watts remaining ÷ monthly scenario", note: "Multiple clearly labeled estimates; never a promised achievement date." },
   ];
-  return <div className="method-layout"><section className="method-hero panel-dark"><span className="eyebrow light">Explainable by design</span><h2>No mystery score.</h2><p>Every recommendation is assembled from visible inputs, conservative rules, and versioned calculations. Pain always overrides the number.</p><div className="version-stamp"><span>Current ruleset</span><strong>phase3.0</strong></div></section><section className="method-list panel"><div className="section-heading"><div><span className="eyebrow">Metric dictionary</span><h2>What the app calculates</h2></div></div>{methods.map((method) => <article key={method.id} className="method-row"><span>{method.id}</span><div><strong>{method.title}</strong><code>{method.formula}</code><p>{method.note}</p></div></article>)}</section><section className="config-card panel"><div className="section-heading"><div><span className="eyebrow">Athlete configuration</span><h2>Current working values</h2></div></div><div className="config-grid"><Stat label="FTP" value={String(currentFtp)} unit="W" /><Stat label="Zone 2 target" value={String(Math.round(currentFtp * 2 / 3))} unit="W" /><Stat label="Cadence band" value="85–90" unit="rpm" /><Stat label="Next milestone" value="175" unit="W" /></div><p className="chart-note"><i /> FTP and goals can now be updated from Phase 3; each calculation records the working value used.</p></section></div>;
+  return <div className="method-layout"><section className="method-hero panel-dark"><span className="eyebrow light">Explainable by design</span><h2>No mystery score.</h2><p>Every recommendation is assembled from visible inputs, conservative rules, and versioned calculations. Pain always overrides the number.</p><div className="version-stamp"><span>Current ruleset</span><strong>v3.1</strong></div></section><section className="method-list panel"><div className="section-heading"><div><span className="eyebrow">Metric dictionary</span><h2>What the app calculates</h2></div></div>{methods.map((method) => <article key={method.id} className="method-row"><span>{method.id}</span><div><strong>{method.title}</strong><code>{method.formula}</code><p>{method.note}</p></div></article>)}</section><section className="config-card panel"><div className="section-heading"><div><span className="eyebrow">Athlete configuration</span><h2>Current working values</h2></div></div><div className="config-grid"><Stat label="FTP" value={String(currentFtp)} unit="W" /><Stat label="Zone 2 target" value={String(Math.round(currentFtp * 2 / 3))} unit="W" /><Stat label="Cadence band" value="85–90" unit="rpm" /><Stat label="Next milestone" value="175" unit="W" /></div><p className="chart-note"><i /> FTP and goals can be updated from Plan Today; each calculation records the working value used.</p></section></div>;
 }

@@ -9,7 +9,7 @@ const runtime = () => env as unknown as Record<string, string | undefined>;
 
 export async function GET(request: Request) {
   const rider = await currentRider(request);
-  if (!rider) return Response.json({ error: "Sign in to view Phase 3 insights." }, { status: 401 });
+  if (!rider) return Response.json({ error: "Sign in to view training insights." }, { status: 401 });
   const db = getDb();
   const [[profile], ftpRows, [goal], connections, bests] = await Promise.all([
     db.select().from(riders).where(eq(riders.id, rider.id)).limit(1),
@@ -81,10 +81,10 @@ export async function POST(request: Request) {
     }
     const effectiveAt = new Date().toISOString();
     await db.update(riders).set({ defaultFtpWatts: ftpWatts }).where(eq(riders.id, rider.id));
-    await db.insert(ftpHistory).values({ id: crypto.randomUUID(), riderId: rider.id, effectiveAt, ftpWatts, source: "manual confirmation", notes: "Confirmed from the Phase 3 workspace." });
+    await db.insert(ftpHistory).values({ id: crypto.randomUUID(), riderId: rider.id, effectiveAt, ftpWatts, source: "manual confirmation", notes: "Confirmed from Plan Today." });
     await db.update(riderGoals).set({ status: "achieved", achievedAt: effectiveAt }).where(and(eq(riderGoals.riderId, rider.id), eq(riderGoals.status, "active"), lte(riderGoals.targetFtpWatts, ftpWatts)));
     return Response.json({ ftpWatts, effectiveAt, unchanged: false }, { status: 201 });
   }
 
-  return Response.json({ error: "Unsupported Phase 3 action." }, { status: 400 });
+  return Response.json({ error: "Unsupported training update." }, { status: 400 });
 }

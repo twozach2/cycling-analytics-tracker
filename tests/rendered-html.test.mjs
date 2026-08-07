@@ -22,26 +22,32 @@ test("server-renders the cycling analytics dashboard", async () => {
   assert.match(response.headers.get("content-type") ?? "", /^text\/html\b/i);
 
   const html = await response.text();
-  assert.match(html, /<title>Today \| Cycling Analytics<\/title>/i);
+  assert.match(html, /<title>Dashboard \| Cycling Analytics<\/title>/i);
   assert.match(html, /Ride with the trend/);
-  assert.match(html, /Before your next hard ride/);
-  assert.match(html, /Power \/ heart-rate trend/);
+  assert.match(html, /Dashboard/);
+  assert.match(html, /Plan today/);
+  assert.match(html, /Ride log/);
+  assert.match(html, /Watts \/ heartbeat/);
+  assert.match(html, /Power-to-heart-rate trend/);
   assert.match(html, /Import ride/);
-  assert.match(html, /Phase 3/);
+  assert.doesNotMatch(html, /Phase 2|Phase 3/);
   assert.doesNotMatch(html, /codex-preview|react-loading-skeleton|Your site is taking shape/i);
 });
 
 test("removes starter preview metadata and dependencies", async () => {
-  const [page, layout, packageJson] = await Promise.all([
+  const [page, layout, packageJson, dashboard] = await Promise.all([
     readFile(new URL("../app/page.tsx", import.meta.url), "utf8"),
     readFile(new URL("../app/layout.tsx", import.meta.url), "utf8"),
     readFile(new URL("../package.json", import.meta.url), "utf8"),
+    readFile(new URL("../app/CyclingDashboard.tsx", import.meta.url), "utf8"),
   ]);
 
   assert.match(page, /<CyclingDashboard \/>/);
   assert.match(layout, /Cycling Analytics/);
   assert.doesNotMatch(page, /codex-preview|_sites-preview|SkeletonPreview/);
   assert.doesNotMatch(packageJson, /react-loading-skeleton/);
+  assert.match(dashboard, /label: "Plan today"/);
+  assert.doesNotMatch(dashboard, /label: "Phase [23]"/);
   await assert.rejects(access(new URL("app/_sites-preview/SkeletonPreview.tsx", templateRoot)));
   await assert.rejects(access(new URL("app/_sites-preview/preview.css", templateRoot)));
 });

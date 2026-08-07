@@ -2,7 +2,7 @@ import type { Metadata } from "next";
 import CyclingDashboard from "./CyclingDashboard";
 
 export const metadata: Metadata = {
-  title: "Today",
+  title: "Dashboard",
   description: "A personal, explainable cycling performance and recovery dashboard.",
 };
 
