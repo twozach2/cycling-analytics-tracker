@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { derivePowerDuration, deriveStreamMetrics, type ActivitySample } from "../lib/activity-parser.ts";
 import { buildWeeklyPlan, predictFtp, projectFtpGoal, recommendWorkout } from "../lib/phase3.ts";
-import { recommendZwiftRoutes } from "../lib/zwift-routes.ts";
+import { recommendZwiftRoutes, ZWIFT_WORLDS } from "../lib/zwift-routes.ts";
 import { fallbackGuestWorlds, parseGuestWorldsFromSchedule } from "../lib/zwift-world-rotation.ts";
 
 test("derives rolling power evidence from timestamped samples", () => {
@@ -80,14 +80,28 @@ test("Zwift route suite offers three distinct time commitments with FTP-based ta
   assert.equal(new Set(suite.map((suggestion) => suggestion.route.id)).size, 3);
   assert.deepEqual(suite.map((suggestion) => suggestion.targetWatts), ["152–176 W", "152–176 W", "152–176 W"]);
   assert.equal(suite.find((suggestion) => suggestion.recommended)?.commitment, 60);
-  assert.ok(suite.every((suggestion) => suggestion.route.world === "Watopia"));
+  assert.deepEqual(suite.map((suggestion) => suggestion.route.world), ["Makuri Islands", "Scotland", "London"]);
 });
 
-test("Zwift route suite uses both guest worlds in today's rotation", () => {
+test("Zwift route suite can be limited to a supplied world pool", () => {
   const suite = recommendZwiftRoutes("endurance", 200, ["Watopia", "Paris", "France"]);
   assert.deepEqual(suite.map((suggestion) => suggestion.route.world), ["Paris", "France", "Watopia"]);
   assert.deepEqual(suite.map((suggestion) => suggestion.route.name), ["Lutece Express", "Douce France", "Big Flat 8"]);
-  assert.ok(suite.every((suggestion) => suggestion.reason.includes("available in today's rotation")));
+  assert.ok(suite.every((suggestion) => suggestion.reason.includes("change of scenery")));
+});
+
+test("shuffling deals three new worlds without duplicates", () => {
+  const firstDeal = recommendZwiftRoutes("endurance", 200, undefined, 0);
+  const secondDeal = recommendZwiftRoutes("endurance", 200, undefined, 1);
+  const firstWorlds = firstDeal.map((suggestion) => suggestion.route.world);
+  const secondWorlds = secondDeal.map((suggestion) => suggestion.route.world);
+  assert.equal(new Set(firstWorlds).size, 3);
+  assert.equal(new Set(secondWorlds).size, 3);
+  assert.ok(secondWorlds.every((world) => !firstWorlds.includes(world)));
+  const worldsSeenAcrossFourDeals = new Set(Array.from({ length: 4 }, (_, index) => (
+    recommendZwiftRoutes("endurance", 200, undefined, index).map((suggestion) => suggestion.route.world)
+  )).flat());
+  assert.deepEqual([...worldsSeenAcrossFourDeals].sort(), [...ZWIFT_WORLDS].sort());
 });
 
 test("parses the guest worlds for a calendar day", () => {

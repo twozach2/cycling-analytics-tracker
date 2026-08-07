@@ -96,6 +96,21 @@ const routes: Record<string, ZwiftRoute> = {
   "yorkshire-double-loop": route("yorkshire-double-loop", "Yorkshire Double Loop", "Yorkshire", 18.4, 1795, 590, "climb"),
 };
 
+export const ZWIFT_ROUTE_COUNT = Object.keys(routes).length;
+
+const anyWorldDeck: ZwiftWorld[] = [
+  "Makuri Islands",
+  "Scotland",
+  "London",
+  "Paris",
+  "Yorkshire",
+  "New York",
+  "France",
+  "Innsbruck",
+  "Richmond",
+  "Watopia",
+];
+
 const watopiaRouteIdsByMode: Record<WorkoutMode, [string, string, string]> = {
   rest: ["volcano-circuit", "volcano-flat", "tempus-fugit"],
   recovery: ["volcano-circuit", "volcano-flat", "tempus-fugit"],
@@ -157,23 +172,25 @@ function isZwiftWorld(value: string): value is ZwiftWorld {
   return (ZWIFT_WORLDS as readonly string[]).includes(value);
 }
 
-function worldsForSuite(activeWorlds: readonly string[]): [ZwiftWorld, ZwiftWorld, ZwiftWorld] {
-  const normalized = Array.from(new Set(activeWorlds.filter(isZwiftWorld)));
-  const guests = normalized.filter((world): world is Exclude<ZwiftWorld, "Watopia"> => world !== "Watopia");
-  if (guests.length >= 2) return [guests[0], guests[1], "Watopia"];
-  if (guests.length === 1) return [guests[0], "Watopia", "Watopia"];
-  return ["Watopia", "Watopia", "Watopia"];
+function worldsForSuite(worldPool: readonly string[], shuffleIndex: number): [ZwiftWorld, ZwiftWorld, ZwiftWorld] {
+  const allowed = new Set(worldPool.filter(isZwiftWorld));
+  const normalized = anyWorldDeck.filter((world) => allowed.has(world));
+  const deck = normalized.length ? normalized : anyWorldDeck;
+  const safeShuffleIndex = Number.isFinite(shuffleIndex) ? Math.max(0, Math.trunc(shuffleIndex)) : 0;
+  const offset = (safeShuffleIndex * commitments.length) % deck.length;
+  return commitments.map((_, index) => deck[(offset + index) % deck.length]) as [ZwiftWorld, ZwiftWorld, ZwiftWorld];
 }
 
 export function recommendZwiftRoutes(
   mode: WorkoutMode,
   ftpWatts: number,
-  activeWorlds: readonly string[] = ["Watopia"],
+  worldPool: readonly string[] = ZWIFT_WORLDS,
+  shuffleIndex = 0,
 ): ZwiftRouteSuggestion[] {
   const safeFtp = Number.isFinite(ftpWatts) && ftpWatts > 0 ? ftpWatts : 165;
   const watts = intensity[mode];
   const recommendedCommitment: RouteCommitment = mode === "recovery" || mode === "rest" ? 30 : 60;
-  const suggestionWorlds = worldsForSuite(activeWorlds);
+  const suggestionWorlds = worldsForSuite(worldPool, shuffleIndex);
 
   return suggestionWorlds.map((world, index) => {
     const routeId = world === "Watopia"
@@ -186,7 +203,7 @@ export function recommendZwiftRoutes(
       route: selectedRoute,
       targetWatts: `${Math.round(safeFtp * watts.low)}–${Math.round(safeFtp * watts.high)} W`,
       heartRateCue: watts.heartRateCue,
-      reason: `${selectedRoute.world} is available in today's rotation. ${modeReason[mode][selectedRoute.profile]}`,
+      reason: `${selectedRoute.world} brings a change of scenery. ${modeReason[mode][selectedRoute.profile]}`,
       timingCue: timingCues[commitments[index]],
       recommended: commitments[index] === recommendedCommitment,
       disabled: mode === "rest",
