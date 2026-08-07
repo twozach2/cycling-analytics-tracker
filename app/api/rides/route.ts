@@ -1,7 +1,7 @@
-import { desc, eq } from "drizzle-orm";
+import { and, desc, eq } from "drizzle-orm";
 import { getChatGPTUser } from "../../chatgpt-auth";
 import { getDb } from "../../../db";
-import { rideMetrics, rides } from "../../../db/schema";
+import { rideMetrics, rides, sourceFiles } from "../../../db/schema";
 import { deriveRideMetrics, recommendRecovery } from "../../../lib/metrics";
 
 async function riderIdFor(request: Request) {
@@ -42,6 +42,17 @@ type RidePayload = {
   normalizedPowerWatts?: number | null;
   ftpAtRideWatts?: number | null;
   sourceTrainingLoad?: number | null;
+  rideType?: "Zone 2" | "Zone 2 benchmark" | "Recovery" | "Tempo" | "Threshold" | "Free ride";
+  routeName?: string | null;
+  aerobicDecouplingPercent?: number | null;
+  variabilityIndex?: number | null;
+  cadenceStddev?: number | null;
+  cadenceTargetPercent?: number | null;
+  cadenceAcceptablePercent?: number | null;
+  cadenceLowPercent?: number | null;
+  cadenceHighPercent?: number | null;
+  first15HeartRateBpm?: number | null;
+  final15HeartRateBpm?: number | null;
 };
 
 export async function POST(request: Request) {
@@ -63,8 +74,30 @@ export async function POST(request: Request) {
   const trainingLoad = payload.sourceTrainingLoad ?? metrics.trainingLoad;
   const finalMetrics = { ...metrics, trainingLoad, trainingLoadIsEstimated: payload.sourceTrainingLoad == null && metrics.trainingLoadIsEstimated };
   const recovery = recommendRecovery(finalMetrics, movingTimeS, 0);
-  const id = crypto.randomUUID();
   const db = getDb();
+
+  if (payload.sourceFileId) {
+    const [ownedFile] = await db
+      .select({ id: sourceFiles.id })
+      .from(sourceFiles)
+      .where(and(eq(sourceFiles.id, payload.sourceFileId), eq(sourceFiles.riderId, riderId)))
+      .limit(1);
+    if (!ownedFile) return Response.json({ error: "The uploaded source file was not found." }, { status: 400 });
+
+    const [existing] = await db
+      .select({ rideId: rides.id, metrics: rideMetrics })
+      .from(rides)
+      .leftJoin(rideMetrics, eq(rideMetrics.rideId, rides.id))
+      .where(and(eq(rides.riderId, riderId), eq(rides.sourceFileId, payload.sourceFileId)))
+      .limit(1);
+    if (existing) {
+      return Response.json({ rideId: existing.rideId, metrics: existing.metrics, duplicate: true });
+    }
+  }
+
+  const id = crypto.randomUUID();
+  const allowedRideTypes = new Set(["Zone 2", "Zone 2 benchmark", "Recovery", "Tempo", "Threshold", "Free ride"]);
+  const rideType = payload.rideType && allowedRideTypes.has(payload.rideType) ? payload.rideType : "Free ride";
   await db.insert(rides).values({
     id,
     riderId,
@@ -72,7 +105,8 @@ export async function POST(request: Request) {
     source: payload.source ?? "manual",
     name,
     startedAt,
-    rideType: "unknown",
+    rideType,
+    routeName: payload.routeName?.trim() || null,
     distanceM: payload.distanceM,
     movingTimeS,
     elapsedTimeS: movingTimeS,
@@ -94,8 +128,17 @@ export async function POST(request: Request) {
     intensityIsEstimated: finalMetrics.intensityIsEstimated,
     trainingLoad: finalMetrics.trainingLoad,
     trainingLoadIsEstimated: finalMetrics.trainingLoadIsEstimated,
+    variabilityIndex: payload.variabilityIndex,
+    aerobicDecouplingPercent: payload.aerobicDecouplingPercent,
+    cadenceStddev: payload.cadenceStddev,
+    cadenceTargetPercent: payload.cadenceTargetPercent,
+    cadenceAcceptablePercent: payload.cadenceAcceptablePercent,
+    cadenceLowPercent: payload.cadenceLowPercent,
+    cadenceHighPercent: payload.cadenceHighPercent,
+    first15HeartRateBpm: payload.first15HeartRateBpm,
+    final15HeartRateBpm: payload.final15HeartRateBpm,
     dataQuality: payload.normalizedPowerWatts == null ? "medium" : "high",
   });
 
-  return Response.json({ rideId: id, metrics: finalMetrics, recovery }, { status: 201 });
+  return Response.json({ rideId: id, metrics: finalMetrics, recovery, duplicate: false }, { status: 201 });
 }

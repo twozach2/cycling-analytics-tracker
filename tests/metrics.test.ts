@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { deriveRideMetrics, recommendRecovery } from "../lib/metrics.ts";
+import { calculateReadiness, deriveRideMetrics, recommendRecovery } from "../lib/metrics.ts";
 
 test("uses normalized power for intensity and load when available", () => {
   const metrics = deriveRideMetrics({
@@ -62,4 +62,26 @@ test("adds explainable adjustments for accumulated load and heavy legs", () => {
   assert.equal(recovery.status, "moderate fatigue");
   assert.ok(recovery.reasons.some((reason) => reason.includes("72-hour load")));
   assert.ok(recovery.reasons.some((reason) => reason.includes("heavy")));
+});
+
+test("readiness combines objective load and the recovery questionnaire", () => {
+  const readiness = calculateReadiness({
+    hoursSinceLastHardRide: 48,
+    acuteChronicRatio: 1.05,
+    subjective: { sleepQuality: 5, legFreshness: "fresh", kneePain: 0, motivation: 5 },
+  });
+
+  assert.ok(readiness.score >= 85);
+  assert.equal(readiness.label, "Ready for hard work");
+});
+
+test("pain caps readiness even when every other signal is strong", () => {
+  const readiness = calculateReadiness({
+    hoursSinceLastHardRide: 72,
+    acuteChronicRatio: 0.9,
+    subjective: { sleepQuality: 5, legFreshness: "fresh", kneePain: 3, motivation: 5 },
+  });
+
+  assert.equal(readiness.score, 39);
+  assert.equal(readiness.label, "Rest / recovery recommended");
 });

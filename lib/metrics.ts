@@ -11,6 +11,13 @@ export type SubjectiveRecovery = {
   legFreshness?: "fresh" | "normal" | "heavy" | "dead";
   kneePain?: number;
   soreness?: number;
+  motivation?: number;
+};
+
+export type ReadinessResult = {
+  score: number;
+  label: "Ready for hard work" | "Good to train" | "Moderate fatigue" | "Easy ride preferred" | "Rest / recovery recommended";
+  tone: "green" | "yellow" | "orange" | "red";
 };
 
 export type RecoveryRecommendation = {
@@ -33,6 +40,41 @@ const round = (value: number, digits = 1) => {
   const scale = 10 ** digits;
   return Math.round(value * scale) / scale;
 };
+
+const clamp = (value: number, minimum = 0, maximum = 100) => Math.min(maximum, Math.max(minimum, value));
+
+export function calculateReadiness(input: {
+  hoursSinceLastHardRide: number;
+  acuteChronicRatio: number | null;
+  subjective: SubjectiveRecovery;
+}): ReadinessResult {
+  const legScores = { fresh: 100, normal: 78, heavy: 45, dead: 10 } as const;
+  const hoursScore = clamp((input.hoursSinceLastHardRide / 48) * 100);
+  const loadScore = input.acuteChronicRatio === null
+    ? 75
+    : input.acuteChronicRatio <= 1.2
+      ? 100
+      : clamp(100 - ((input.acuteChronicRatio - 1.2) * 90));
+  const sleepScore = clamp((((input.subjective.sleepQuality ?? 3) - 1) / 4) * 100);
+  const legScore = legScores[input.subjective.legFreshness ?? "normal"];
+  const painScore = clamp(100 - ((input.subjective.kneePain ?? 0) * 20));
+  const motivationScore = clamp((((input.subjective.motivation ?? 3) - 1) / 4) * 100);
+  let score = Math.round(
+    (hoursScore * 0.25) +
+    (loadScore * 0.20) +
+    (sleepScore * 0.20) +
+    (legScore * 0.15) +
+    (painScore * 0.15) +
+    (motivationScore * 0.05),
+  );
+  if ((input.subjective.kneePain ?? 0) >= 3) score = Math.min(score, 39);
+
+  if (score >= 85) return { score, label: "Ready for hard work", tone: "green" };
+  if (score >= 70) return { score, label: "Good to train", tone: "green" };
+  if (score >= 55) return { score, label: "Moderate fatigue", tone: "yellow" };
+  if (score >= 40) return { score, label: "Easy ride preferred", tone: "orange" };
+  return { score, label: "Rest / recovery recommended", tone: "red" };
+}
 
 export function deriveRideMetrics(input: RideMetricInput): DerivedRideMetrics {
   const powerHeartRateRatio =

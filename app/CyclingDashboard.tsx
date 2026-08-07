@@ -1,15 +1,17 @@
 "use client";
 
-import { ChangeEvent, DragEvent, useMemo, useRef, useState } from "react";
+import { ChangeEvent, DragEvent, useEffect, useMemo, useRef, useState } from "react";
 import { parseActivityFile, type DetectedActivity } from "@/lib/activity-parser";
 import {
+  calculateReadiness,
   deriveRideMetrics,
   formatDuration,
   recommendRecovery,
   type SubjectiveRecovery,
 } from "@/lib/metrics";
 
-type View = "overview" | "rides" | "import" | "settings";
+type View = "overview" | "rides" | "analysis" | "import" | "settings";
+type DataMode = "loading" | "demo" | "saved" | "unavailable";
 
 type Ride = {
   id: string;
@@ -18,7 +20,7 @@ type Ride = {
   date: string;
   dateLabel: string;
   dayLabel: string;
-  type: "Zone 2" | "Recovery" | "Tempo" | "Threshold" | "Free ride";
+  type: "Zone 2" | "Zone 2 benchmark" | "Recovery" | "Tempo" | "Threshold" | "Free ride";
   source: "Strava" | "Zwift" | "Upload";
   indoor: boolean;
   distanceMiles: number;
@@ -36,6 +38,13 @@ type Ride = {
   powerHeartRateRatio: number;
   decoupling: number | null;
   variabilityIndex: number | null;
+  cadenceStddev?: number | null;
+  cadenceTargetPercent?: number | null;
+  cadenceAcceptablePercent?: number | null;
+  cadenceLowPercent?: number | null;
+  cadenceHighPercent?: number | null;
+  first15HeartRate?: number | null;
+  final15HeartRate?: number | null;
   note: string;
 };
 
@@ -74,7 +83,7 @@ const initialRides: Ride[] = [
     date: "2026-07-31",
     dateLabel: "Jul 31",
     dayLabel: "FRI",
-    type: "Zone 2",
+    type: "Zone 2 benchmark",
     source: "Zwift",
     indoor: true,
     distanceMiles: 17.8,
@@ -92,6 +101,13 @@ const initialRides: Ride[] = [
     powerHeartRateRatio: 0.821,
     decoupling: 2.7,
     variabilityIndex: 1.02,
+    cadenceStddev: 3.8,
+    cadenceTargetPercent: 72,
+    cadenceAcceptablePercent: 94,
+    cadenceLowPercent: 1,
+    cadenceHighPercent: 0,
+    first15HeartRate: 130,
+    final15HeartRate: 138,
     note: "Benchmark complete. Cadence stayed inside the target band for most of the ride.",
   },
   {
@@ -155,7 +171,7 @@ const initialRides: Ride[] = [
     date: "2026-07-24",
     dateLabel: "Jul 24",
     dayLabel: "FRI",
-    type: "Zone 2",
+    type: "Zone 2 benchmark",
     source: "Zwift",
     indoor: true,
     distanceMiles: 17.3,
@@ -173,6 +189,13 @@ const initialRides: Ride[] = [
     powerHeartRateRatio: 0.803,
     decoupling: 4.8,
     variabilityIndex: 1.03,
+    cadenceStddev: 4.5,
+    cadenceTargetPercent: 61,
+    cadenceAcceptablePercent: 88,
+    cadenceLowPercent: 3,
+    cadenceHighPercent: 1,
+    first15HeartRate: 134,
+    final15HeartRate: 141,
     note: "Warmer room than usual. Needed more water in the second half.",
   },
 ];
@@ -185,14 +208,12 @@ const powerDuration = [
   { label: "60m", watts: 137, best: 141 },
 ];
 
-const efficiencyTrend = [0.76, 0.79, 0.78, 0.82, 0.84, 0.86, 0.91];
-const weeklyLoads = [142, 188, 171, 226, 198, 244, 164];
-
 const navItems: Array<{ id: View; label: string; glyph: string }> = [
   { id: "overview", label: "Today", glyph: "01" },
   { id: "rides", label: "Ride log", glyph: "02" },
-  { id: "import", label: "Import", glyph: "03" },
-  { id: "settings", label: "Method", glyph: "04" },
+  { id: "analysis", label: "Phase 2", glyph: "03" },
+  { id: "import", label: "Import", glyph: "04" },
+  { id: "settings", label: "Method", glyph: "05" },
 ];
 
 const miles = (meters: number | null) =>
@@ -200,10 +221,105 @@ const miles = (meters: number | null) =>
 const feet = (meters: number | null) =>
   meters === null ? 0 : Math.round(meters * 3.28084);
 
+type SavedRideRow = {
+  ride: {
+    id: string;
+    source: string;
+    name: string;
+    startedAt: string;
+    rideType: string;
+    indoor: boolean;
+    routeName: string | null;
+    distanceM: number | null;
+    movingTimeS: number | null;
+    elevationGainM: number | null;
+    averageHeartRateBpm: number | null;
+    maximumHeartRateBpm: number | null;
+    averageCadenceRpm: number | null;
+    maximumCadenceRpm: number | null;
+    averagePowerWatts: number | null;
+    maximumPowerWatts: number | null;
+    normalizedPowerWatts: number | null;
+    notes: string;
+  };
+  metrics: {
+    powerHeartRateRatio: number | null;
+    intensityFactor: number | null;
+    trainingLoad: number | null;
+    variabilityIndex: number | null;
+    aerobicDecouplingPercent: number | null;
+    cadenceStddev: number | null;
+    cadenceTargetPercent: number | null;
+    cadenceAcceptablePercent: number | null;
+    cadenceLowPercent: number | null;
+    cadenceHighPercent: number | null;
+    first15HeartRateBpm: number | null;
+    final15HeartRateBpm: number | null;
+  } | null;
+};
+
+const rideTypes = ["Zone 2", "Zone 2 benchmark", "Recovery", "Tempo", "Threshold", "Free ride"] as const;
+
+function mapSavedRide({ ride, metrics }: SavedRideRow): Ride {
+  const startedAt = new Date(ride.startedAt);
+  const safeDate = Number.isNaN(startedAt.getTime()) ? new Date() : startedAt;
+  const type = rideTypes.includes(ride.rideType as (typeof rideTypes)[number])
+    ? ride.rideType as Ride["type"]
+    : "Free ride";
+  const source: Ride["source"] = ride.source === "zwift" ? "Zwift" : ride.source === "strava_export" ? "Strava" : "Upload";
+  const sourceLabel = ride.source === "fit" ? "FIT upload" : ride.source === "tcx" ? "TCX upload" : ride.source === "gpx" ? "GPX upload" : "Imported activity";
+
+  return {
+    id: ride.id,
+    name: ride.name,
+    route: ride.routeName ?? sourceLabel,
+    date: safeDate.toISOString().slice(0, 10),
+    dateLabel: safeDate.toLocaleDateString("en-US", { month: "short", day: "numeric" }),
+    dayLabel: safeDate.toLocaleDateString("en-US", { weekday: "short" }).toUpperCase(),
+    type,
+    source,
+    indoor: ride.indoor,
+    distanceMiles: miles(ride.distanceM),
+    movingTimeSeconds: Math.round(ride.movingTimeS ?? 0),
+    elevationFeet: feet(ride.elevationGainM),
+    averagePower: Math.round(ride.averagePowerWatts ?? 0),
+    maximumPower: Math.round(ride.maximumPowerWatts ?? 0),
+    normalizedPower: ride.normalizedPowerWatts === null ? null : Math.round(ride.normalizedPowerWatts),
+    averageHeartRate: Math.round(ride.averageHeartRateBpm ?? 0),
+    maximumHeartRate: Math.round(ride.maximumHeartRateBpm ?? 0),
+    averageCadence: Math.round(ride.averageCadenceRpm ?? 0),
+    maximumCadence: Math.round(ride.maximumCadenceRpm ?? 0),
+    trainingLoad: Math.round(metrics?.trainingLoad ?? 0),
+    intensityFactor: metrics?.intensityFactor ?? 0,
+    powerHeartRateRatio: metrics?.powerHeartRateRatio ?? 0,
+    decoupling: metrics?.aerobicDecouplingPercent ?? null,
+    variabilityIndex: metrics?.variabilityIndex ?? null,
+    cadenceStddev: metrics?.cadenceStddev ?? null,
+    cadenceTargetPercent: metrics?.cadenceTargetPercent ?? null,
+    cadenceAcceptablePercent: metrics?.cadenceAcceptablePercent ?? null,
+    cadenceLowPercent: metrics?.cadenceLowPercent ?? null,
+    cadenceHighPercent: metrics?.cadenceHighPercent ?? null,
+    first15HeartRate: metrics?.first15HeartRateBpm ?? null,
+    final15HeartRate: metrics?.final15HeartRateBpm ?? null,
+    note: ride.notes || (ride.normalizedPowerWatts === null
+      ? "Saved from the original activity file. Intensity and load are estimated where recorded power data is unavailable."
+      : "Saved from the original activity file with recorded normalized power."),
+  };
+}
+
+async function fetchSavedRides() {
+  const response = await fetch("/api/rides", { cache: "no-store" });
+  const payload = await response.json() as { rides?: SavedRideRow[]; error?: string };
+  if (!response.ok) throw new Error(payload.error ?? "Saved rides could not be loaded.");
+  return (payload.rides ?? []).map(mapSavedRide);
+}
+
 export default function CyclingDashboard() {
   const [view, setView] = useState<View>("overview");
   const [rides, setRides] = useState(initialRides);
   const [selectedRideId, setSelectedRideId] = useState(initialRides[0].id);
+  const [dataMode, setDataMode] = useState<DataMode>("loading");
+  const [syncNote, setSyncNote] = useState("");
   const [rideFilter, setRideFilter] = useState("All rides");
   const [search, setSearch] = useState("");
   const [recovery, setRecovery] = useState<SubjectiveRecovery>({
@@ -211,13 +327,72 @@ export default function CyclingDashboard() {
     legFreshness: "heavy",
     kneePain: 0,
     soreness: 3,
+    motivation: 4,
   });
+  const [recoverySaveState, setRecoverySaveState] = useState<"idle" | "saving" | "saved" | "error">("idle");
   const [detected, setDetected] = useState<DetectedActivity | null>(null);
   const [importName, setImportName] = useState("");
   const [importError, setImportError] = useState("");
   const [isDragging, setIsDragging] = useState(false);
   const [isReading, setIsReading] = useState(false);
+  const [isSaving, setIsSaving] = useState(false);
+  const [pendingFile, setPendingFile] = useState<File | null>(null);
+  const [rideType, setRideType] = useState<Ride["type"]>("Free ride");
+  const [routeName, setRouteName] = useState("");
   const fileInput = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    let active = true;
+    void fetchSavedRides()
+      .then((savedRides) => {
+        if (!active) return;
+        if (savedRides.length) {
+          setRides(savedRides);
+          setSelectedRideId(savedRides[0].id);
+          setDataMode("saved");
+        } else {
+          setDataMode("demo");
+        }
+      })
+      .catch(() => {
+        if (active) setDataMode("unavailable");
+      });
+    return () => { active = false; };
+  }, []);
+
+  useEffect(() => {
+    let active = true;
+    void fetch("/api/recovery", { cache: "no-store" })
+      .then(async (response) => ({ response, payload: await response.json() as { recovery?: { sleepQuality?: number; legFreshness?: SubjectiveRecovery["legFreshness"]; motivation?: number; generalSoreness?: number; kneePain?: number } | null } }))
+      .then(({ response, payload }) => {
+        if (!active || !response.ok || !payload.recovery) return;
+        setRecovery({
+          sleepQuality: payload.recovery.sleepQuality ?? 3,
+          legFreshness: payload.recovery.legFreshness ?? "normal",
+          motivation: payload.recovery.motivation ?? 3,
+          soreness: payload.recovery.generalSoreness ?? 0,
+          kneePain: payload.recovery.kneePain ?? 0,
+        });
+        setRecoverySaveState("saved");
+      })
+      .catch(() => undefined);
+    return () => { active = false; };
+  }, []);
+
+  const saveRecovery = async () => {
+    setRecoverySaveState("saving");
+    try {
+      const response = await fetch("/api/recovery", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(recovery),
+      });
+      if (!response.ok) throw new Error("Recovery check-in could not be saved.");
+      setRecoverySaveState("saved");
+    } catch {
+      setRecoverySaveState("error");
+    }
+  };
 
   const selectedRide = rides.find((ride) => ride.id === selectedRideId) ?? rides[0];
   const currentMetrics = useMemo(
@@ -231,9 +406,17 @@ export default function CyclingDashboard() {
       }),
     [selectedRide],
   );
+  const recent72HourLoad = useMemo(() => {
+    const timestamps = rides.map((ride) => Date.parse(ride.date)).filter(Number.isFinite);
+    const anchor = timestamps.length ? Math.max(...timestamps) : 0;
+    return rides.reduce((sum, ride) => {
+      const timestamp = Date.parse(ride.date);
+      return Number.isFinite(timestamp) && timestamp >= anchor - (72 * 60 * 60 * 1000) ? sum + ride.trainingLoad : sum;
+    }, 0);
+  }, [rides]);
   const recommendation = useMemo(
-    () => recommendRecovery(currentMetrics, selectedRide.movingTimeSeconds, 164, recovery),
-    [currentMetrics, recovery, selectedRide.movingTimeSeconds],
+    () => recommendRecovery(currentMetrics, selectedRide.movingTimeSeconds, recent72HourLoad, recovery),
+    [currentMetrics, recent72HourLoad, recovery, selectedRide.movingTimeSeconds],
   );
 
   const filteredRides = rides.filter((ride) => {
@@ -254,6 +437,9 @@ export default function CyclingDashboard() {
     setImportError("");
     setDetected(null);
     setImportName(file.name);
+    setPendingFile(file);
+    setRideType("Free ride");
+    setRouteName(file.name.replace(/\.(fit|tcx|gpx)$/i, "").replace(/[_-]+/g, " "));
     setIsReading(true);
     try {
       setDetected(await parseActivityFile(file));
@@ -277,6 +463,9 @@ export default function CyclingDashboard() {
   const loadDemoImport = () => {
     setImportName("morning-zone-2.tcx");
     setImportError("");
+    setPendingFile(null);
+    setRideType("Zone 2 benchmark");
+    setRouteName("Watopia · Flat Route");
     setDetected({
       name: "Morning Zone 2",
       startedAt: "2026-08-06T13:10:00.000Z",
@@ -291,13 +480,33 @@ export default function CyclingDashboard() {
       maximumPower: 148,
       normalizedPower: 114,
       sourceTrainingLoad: 48,
+      aerobicDecouplingPercent: 2.4,
+      variabilityIndex: 1.02,
+      cadenceStddev: 4.1,
+      cadenceTargetPercent: 64,
+      cadenceAcceptablePercent: 91,
+      cadenceLowPercent: 2,
+      cadenceHighPercent: 1,
+      first15HeartRate: 128,
+      final15HeartRate: 135,
       sampleCount: 3672,
       warnings: [],
     });
   };
 
-  const addDetectedRide = () => {
+  const resetImport = () => {
+    setDetected(null);
+    setImportName("");
+    setImportError("");
+    setPendingFile(null);
+    setRouteName("");
+    if (fileInput.current) fileInput.current.value = "";
+  };
+
+  const addDetectedRide = async () => {
     if (!detected) return;
+    setImportError("");
+    setIsSaving(true);
     const movingTimeSeconds = Math.round(detected.movingTimeSeconds ?? 0);
     const derived = deriveRideMetrics({
       movingTimeSeconds,
@@ -310,11 +519,11 @@ export default function CyclingDashboard() {
     const ride: Ride = {
       id: `import-${Date.now()}`,
       name: detected.name,
-      route: "Imported activity · Review complete",
+      route: routeName.trim() || "Imported activity",
       date: date.toISOString().slice(0, 10),
       dateLabel: date.toLocaleDateString("en-US", { month: "short", day: "numeric" }),
       dayLabel: date.toLocaleDateString("en-US", { weekday: "short" }).toUpperCase(),
-      type: "Zone 2",
+      type: rideType,
       source: "Upload",
       indoor: false,
       distanceMiles: miles(detected.distanceMeters),
@@ -330,18 +539,92 @@ export default function CyclingDashboard() {
       trainingLoad: Math.round(detected.sourceTrainingLoad ?? derived.trainingLoad ?? 0),
       intensityFactor: derived.intensityFactor ?? 0,
       powerHeartRateRatio: derived.powerHeartRateRatio ?? 0,
-      decoupling: null,
-      variabilityIndex: null,
+      decoupling: detected.aerobicDecouplingPercent,
+      variabilityIndex: detected.variabilityIndex,
+      cadenceStddev: detected.cadenceStddev,
+      cadenceTargetPercent: detected.cadenceTargetPercent,
+      cadenceAcceptablePercent: detected.cadenceAcceptablePercent,
+      cadenceLowPercent: detected.cadenceLowPercent,
+      cadenceHighPercent: detected.cadenceHighPercent,
+      first15HeartRate: detected.first15HeartRate,
+      final15HeartRate: detected.final15HeartRate,
       note: detected.normalizedPower
         ? "Imported from original activity data with recorded normalized power."
         : "Imported from activity data. Intensity and load are explicitly estimated from average power.",
     };
-    setRides((current) => [ride, ...current]);
-    setSelectedRideId(ride.id);
-    setView("overview");
-    setDetected(null);
-    setImportName("");
+    try {
+      if (!pendingFile) {
+        setRides((current) => [ride, ...current]);
+        setSelectedRideId(ride.id);
+        setDataMode("demo");
+        setSyncNote("Demo preview · Not saved");
+      } else {
+        const formData = new FormData();
+        formData.set("file", pendingFile);
+        const uploadResponse = await fetch("/api/import", { method: "POST", body: formData });
+        const upload = await uploadResponse.json() as { sourceFile?: { id: string }; error?: string };
+        if (!uploadResponse.ok || !upload.sourceFile?.id) {
+          throw new Error(upload.error ?? "The original activity file could not be saved.");
+        }
+
+        const extension = pendingFile.name.split(".").at(-1)?.toLowerCase();
+        const saveResponse = await fetch("/api/rides", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            sourceFileId: upload.sourceFile.id,
+            source: extension === "fit" || extension === "tcx" || extension === "gpx" ? extension : "manual",
+            name: detected.name,
+            startedAt: detected.startedAt ?? new Date().toISOString(),
+            rideType,
+            routeName: routeName.trim() || null,
+            distanceM: detected.distanceMeters,
+            movingTimeS: movingTimeSeconds,
+            elevationGainM: detected.elevationGainMeters,
+            averageHeartRateBpm: detected.averageHeartRate,
+            maximumHeartRateBpm: detected.maximumHeartRate,
+            averageCadenceRpm: detected.averageCadence,
+            maximumCadenceRpm: detected.maximumCadence,
+            averagePowerWatts: detected.averagePower,
+            maximumPowerWatts: detected.maximumPower,
+            normalizedPowerWatts: detected.normalizedPower,
+            ftpAtRideWatts: 165,
+            sourceTrainingLoad: detected.sourceTrainingLoad,
+            aerobicDecouplingPercent: detected.aerobicDecouplingPercent,
+            variabilityIndex: detected.variabilityIndex,
+            cadenceStddev: detected.cadenceStddev,
+            cadenceTargetPercent: detected.cadenceTargetPercent,
+            cadenceAcceptablePercent: detected.cadenceAcceptablePercent,
+            cadenceLowPercent: detected.cadenceLowPercent,
+            cadenceHighPercent: detected.cadenceHighPercent,
+            first15HeartRateBpm: detected.first15HeartRate,
+            final15HeartRateBpm: detected.final15HeartRate,
+          }),
+        });
+        const saved = await saveResponse.json() as { duplicate?: boolean; error?: string };
+        if (!saveResponse.ok) throw new Error(saved.error ?? "The ride could not be added to your log.");
+
+        const savedRides = await fetchSavedRides();
+        if (!savedRides.length) throw new Error("The ride was saved, but the refreshed log was empty.");
+        setRides(savedRides);
+        setSelectedRideId(savedRides[0].id);
+        setDataMode("saved");
+        setSyncNote(saved.duplicate ? "Already imported · Duplicate skipped" : "Saved just now · Private");
+      }
+      setView("overview");
+      resetImport();
+    } catch (error) {
+      setImportError(error instanceof Error ? error.message : "The ride could not be saved.");
+    } finally {
+      setIsSaving(false);
+    }
   };
+
+  const syncLabel = dataMode === "loading"
+    ? "Loading saved rides…"
+    : dataMode === "saved"
+      ? syncNote || "Saved rides · Private"
+      : syncNote || (dataMode === "unavailable" ? "Demo data · Save unavailable" : "Demo data · Not saved");
 
   return (
     <main className="app-shell">
@@ -372,14 +655,21 @@ export default function CyclingDashboard() {
       <section className="content-shell">
         <header className="topbar">
           <div>
-            <span className="eyebrow">{view === "overview" ? "Thursday · August 6" : "Phase 1 workspace"}</span>
+            <span className="eyebrow">{view === "overview" ? "Thursday · August 6" : "Phase 2 workspace"}</span>
             <h1>{view === "overview" ? "Ride with the trend." : navItems.find((item) => item.id === view)?.label}</h1>
           </div>
           <div className="top-actions">
-            <span className="sync-status"><i /> Demo data · Local</span>
+            <span className={`sync-status mode-${dataMode}`}><i /> {syncLabel}</span>
             <button className="primary-button" onClick={() => setView("import")}>Import ride <span>+</span></button>
           </div>
         </header>
+
+        {dataMode !== "saved" && (
+          <div className={`data-banner mode-${dataMode}`} role="status">
+            <strong>{dataMode === "loading" ? "Checking your private ride log…" : "You’re viewing fictional demo rides."}</strong>
+            <span>{dataMode === "loading" ? "Saved activities will appear automatically." : "Import a FIT, TCX, or GPX file to replace every demo with your own saved data."}</span>
+          </div>
+        )}
 
         {view === "overview" && (
           <Overview
@@ -387,14 +677,18 @@ export default function CyclingDashboard() {
             recommendation={recommendation}
             recovery={recovery}
             setRecovery={setRecovery}
+            recoverySaveState={recoverySaveState}
+            saveRecovery={saveRecovery}
             rides={rides}
             openRide={openRide}
             setView={setView}
+            isDemo={dataMode !== "saved"}
           />
         )}
         {view === "rides" && (
           <RideLog
             rides={filteredRides}
+            allRides={rides}
             filter={rideFilter}
             setFilter={setRideFilter}
             search={search}
@@ -402,12 +696,19 @@ export default function CyclingDashboard() {
             openRide={openRide}
           />
         )}
+        {view === "analysis" && <PhaseTwo rides={rides} />}
         {view === "import" && (
           <ImportRide
             detected={detected}
             filename={importName}
             error={importError}
             isReading={isReading}
+            isSaving={isSaving}
+            hasFile={pendingFile !== null}
+            rideType={rideType}
+            setRideType={setRideType}
+            routeName={routeName}
+            setRouteName={setRouteName}
             isDragging={isDragging}
             setIsDragging={setIsDragging}
             fileInput={fileInput}
@@ -415,6 +716,7 @@ export default function CyclingDashboard() {
             onDrop={handleDrop}
             onDemo={loadDemoImport}
             onAdd={addDetectedRide}
+            onReset={resetImport}
           />
         )}
         {view === "settings" && <Methodology />}
@@ -423,15 +725,65 @@ export default function CyclingDashboard() {
   );
 }
 
-function Overview({ selectedRide, recommendation, recovery, setRecovery, rides, openRide, setView }: {
+function Overview({ selectedRide, recommendation, recovery, setRecovery, recoverySaveState, saveRecovery, rides, openRide, setView, isDemo }: {
   selectedRide: Ride;
   recommendation: ReturnType<typeof recommendRecovery>;
   recovery: SubjectiveRecovery;
   setRecovery: (value: SubjectiveRecovery) => void;
+  recoverySaveState: "idle" | "saving" | "saved" | "error";
+  saveRecovery: () => Promise<void>;
   rides: Ride[];
   openRide: (ride: Ride) => void;
   setView: (view: View) => void;
+  isDemo: boolean;
 }) {
+  const dayMs = 24 * 60 * 60 * 1000;
+  const rideTimestamps = rides.map((ride) => Date.parse(ride.date)).filter(Number.isFinite);
+  const anchorMs = rideTimestamps.length ? Math.max(...rideTimestamps) : 0;
+  const ridesInWindow = (startMs: number, endMs: number) => rides.filter((ride) => {
+    const timestamp = Date.parse(ride.date);
+    return Number.isFinite(timestamp) && timestamp > startMs && timestamp <= endMs;
+  });
+  const currentWeekRides = ridesInWindow(anchorMs - (7 * dayMs), anchorMs + dayMs);
+  const priorWeekRides = ridesInWindow(anchorMs - (14 * dayMs), anchorMs - (7 * dayMs));
+  const sevenDayLoad = Math.round(currentWeekRides.reduce((sum, ride) => sum + ride.trainingLoad, 0));
+  const priorWeekLoad = Math.round(priorWeekRides.reduce((sum, ride) => sum + ride.trainingLoad, 0));
+  const loadDelta = priorWeekLoad ? Math.round(((sevenDayLoad - priorWeekLoad) / priorWeekLoad) * 100) : null;
+  const trainingSeconds = currentWeekRides.reduce((sum, ride) => sum + ride.movingTimeSeconds, 0);
+  const trainingLabel = `${Math.floor(trainingSeconds / 3600)}h ${Math.round((trainingSeconds % 3600) / 60).toString().padStart(2, "0")}`;
+  const efficiencyRides = rides.filter((ride) => ride.powerHeartRateRatio > 0).slice(0, 7).reverse();
+  const efficiencyValues = efficiencyRides.map((ride) => ride.powerHeartRateRatio);
+  const efficiencyMin = efficiencyValues.length ? Math.min(...efficiencyValues) : 0;
+  const efficiencyMax = efficiencyValues.length ? Math.max(...efficiencyValues) : 1;
+  const efficiencyRange = Math.max(0.08, efficiencyMax - efficiencyMin);
+  const efficiencyDelta = efficiencyValues.length > 1
+    ? ((efficiencyValues.at(-1)! - efficiencyValues[0]) / efficiencyValues[0]) * 100
+    : null;
+  const currentEfficiency = efficiencyValues.at(-1) ?? 0;
+  const weeklyLoadValues = Array.from({ length: 7 }, (_, index) => {
+    const weeksAgo = 6 - index;
+    const end = anchorMs - (weeksAgo * 7 * dayMs) + dayMs;
+    const start = end - (7 * dayMs);
+    return Math.round(ridesInWindow(start, end).reduce((sum, ride) => sum + ride.trainingLoad, 0));
+  });
+  const loadScale = Math.max(100, ...weeklyLoadValues);
+  const twentyEightDayAverage = Math.round(weeklyLoadValues.slice(-4).reduce((sum, load) => sum + load, 0) / 4);
+  const latestHardRide = rides
+    .filter((ride) => ride.type === "Tempo" || ride.type === "Threshold")
+    .sort((a, b) => Date.parse(b.date) - Date.parse(a.date))[0];
+  const hoursSinceLastHardRide = latestHardRide ? Math.max(0, (anchorMs - Date.parse(latestHardRide.date)) / (60 * 60 * 1000)) : 72;
+  const readiness = calculateReadiness({
+    hoursSinceLastHardRide,
+    acuteChronicRatio: twentyEightDayAverage > 0 ? sevenDayLoad / twentyEightDayAverage : null,
+    subjective: recovery,
+  });
+  const selectedPowerData = isDemo ? powerDuration : [
+    { label: "Peak", watts: selectedRide.maximumPower, best: selectedRide.maximumPower },
+    { label: "Norm", watts: selectedRide.normalizedPower ?? 0, best: selectedRide.normalizedPower ?? 0 },
+    { label: "Avg", watts: selectedRide.averagePower, best: selectedRide.averagePower },
+  ];
+  const powerScale = Math.max(100, ...selectedPowerData.map((entry) => entry.watts));
+
   return (
     <div className="dashboard-grid">
       <section className="recovery-hero panel-dark">
@@ -450,35 +802,38 @@ function Overview({ selectedRide, recommendation, recovery, setRecovery, rides, 
       </section>
 
       <section className="checkin-card panel">
-        <div className="section-heading compact"><div><span className="eyebrow">Morning check-in</span><h2>How are the legs?</h2></div><span className="saved-label">Saved</span></div>
+        <div className="section-heading compact"><div><span className="eyebrow">Morning check-in</span><h2>How are the legs?</h2></div><span className={`readiness-score tone-${readiness.tone}`}>{readiness.score}</span></div>
         <div className="segmented-control" role="group" aria-label="Leg freshness">
           {(["fresh", "normal", "heavy", "dead"] as const).map((value) => <button key={value} className={recovery.legFreshness === value ? "selected" : ""} onClick={() => setRecovery({ ...recovery, legFreshness: value })}>{value}</button>)}
         </div>
-        <label className="range-row"><span><strong>Sleep</strong><small>{recovery.sleepQuality}/5</small></span><input type="range" min="1" max="5" value={recovery.sleepQuality} onChange={(event) => setRecovery({ ...recovery, sleepQuality: Number(event.target.value) })} /></label>
-        <label className="range-row"><span><strong>Knee pain</strong><small>{recovery.kneePain}/10</small></span><input type="range" min="0" max="10" value={recovery.kneePain} onChange={(event) => setRecovery({ ...recovery, kneePain: Number(event.target.value) })} /></label>
+        <div className="range-row"><span><strong>Sleep</strong><small>{recovery.sleepQuality}/5</small></span><input aria-label="Sleep quality" type="range" min="1" max="5" value={recovery.sleepQuality} onChange={(event) => setRecovery({ ...recovery, sleepQuality: Number(event.target.value) })} /></div>
+        <div className="range-row"><span><strong>Motivation</strong><small>{recovery.motivation}/5</small></span><input aria-label="Motivation" type="range" min="1" max="5" value={recovery.motivation} onChange={(event) => setRecovery({ ...recovery, motivation: Number(event.target.value) })} /></div>
+        <div className="range-row"><span><strong>Soreness</strong><small>{recovery.soreness}/10</small></span><input aria-label="General soreness" type="range" min="0" max="10" value={recovery.soreness} onChange={(event) => setRecovery({ ...recovery, soreness: Number(event.target.value) })} /></div>
+        <div className="range-row"><span><strong>Knee pain</strong><small>{recovery.kneePain}/10</small></span><input aria-label="Knee pain" type="range" min="0" max="10" value={recovery.kneePain} onChange={(event) => setRecovery({ ...recovery, kneePain: Number(event.target.value) })} /></div>
+        <div className="readiness-summary"><div><strong>{readiness.label}</strong><span>{recoverySaveState === "saved" ? "Private check-in saved" : recoverySaveState === "error" ? "Save failed · try again" : "Pain overrides the score"}</span></div><button className="text-button" onClick={() => void saveRecovery()} disabled={recoverySaveState === "saving"}>{recoverySaveState === "saving" ? "Saving…" : "Save check-in"}</button></div>
       </section>
 
       <section className="metric-ribbon">
-        <MetricCard label="Current FTP" value="165" unit="W" change="+30 W since May" tone="lime" />
-        <MetricCard label="7-day load" value="164" unit="pts" change="↓ 33% vs prior week" tone="cream" />
-        <MetricCard label="Aerobic efficiency" value="0.91" unit="W/bpm" change="↑ 7.8% in 30 days" tone="sky" />
-        <MetricCard label="Training time" value="4h 42" unit="this week" change="3 rides completed" tone="coral" />
+        <MetricCard label="Current FTP" value="165" unit="W" change="Used for load estimates" tone="lime" />
+        <MetricCard label="7-day load" value={String(sevenDayLoad)} unit="pts" change={loadDelta === null ? "First full week in view" : `${loadDelta >= 0 ? "↑" : "↓"} ${Math.abs(loadDelta)}% vs prior week`} tone="cream" />
+        <MetricCard label="Aerobic efficiency" value={currentEfficiency ? currentEfficiency.toFixed(2) : "—"} unit="W/bpm" change={efficiencyDelta === null ? "Needs two power + HR rides" : `${efficiencyDelta >= 0 ? "↑" : "↓"} ${Math.abs(efficiencyDelta).toFixed(1)}% across visible rides`} tone="sky" />
+        <MetricCard label="Training time" value={trainingLabel} unit="last 7 days" change={`${currentWeekRides.length} ${currentWeekRides.length === 1 ? "ride" : "rides"} completed`} tone="coral" />
       </section>
 
       <section className="trend-card panel span-two">
-        <div className="section-heading"><div><span className="eyebrow">Aerobic efficiency</span><h2>Power / heart-rate trend</h2></div><span className="delta-positive">+7.8%</span></div>
-        <div className="efficiency-chart" aria-label="Aerobic efficiency increased from 0.76 to 0.91 watts per bpm">
-          {efficiencyTrend.map((value, index) => <div className="trend-column" key={`${value}-${index}`}><span className="trend-value">{value.toFixed(2)}</span><div className="trend-track"><i style={{ height: `${((value - 0.68) / 0.26) * 100}%` }} /></div><small>{["May 20", "Jun 3", "Jun 17", "Jul 1", "Jul 15", "Jul 29", "Aug 2"][index]}</small></div>)}
-        </div>
+        <div className="section-heading"><div><span className="eyebrow">Aerobic efficiency</span><h2>Power / heart-rate trend</h2></div>{efficiencyDelta !== null && <span className="delta-positive">{efficiencyDelta >= 0 ? "+" : ""}{efficiencyDelta.toFixed(1)}%</span>}</div>
+        {efficiencyRides.length ? <div className="efficiency-chart" aria-label="Power to heart-rate ratio across recent rides">
+          {efficiencyRides.map((ride) => <div className="trend-column" key={ride.id}><span className="trend-value">{ride.powerHeartRateRatio.toFixed(2)}</span><div className="trend-track"><i style={{ height: `${Math.max(12, ((ride.powerHeartRateRatio - efficiencyMin + 0.02) / (efficiencyRange + 0.02)) * 100)}%` }} /></div><small>{ride.dateLabel}</small></div>)}
+        </div> : <div className="chart-empty">Power and heart-rate data from the same ride are needed for this trend.</div>}
         <p className="chart-note"><i /> Best compared across steady rides in similar conditions. Temperature, hydration, fatigue, and caffeine can move this ratio.</p>
       </section>
 
       <section className="load-card panel">
         <div className="section-heading"><div><span className="eyebrow">Load balance</span><h2>Seven weeks</h2></div><span className="small-badge">On track</span></div>
         <div className="load-chart" aria-label="Weekly training load bar chart">
-          {weeklyLoads.map((value, index) => <div key={`${value}-${index}`}><i style={{ height: `${(value / 260) * 100}%` }} className={index === weeklyLoads.length - 1 ? "current" : ""} /><small>{value}</small></div>)}
+          {weeklyLoadValues.map((value, index) => <div key={`${value}-${index}`}><i style={{ height: `${Math.max(2, (value / loadScale) * 100)}%` }} className={index === weeklyLoadValues.length - 1 ? "current" : ""} /><small>{value}</small></div>)}
         </div>
-        <div className="load-footer"><span>Acute load <strong>164</strong></span><span>28-day avg <strong>201</strong></span></div>
+        <div className="load-footer"><span>Acute load <strong>{sevenDayLoad}</strong></span><span>28-day avg <strong>{twentyEightDayAverage}</strong></span></div>
       </section>
 
       <section className="ride-detail panel span-two">
@@ -500,8 +855,8 @@ function Overview({ selectedRide, recommendation, recovery, setRecovery, rides, 
       </section>
 
       <section className="power-card panel">
-        <div className="section-heading"><div><span className="eyebrow">Power duration</span><h2>Current curve</h2></div><button className="text-button" onClick={() => setView("rides")}>All rides →</button></div>
-        <div className="power-bars">{powerDuration.map((duration) => <div key={duration.label} className="power-row"><span>{duration.label}</span><div><i style={{ width: `${(duration.watts / 500) * 100}%` }} /></div><strong>{duration.watts} W</strong><small>best {duration.best}</small></div>)}</div>
+        <div className="section-heading"><div><span className="eyebrow">Recorded power</span><h2>{isDemo ? "Demo curve" : "Selected ride"}</h2></div><button className="text-button" onClick={() => setView("rides")}>All rides →</button></div>
+        <div className="power-bars">{selectedPowerData.map((duration) => <div key={duration.label} className="power-row"><span>{duration.label}</span><div><i style={{ width: `${(duration.watts / powerScale) * 100}%` }} /></div><strong>{duration.watts || "—"} {duration.watts ? "W" : ""}</strong><small>{isDemo ? `best ${duration.best}` : "recorded"}</small></div>)}</div>
       </section>
 
       <section className="recent-rides panel full-width">
@@ -524,12 +879,198 @@ function RideRow({ ride, onClick }: { ride: Ride; onClick: () => void }) {
   return <button className="ride-row" onClick={onClick}><span className="ride-date"><strong>{ride.dayLabel}</strong><small>{ride.dateLabel}</small></span><span className="ride-main"><strong>{ride.name}</strong><small>{ride.route}</small></span><span className={`ride-tag ${ride.type.toLowerCase().replace(" ", "-")}`}>{ride.type}</span><span className="ride-number"><strong>{ride.distanceMiles.toFixed(1)}</strong><small>mi</small></span><span className="ride-number"><strong>{ride.averagePower}</strong><small>W avg</small></span><span className="ride-number"><strong>{ride.trainingLoad}</strong><small>load</small></span><span className="row-arrow">→</span></button>;
 }
 
-function RideLog({ rides, filter, setFilter, search, setSearch, openRide }: { rides: Ride[]; filter: string; setFilter: (value: string) => void; search: string; setSearch: (value: string) => void; openRide: (ride: Ride) => void }) {
-  return <div className="page-stack"><section className="log-summary panel-dark"><div><span className="eyebrow light">All recorded rides</span><strong>1,284.6</strong><small>miles since May</small></div><div><strong>68</strong><small>rides</small></div><div><strong>46h</strong><small>moving time</small></div><div><strong>41,280</strong><small>feet climbed</small></div></section><section className="panel ride-log-panel"><div className="filter-bar"><label className="search-box"><span>⌕</span><input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search rides or routes" /></label><div className="filter-buttons" role="group" aria-label="Filter ride type">{["All rides", "Zone 2", "Tempo", "Threshold", "Recovery"].map((value) => <button key={value} className={filter === value ? "selected" : ""} onClick={() => setFilter(value)}>{value}</button>)}</div></div><div className="table-header"><span>Date</span><span>Ride</span><span>Type</span><span>Distance</span><span>Power</span><span>Load</span><span /></div><div className="ride-list full-list">{rides.map((ride) => <RideRow key={ride.id} ride={ride} onClick={() => openRide(ride)} />)}{!rides.length && <div className="empty-state"><strong>No rides match this view.</strong><span>Try a different ride type or search term.</span></div>}</div></section></div>;
+function RideLog({ rides, allRides, filter, setFilter, search, setSearch, openRide }: { rides: Ride[]; allRides: Ride[]; filter: string; setFilter: (value: string) => void; search: string; setSearch: (value: string) => void; openRide: (ride: Ride) => void }) {
+  const distance = allRides.reduce((sum, ride) => sum + ride.distanceMiles, 0);
+  const movingSeconds = allRides.reduce((sum, ride) => sum + ride.movingTimeSeconds, 0);
+  const elevation = allRides.reduce((sum, ride) => sum + ride.elevationFeet, 0);
+  const timeLabel = movingSeconds >= 3600 ? `${Math.round(movingSeconds / 3600)}h` : `${Math.round(movingSeconds / 60)}m`;
+
+  return (
+    <div className="page-stack">
+      <section className="log-summary panel-dark">
+        <div><span className="eyebrow light">All recorded rides</span><strong>{distance.toLocaleString(undefined, { maximumFractionDigits: 1 })}</strong><small>miles in this log</small></div>
+        <div><strong>{allRides.length}</strong><small>rides</small></div>
+        <div><strong>{timeLabel}</strong><small>moving time</small></div>
+        <div><strong>{elevation.toLocaleString()}</strong><small>feet climbed</small></div>
+      </section>
+      <section className="panel ride-log-panel">
+        <div className="filter-bar">
+          <label className="search-box"><span>⌕</span><input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search rides or routes" /></label>
+          <div className="filter-buttons" role="group" aria-label="Filter ride type">{["All rides", "Zone 2", "Zone 2 benchmark", "Tempo", "Threshold", "Recovery", "Free ride"].map((value) => <button key={value} className={filter === value ? "selected" : ""} onClick={() => setFilter(value)}>{value}</button>)}</div>
+        </div>
+        <div className="table-header"><span>Date</span><span>Ride</span><span>Type</span><span>Distance</span><span>Power</span><span>Load</span><span /></div>
+        <div className="ride-list full-list">{rides.map((ride) => <RideRow key={ride.id} ride={ride} onClick={() => openRide(ride)} />)}{!rides.length && <div className="empty-state"><strong>No rides match this view.</strong><span>Try a different ride type or search term.</span></div>}</div>
+      </section>
+    </div>
+  );
 }
 
-function ImportRide({ detected, filename, error, isReading, isDragging, setIsDragging, fileInput, onFileChange, onDrop, onDemo, onAdd }: { detected: DetectedActivity | null; filename: string; error: string; isReading: boolean; isDragging: boolean; setIsDragging: (value: boolean) => void; fileInput: React.RefObject<HTMLInputElement | null>; onFileChange: (event: ChangeEvent<HTMLInputElement>) => void; onDrop: (event: DragEvent<HTMLDivElement>) => void; onDemo: () => void; onAdd: () => void }) {
-  return <div className="import-layout"><section className="import-intro"><span className="eyebrow">Original files first</span><h2>Bring the ride home.</h2><p>Import the richest recording available. The original file stays unchanged; calculations are stored separately with their source and algorithm version.</p><ol><li><span>01</span><div><strong>Upload</strong><small>FIT, TCX, or GPX activity file</small></div></li><li><span>02</span><div><strong>Review</strong><small>Confirm detected and missing values</small></div></li><li><span>03</span><div><strong>Calculate</strong><small>Generate transparent ride metrics</small></div></li></ol></section><section className="import-workspace panel">{!detected ? <><div className={`dropzone ${isDragging ? "dragging" : ""}`} onDragOver={(event) => { event.preventDefault(); setIsDragging(true); }} onDragLeave={() => setIsDragging(false)} onDrop={onDrop}><input ref={fileInput} type="file" accept=".fit,.tcx,.gpx" onChange={onFileChange} hidden /><div className="file-glyph">↑</div><h3>{isReading ? "Reading the activity…" : "Drop a ride file here"}</h3><p>Original FIT preferred · TCX and GPX accepted</p><button className="secondary-button" onClick={() => fileInput.current?.click()} disabled={isReading}>Choose a file</button></div>{filename && <div className="file-message"><strong>{filename}</strong><span>{error || "Ready for review"}</span></div>}<div className="demo-callout"><div><strong>No export nearby?</strong><span>Open a realistic detected-ride review.</span></div><button className="text-button" onClick={onDemo}>Use demo file →</button></div></> : <div className="review-panel"><div className="review-heading"><div><span className="eyebrow">Detected ride · {detected.sampleCount.toLocaleString()} samples</span><h2>{detected.name}</h2><p>{filename}</p></div><span className="small-badge">Review</span></div><div className="detected-grid"><ReviewField label="Start" value={detected.startedAt ? new Date(detected.startedAt).toLocaleString() : "Missing"} /><ReviewField label="Moving time" value={detected.movingTimeSeconds ? formatDuration(detected.movingTimeSeconds) : "Missing"} /><ReviewField label="Distance" value={detected.distanceMeters ? `${miles(detected.distanceMeters)} mi` : "Missing"} /><ReviewField label="Elevation" value={detected.elevationGainMeters ? `${feet(detected.elevationGainMeters)} ft` : "Missing"} /><ReviewField label="Average power" value={detected.averagePower ? `${Math.round(detected.averagePower)} W` : "Missing"} /><ReviewField label="Average HR" value={detected.averageHeartRate ? `${Math.round(detected.averageHeartRate)} bpm` : "Missing"} /><ReviewField label="Cadence" value={detected.averageCadence ? `${Math.round(detected.averageCadence)} rpm` : "Missing"} /><ReviewField label="FTP at ride" value="165 W" /></div>{detected.warnings.length > 0 && <div className="warning-box"><strong>Check before saving</strong>{detected.warnings.map((warning) => <span key={warning}>· {warning}</span>)}</div>}<div className="review-actions"><button className="ghost-button" onClick={() => window.location.reload()}>Start over</button><button className="primary-button wide" onClick={onAdd}>Add to ride log <span>→</span></button></div></div>}</section></div>;
+function PhaseTwo({ rides }: { rides: Ride[] }) {
+  const dayMs = 24 * 60 * 60 * 1000;
+  const timestamps = rides.map((ride) => Date.parse(ride.date)).filter(Number.isFinite);
+  const anchorMs = timestamps.length ? Math.max(...timestamps) : 0;
+  const withinDays = (days: number) => rides.filter((ride) => {
+    const timestamp = Date.parse(ride.date);
+    return Number.isFinite(timestamp) && timestamp > anchorMs - (days * dayMs) && timestamp <= anchorMs + dayMs;
+  });
+  const acuteRides = withinDays(7);
+  const load7 = acuteRides.reduce((sum, ride) => sum + ride.trainingLoad, 0);
+  const load28 = withinDays(28).reduce((sum, ride) => sum + ride.trainingLoad, 0) / 4;
+  const load42 = withinDays(42).reduce((sum, ride) => sum + ride.trainingLoad, 0) / 6;
+  const acuteChronicRatio = load28 > 0 ? load7 / load28 : null;
+  const groupedRoutes = Array.from(rides.reduce((groups, ride) => {
+    const route = ride.route.trim();
+    if (!route || /^(fit|tcx|gpx) upload$/i.test(route)) return groups;
+    const key = route.toLowerCase();
+    const group = groups.get(key) ?? [];
+    group.push(ride);
+    groups.set(key, group);
+    return groups;
+  }, new Map<string, Ride[]>()).values()).filter((group) => group.length >= 2);
+  const benchmarkRides = rides
+    .filter((ride) => ride.type === "Zone 2 benchmark")
+    .sort((a, b) => Date.parse(b.date) - Date.parse(a.date));
+  const latestBenchmark = benchmarkRides[0];
+  const previousBenchmark = benchmarkRides[1];
+  const volumeHours = acuteRides.reduce((sum, ride) => sum + ride.movingTimeSeconds, 0) / 3600;
+  const volumeDistance = acuteRides.reduce((sum, ride) => sum + ride.distanceMiles, 0);
+  const volumeElevation = acuteRides.reduce((sum, ride) => sum + ride.elevationFeet, 0);
+  const loadStatus = acuteChronicRatio !== null && acuteChronicRatio > 1.5 ? "Review recent spike" : "Building steadily";
+  const driftLabel = latestBenchmark?.decoupling === null || latestBenchmark?.decoupling === undefined
+    ? "Not available"
+    : latestBenchmark.decoupling < 3 ? "Excellent durability" : latestBenchmark.decoupling <= 5 ? "Good durability" : latestBenchmark.decoupling <= 8 ? "Moderate drift" : "Significant drift";
+  const percentChange = (current: number, previous: number, invert = false) => {
+    if (!previous) return "—";
+    const delta = ((current - previous) / previous) * 100 * (invert ? -1 : 1);
+    return `${delta >= 0 ? "+" : ""}${delta.toFixed(1)}%`;
+  };
+
+  return (
+    <div className="phase-two-layout">
+      <section className="phase-two-hero panel-dark">
+        <div><span className="eyebrow light">Phase 2 · durability and readiness</span><h2>Compare the work.<br />Understand the cost.</h2></div>
+        <p>Repeated routes, controlled Zone 2 benchmarks, cadence stability, and workload context now use the rides in your log. Missing stream data stays visibly unavailable.</p>
+      </section>
+
+      <section className="phase-kpis">
+        <MetricCard label="Acute load" value={Math.round(load7).toString()} unit="7 days" change={`${acuteRides.length} recent rides`} tone="lime" />
+        <MetricCard label="Chronic load" value={Math.round(load28).toString()} unit="28d weekly avg" change={`${Math.round(load42)} pts · 42d avg`} tone="cream" />
+        <MetricCard label="Load ratio" value={acuteChronicRatio?.toFixed(2) ?? "—"} unit="acute / chronic" change={loadStatus} tone="coral" />
+        <MetricCard label="Benchmarks" value={benchmarkRides.length.toString()} unit="Zone 2 rides" change={`${groupedRoutes.length} repeated routes`} tone="sky" />
+      </section>
+
+      <section className="route-benchmarks panel">
+        <div className="section-heading"><div><span className="eyebrow">Same-route comparison</span><h2>Like for like</h2></div><span className="small-badge">{groupedRoutes.length} matched</span></div>
+        {groupedRoutes.length ? <div className="route-comparison-list">{groupedRoutes.slice(0, 3).map((group) => {
+          const sorted = [...group].sort((a, b) => Date.parse(a.date) - Date.parse(b.date));
+          const first = sorted[0];
+          const latest = sorted.at(-1)!;
+          return <article className="route-comparison" key={first.route.toLowerCase()}><div><strong>{first.route}</strong><span>{first.dateLabel} → {latest.dateLabel} · {group.length} efforts</span></div><dl><div><dt>Time</dt><dd>{percentChange(latest.movingTimeSeconds, first.movingTimeSeconds, true)}</dd></div><div><dt>Power</dt><dd>{percentChange(latest.averagePower, first.averagePower)}</dd></div><div><dt>Heart rate</dt><dd>{percentChange(latest.averageHeartRate, first.averageHeartRate, true)}</dd></div><div><dt>W / bpm</dt><dd>{percentChange(latest.powerHeartRateRatio, first.powerHeartRateRatio)}</dd></div></dl></article>;
+        })}</div> : <div className="analysis-empty"><strong>No repeated route names yet.</strong><span>Use the same route/course name when importing repeat attempts.</span></div>}
+      </section>
+
+      <section className="benchmark-card panel">
+        <div className="section-heading"><div><span className="eyebrow">Zone 2 benchmark</span><h2>110 W · 60 minutes</h2></div><span className="small-badge">85–90 rpm</span></div>
+        {latestBenchmark ? <>
+          <div className="benchmark-score"><div><span>Latest efficiency</span><strong>{latestBenchmark.powerHeartRateRatio ? latestBenchmark.powerHeartRateRatio.toFixed(3) : "—"}</strong><small>W / bpm · {latestBenchmark.dateLabel}</small></div>{previousBenchmark && <div><span>vs previous</span><strong>{percentChange(latestBenchmark.powerHeartRateRatio, previousBenchmark.powerHeartRateRatio)}</strong><small>{previousBenchmark.dateLabel}</small></div>}</div>
+          <div className="benchmark-details"><Stat label="Average HR" value={latestBenchmark.averageHeartRate ? String(latestBenchmark.averageHeartRate) : "—"} unit="bpm" /><Stat label="First 15 min" value={latestBenchmark.first15HeartRate ? latestBenchmark.first15HeartRate.toFixed(0) : "—"} unit="bpm" /><Stat label="Final 15 min" value={latestBenchmark.final15HeartRate ? latestBenchmark.final15HeartRate.toFixed(0) : "—"} unit="bpm" /><Stat label="Cadence σ" value={latestBenchmark.cadenceStddev ? latestBenchmark.cadenceStddev.toFixed(1) : "—"} unit="rpm" /></div>
+        </> : <div className="analysis-empty"><strong>No benchmark ride classified yet.</strong><span>Classify a controlled ride as “Zone 2 benchmark” during import.</span></div>}
+      </section>
+
+      <section className="durability-card panel">
+        <div className="section-heading"><div><span className="eyebrow">Cardiac drift</span><h2>Aerobic durability</h2></div><span className="small-badge">steady rides only</span></div>
+        <div className="drift-result"><strong>{latestBenchmark?.decoupling === null || latestBenchmark?.decoupling === undefined ? "—" : `${latestBenchmark.decoupling.toFixed(1)}%`}</strong><span>{driftLabel}</span></div>
+        <p>Calculated from power / heart-rate efficiency in the first and second halves. Variable rides are intentionally excluded.</p>
+      </section>
+
+      <section className="cadence-card panel">
+        <div className="section-heading"><div><span className="eyebrow">Cadence distribution</span><h2>Pedaling stability</h2></div></div>
+        {latestBenchmark?.cadenceAcceptablePercent !== null && latestBenchmark?.cadenceAcceptablePercent !== undefined ? <div className="distribution-list">
+          <DistributionRow label="Target · 85–90" value={latestBenchmark.cadenceTargetPercent ?? 0} tone="target" />
+          <DistributionRow label="Endurance · 80–95" value={latestBenchmark.cadenceAcceptablePercent} tone="acceptable" />
+          <DistributionRow label="Grinding · below 75" value={latestBenchmark.cadenceLowPercent ?? 0} tone="low" />
+          <DistributionRow label="High · above 100" value={latestBenchmark.cadenceHighPercent ?? 0} tone="high" />
+        </div> : <div className="analysis-empty compact"><strong>Cadence stream needed.</strong><span>FIT and TCX files usually contain the richest samples.</span></div>}
+      </section>
+
+      <section className="workload-card panel full-width">
+        <div className="section-heading"><div><span className="eyebrow">Weekly volume</span><h2>Load with context</h2></div><span className={`load-flag ${acuteChronicRatio !== null && acuteChronicRatio > 1.5 ? "alert" : ""}`}>{loadStatus}</span></div>
+        <div className="workload-grid"><Stat label="Hours" value={volumeHours.toFixed(1)} /><Stat label="Distance" value={volumeDistance.toFixed(1)} unit="mi" /><Stat label="Elevation" value={Math.round(volumeElevation).toLocaleString()} unit="ft" /><Stat label="Training load" value={Math.round(load7).toString()} unit="pts" /><Stat label="Hard sessions" value={acuteRides.filter((ride) => ride.type === "Tempo" || ride.type === "Threshold").length.toString()} /></div>
+        <p className="chart-note"><i /> The ratio flags abrupt workload changes for review; it is not presented as an exact injury threshold.</p>
+      </section>
+    </div>
+  );
+}
+
+function DistributionRow({ label, value, tone }: { label: string; value: number; tone: string }) {
+  return <div className="distribution-row"><span>{label}</span><div><i className={tone} style={{ width: `${Math.max(1, Math.min(100, value))}%` }} /></div><strong>{value.toFixed(0)}%</strong></div>;
+}
+
+function ImportRide({ detected, filename, error, isReading, isSaving, isDragging, hasFile, rideType, setRideType, routeName, setRouteName, setIsDragging, fileInput, onFileChange, onDrop, onDemo, onAdd, onReset }: {
+  detected: DetectedActivity | null;
+  filename: string;
+  error: string;
+  isReading: boolean;
+  isSaving: boolean;
+  isDragging: boolean;
+  hasFile: boolean;
+  rideType: Ride["type"];
+  setRideType: (value: Ride["type"]) => void;
+  routeName: string;
+  setRouteName: (value: string) => void;
+  setIsDragging: (value: boolean) => void;
+  fileInput: React.RefObject<HTMLInputElement | null>;
+  onFileChange: (event: ChangeEvent<HTMLInputElement>) => void;
+  onDrop: (event: DragEvent<HTMLDivElement>) => void;
+  onDemo: () => void;
+  onAdd: () => Promise<void>;
+  onReset: () => void;
+}) {
+  return (
+    <div className="import-layout">
+      <section className="import-intro">
+        <span className="eyebrow">Original files first</span>
+        <h2>Bring the ride home.</h2>
+        <p>Import the richest recording available. Your original file and calculated ride are saved privately, and the dashboard reloads them on your next visit.</p>
+        <ol>
+          <li><span>01</span><div><strong>Upload</strong><small>FIT, TCX, or GPX activity file</small></div></li>
+          <li><span>02</span><div><strong>Review</strong><small>Confirm detected and missing values</small></div></li>
+          <li><span>03</span><div><strong>Save</strong><small>Store the original and transparent metrics</small></div></li>
+        </ol>
+      </section>
+      <section className="import-workspace panel">
+        {!detected ? <>
+          <div className={`dropzone ${isDragging ? "dragging" : ""}`} onDragOver={(event) => { event.preventDefault(); setIsDragging(true); }} onDragLeave={() => setIsDragging(false)} onDrop={onDrop}>
+            <input ref={fileInput} type="file" accept=".fit,.tcx,.gpx" onChange={onFileChange} hidden />
+            <div className="file-glyph">↑</div>
+            <h3>{isReading ? "Reading the activity…" : "Drop a ride file here"}</h3>
+            <p>Original FIT preferred · TCX and GPX accepted · 25 MB maximum</p>
+            <button className="secondary-button" onClick={() => fileInput.current?.click()} disabled={isReading}>Choose a file</button>
+          </div>
+          {filename && <div className={`file-message ${error ? "error" : ""}`}><strong>{filename}</strong><span>{error || "Ready for review"}</span></div>}
+          <div className="demo-callout"><div><strong>No export nearby?</strong><span>Preview the review flow. Demo rides are never saved.</span></div><button className="text-button" onClick={onDemo}>Use demo file →</button></div>
+        </> : (
+          <div className="review-panel">
+            <div className="review-heading"><div><span className="eyebrow">Detected ride · {detected.sampleCount.toLocaleString()} samples</span><h2>{detected.name}</h2><p>{filename}</p></div><span className="small-badge">{hasFile ? "Ready to save" : "Demo only"}</span></div>
+            <div className="detected-grid">
+              <ReviewField label="Start" value={detected.startedAt ? new Date(detected.startedAt).toLocaleString() : "Missing"} />
+              <ReviewField label="Moving time" value={detected.movingTimeSeconds ? formatDuration(detected.movingTimeSeconds) : "Missing"} />
+              <ReviewField label="Distance" value={detected.distanceMeters ? `${miles(detected.distanceMeters)} mi` : "Missing"} />
+              <ReviewField label="Elevation" value={detected.elevationGainMeters ? `${feet(detected.elevationGainMeters)} ft` : "Missing"} />
+              <ReviewField label="Average power" value={detected.averagePower ? `${Math.round(detected.averagePower)} W` : "Missing"} />
+              <ReviewField label="Average HR" value={detected.averageHeartRate ? `${Math.round(detected.averageHeartRate)} bpm` : "Missing"} />
+              <ReviewField label="Cadence" value={detected.averageCadence ? `${Math.round(detected.averageCadence)} rpm` : "Missing"} />
+              <label className="review-field"><span>Route / course</span><input value={routeName} onChange={(event) => setRouteName(event.target.value)} placeholder="Use the same name for repeated routes" /></label>
+              <label className="review-field"><span>Ride type</span><select value={rideType} onChange={(event) => setRideType(event.target.value as Ride["type"])}>{rideTypes.map((type) => <option key={type}>{type}</option>)}</select></label>
+            </div>
+            {detected.warnings.length > 0 && <div className="warning-box"><strong>Check before saving</strong>{detected.warnings.map((warning) => <span key={warning}>· {warning}</span>)}</div>}
+            {error && <div className="warning-box error"><strong>Could not save this ride</strong><span>{error}</span></div>}
+            <div className="review-actions"><button className="ghost-button" onClick={onReset} disabled={isSaving}>Start over</button><button className="primary-button wide" onClick={() => void onAdd()} disabled={isSaving}>{isSaving ? "Saving securely…" : hasFile ? "Save to ride log" : "Preview demo ride"} <span>→</span></button></div>
+          </div>
+        )}
+      </section>
+    </div>
+  );
 }
 
 function ReviewField({ label, value }: { label: string; value: string }) {
@@ -542,6 +1083,8 @@ function Methodology() {
     { id: "02", title: "Intensity factor", formula: "normalized power ÷ FTP", note: "Average power is used only as an explicitly marked estimate." },
     { id: "03", title: "Training load", formula: "hours × intensity² × 100", note: "A transparent TSS-like load, not a licensed physiological diagnosis." },
     { id: "04", title: "Aerobic decoupling", formula: "change in power / HR between halves", note: "Shown only when the ride is sufficiently steady and continuous." },
+    { id: "05", title: "Load ratio", formula: "7-day load ÷ 28-day weekly average", note: "A review signal for abrupt changes, never an exact injury threshold." },
+    { id: "06", title: "Readiness", formula: "recovery time + load + check-in", note: "A weighted, explainable score. Pain caps the result and overrides hard-ride advice." },
   ];
-  return <div className="method-layout"><section className="method-hero panel-dark"><span className="eyebrow light">Explainable by design</span><h2>No mystery score.</h2><p>Every recommendation is assembled from visible inputs, conservative rules, and versioned calculations. Pain always overrides the number.</p><div className="version-stamp"><span>Current ruleset</span><strong>phase1.1</strong></div></section><section className="method-list panel"><div className="section-heading"><div><span className="eyebrow">Metric dictionary</span><h2>What the app calculates</h2></div></div>{methods.map((method) => <article key={method.id} className="method-row"><span>{method.id}</span><div><strong>{method.title}</strong><code>{method.formula}</code><p>{method.note}</p></div></article>)}</section><section className="config-card panel"><div className="section-heading"><div><span className="eyebrow">Athlete configuration</span><h2>Current working values</h2></div></div><div className="config-grid"><Stat label="FTP" value="165" unit="W" /><Stat label="Zone 2 target" value="110" unit="W" /><Stat label="Cadence band" value="85–90" unit="rpm" /><Stat label="Next milestone" value="175" unit="W" /></div><p className="chart-note"><i /> These values are configuration, never hard-coded into the analytics engine.</p></section></div>;
+  return <div className="method-layout"><section className="method-hero panel-dark"><span className="eyebrow light">Explainable by design</span><h2>No mystery score.</h2><p>Every recommendation is assembled from visible inputs, conservative rules, and versioned calculations. Pain always overrides the number.</p><div className="version-stamp"><span>Current ruleset</span><strong>phase2.0</strong></div></section><section className="method-list panel"><div className="section-heading"><div><span className="eyebrow">Metric dictionary</span><h2>What the app calculates</h2></div></div>{methods.map((method) => <article key={method.id} className="method-row"><span>{method.id}</span><div><strong>{method.title}</strong><code>{method.formula}</code><p>{method.note}</p></div></article>)}</section><section className="config-card panel"><div className="section-heading"><div><span className="eyebrow">Athlete configuration</span><h2>Current working values</h2></div></div><div className="config-grid"><Stat label="FTP" value="165" unit="W" /><Stat label="Zone 2 target" value="110" unit="W" /><Stat label="Cadence band" value="85–90" unit="rpm" /><Stat label="Next milestone" value="175" unit="W" /></div><p className="chart-note"><i /> These working values are recorded with calculations; editable athlete settings are planned for a later release.</p></section></div>;
 }

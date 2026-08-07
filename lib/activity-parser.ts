@@ -12,6 +12,15 @@ export type DetectedActivity = {
   maximumPower: number | null;
   normalizedPower: number | null;
   sourceTrainingLoad: number | null;
+  aerobicDecouplingPercent: number | null;
+  variabilityIndex: number | null;
+  cadenceStddev: number | null;
+  cadenceTargetPercent: number | null;
+  cadenceAcceptablePercent: number | null;
+  cadenceLowPercent: number | null;
+  cadenceHighPercent: number | null;
+  first15HeartRate: number | null;
+  final15HeartRate: number | null;
   sampleCount: number;
   warnings: string[];
 };
@@ -49,6 +58,55 @@ const maximum = (values: Array<number | null>) => {
   const valid = values.filter((value): value is number => value !== null);
   return valid.length ? Math.max(...valid) : null;
 };
+
+const round = (value: number, digits = 1) => {
+  const scale = 10 ** digits;
+  return Math.round(value * scale) / scale;
+};
+
+function streamMetrics(samples: Sample[]) {
+  const cadence = samples.map((sample) => sample.cadence).filter((value): value is number => value !== null && value > 0);
+  const cadenceMean = cadence.length ? cadence.reduce((sum, value) => sum + value, 0) / cadence.length : null;
+  const cadenceStddev = cadenceMean === null ? null : Math.sqrt(cadence.reduce((sum, value) => sum + ((value - cadenceMean) ** 2), 0) / cadence.length);
+  const cadencePercent = (predicate: (value: number) => boolean) => cadence.length
+    ? round((cadence.filter(predicate).length / cadence.length) * 100)
+    : null;
+
+  const paired = samples.filter((sample) => sample.power !== null && sample.power > 0 && sample.heartRate !== null && sample.heartRate > 0);
+  const pairedPower = paired.map((sample) => sample.power!);
+  const pairedPowerMean = pairedPower.length ? pairedPower.reduce((sum, value) => sum + value, 0) / pairedPower.length : null;
+  const powerStddev = pairedPowerMean === null ? null : Math.sqrt(pairedPower.reduce((sum, value) => sum + ((value - pairedPowerMean) ** 2), 0) / pairedPower.length);
+  const sufficientlySteady = pairedPowerMean !== null && powerStddev !== null && powerStddev / pairedPowerMean <= 0.25;
+  let aerobicDecouplingPercent: number | null = null;
+  if (paired.length >= 20 && sufficientlySteady) {
+    const midpoint = Math.floor(paired.length / 2);
+    const efficiency = (values: Sample[]) => {
+      const power = average(values.map((sample) => sample.power));
+      const heartRate = average(values.map((sample) => sample.heartRate));
+      return power !== null && heartRate !== null && heartRate > 0 ? power / heartRate : null;
+    };
+    const first = efficiency(paired.slice(0, midpoint));
+    const second = efficiency(paired.slice(midpoint));
+    if (first !== null && second !== null && first > 0) aerobicDecouplingPercent = round(((first - second) / first) * 100);
+  }
+
+  const timedHeartRate = samples.filter((sample) => sample.time !== null && sample.heartRate !== null && sample.heartRate > 0);
+  const firstTime = timedHeartRate.at(0)?.time ?? null;
+  const lastTime = timedHeartRate.at(-1)?.time ?? null;
+  const first15HeartRate = firstTime === null ? null : average(timedHeartRate.filter((sample) => sample.time! <= firstTime + (15 * 60 * 1000)).map((sample) => sample.heartRate));
+  const final15HeartRate = lastTime === null ? null : average(timedHeartRate.filter((sample) => sample.time! >= lastTime - (15 * 60 * 1000)).map((sample) => sample.heartRate));
+
+  return {
+    aerobicDecouplingPercent,
+    cadenceStddev: cadenceStddev === null ? null : round(cadenceStddev),
+    cadenceTargetPercent: cadencePercent((value) => value >= 85 && value <= 90),
+    cadenceAcceptablePercent: cadencePercent((value) => value >= 80 && value <= 95),
+    cadenceLowPercent: cadencePercent((value) => value < 75),
+    cadenceHighPercent: cadencePercent((value) => value > 100),
+    first15HeartRate: first15HeartRate === null ? null : round(first15HeartRate),
+    final15HeartRate: final15HeartRate === null ? null : round(final15HeartRate),
+  };
+}
 
 const haversineMeters = (a: Sample, b: Sample) => {
   if (
@@ -123,6 +181,7 @@ export function parseXmlActivity(xmlText: string, filename: string): DetectedAct
   if (!distance) warnings.push("Distance could not be detected");
 
   const fileBase = filename.replace(/\.(gpx|tcx)$/i, "").replace(/[_-]+/g, " ");
+  const streams = streamMetrics(samples);
   return {
     name: fileBase || "Imported ride",
     startedAt: firstTime !== null ? new Date(firstTime).toISOString() : "",
@@ -137,6 +196,8 @@ export function parseXmlActivity(xmlText: string, filename: string): DetectedAct
     maximumPower: maximum(samples.map((sample) => sample.power)),
     normalizedPower: null,
     sourceTrainingLoad: null,
+    ...streams,
+    variabilityIndex: null,
     sampleCount: samples.length,
     warnings,
   };
@@ -184,6 +245,16 @@ export async function parseFitActivity(buffer: ArrayBuffer, filename: string): P
   const powerValues = records.map((record) => fitNumber(record.power));
   const heartRateValues = records.map((record) => fitNumber(record.heartRate));
   const cadenceValues = records.map((record) => fitNumber(record.cadence));
+  const recordSamples: Sample[] = records.map((record) => ({
+    time: fitDate(record.timestamp)?.getTime() ?? null,
+    latitude: null,
+    longitude: null,
+    elevation: fitNumber(record.altitude),
+    heartRate: fitNumber(record.heartRate),
+    cadence: fitNumber(record.cadence),
+    power: fitNumber(record.power),
+    distance: fitNumber(record.distance),
+  }));
   let calculatedElevationGain = 0;
   for (let index = 1; index < records.length; index += 1) {
     const previous = fitNumber(records[index - 1].altitude);
@@ -199,6 +270,9 @@ export async function parseFitActivity(buffer: ArrayBuffer, filename: string): P
   if (!cadenceValues.some((value) => value !== null)) warnings.push("No cadence stream");
 
   const fileBase = filename.replace(/\.fit$/i, "").replace(/[_-]+/g, " ");
+  const averagePower = fitNumber(session?.avgPower) ?? average(powerValues);
+  const normalizedPower = fitNumber(session?.normalizedPower);
+  const streams = streamMetrics(recordSamples);
   return {
     name: fileBase || "Imported FIT ride",
     startedAt: startedAt?.toISOString() ?? "",
@@ -209,10 +283,12 @@ export async function parseFitActivity(buffer: ArrayBuffer, filename: string): P
     maximumHeartRate: fitNumber(session?.maxHeartRate) ?? maximum(heartRateValues),
     averageCadence: fitNumber(session?.avgCadence) ?? average(cadenceValues),
     maximumCadence: fitNumber(session?.maxCadence) ?? maximum(cadenceValues),
-    averagePower: fitNumber(session?.avgPower) ?? average(powerValues),
+    averagePower,
     maximumPower: fitNumber(session?.maxPower) ?? maximum(powerValues),
-    normalizedPower: fitNumber(session?.normalizedPower),
+    normalizedPower,
     sourceTrainingLoad: fitNumber(session?.trainingStressScore),
+    ...streams,
+    variabilityIndex: normalizedPower !== null && averagePower !== null && averagePower > 0 ? round(normalizedPower / averagePower, 2) : null,
     sampleCount: records.length,
     warnings,
   };
