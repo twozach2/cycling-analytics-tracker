@@ -1077,6 +1077,8 @@ function PhaseThree({ rides, recovery, currentFtp, setCurrentFtp, refreshRides }
   const [insights, setInsights] = useState<PhaseThreeInsights | null>(null);
   const [goalTarget, setGoalTarget] = useState(200);
   const [ftpInput, setFtpInput] = useState(currentFtp);
+  const [ftpSaveMessage, setFtpSaveMessage] = useState("");
+  const [ftpSaveState, setFtpSaveState] = useState<"idle" | "working" | "success" | "error">("idle");
   const [actionState, setActionState] = useState<"idle" | "working" | "success" | "error">("idle");
   const [actionMessage, setActionMessage] = useState("");
 
@@ -1119,6 +1121,44 @@ function PhaseThree({ rides, recovery, currentFtp, setCurrentFtp, refreshRides }
     } catch (error) {
       setActionState("error");
       setActionMessage(error instanceof Error ? error.message : "The update could not be saved.");
+    }
+  };
+
+  const saveFtp = async () => {
+    const ftpWatts = Math.round(ftpInput);
+    if (!Number.isFinite(ftpWatts) || ftpWatts < 50 || ftpWatts > 500) {
+      setFtpSaveState("error");
+      setFtpSaveMessage("Enter an FTP between 50 and 500 watts.");
+      return;
+    }
+    if (ftpWatts === currentFtp) {
+      setFtpSaveState("success");
+      setFtpSaveMessage(`${ftpWatts} W is already your saved FTP.`);
+      return;
+    }
+
+    setActionState("working");
+    setActionMessage("");
+    setFtpSaveState("working");
+    setFtpSaveMessage("Saving your working FTP…");
+    try {
+      const response = await fetch("/api/phase3", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ action: "record_ftp", ftpWatts }),
+      });
+      const payload = await response.json() as { ftpWatts?: number; unchanged?: boolean; error?: string };
+      if (!response.ok) throw new Error(payload.error ?? "FTP could not be saved.");
+      await loadInsights();
+      setActionState("success");
+      setFtpSaveState("success");
+      setFtpSaveMessage(payload.unchanged
+        ? `${payload.ftpWatts ?? ftpWatts} W is already your saved FTP.`
+        : `Saved. Your working FTP is now ${payload.ftpWatts ?? ftpWatts} W.`);
+    } catch (error) {
+      setActionState("error");
+      setFtpSaveState("error");
+      setFtpSaveMessage(error instanceof Error ? error.message : "FTP could not be saved.");
     }
   };
 
@@ -1248,7 +1288,8 @@ function PhaseThree({ rides, recovery, currentFtp, setCurrentFtp, refreshRides }
         <div className="section-heading"><div><span className="eyebrow">Automatic FTP prediction</span><h2>{prediction?.minimumWatts !== null && prediction?.minimumWatts !== undefined ? `${prediction.minimumWatts}–${prediction.maximumWatts} W` : "More evidence needed"}</h2></div><span className="small-badge">{prediction?.confidence ?? "loading"} confidence</span></div>
         <div className="forecast-scale"><i style={{ width: `${Math.min(100, Math.max(4, ((prediction?.midpointWatts ?? currentFtp) / Math.max(250, goalTarget)) * 100))}%` }} /></div>
         <div className="signal-list">{(prediction?.signals ?? ["Import a ride with 20–60 minutes of recorded power."]).map((signal) => <span key={signal}>· {signal}</span>)}</div>
-        <div className="confirm-ftp"><label><span>Working FTP</span><input type="number" min="50" max="500" value={ftpInput} onChange={(event) => setFtpInput(Number(event.target.value))} /></label>{prediction?.midpointWatts && <button className="text-button" onClick={() => setFtpInput(prediction.midpointWatts!)}>Use midpoint</button>}<button className="primary-button" onClick={() => void postAction({ action: "record_ftp", ftpWatts: ftpInput }, `Working FTP updated to ${ftpInput} W.`)} disabled={actionState === "working"}>Confirm FTP</button></div>
+        <div className="confirm-ftp"><label><span>Working FTP</span><input type="number" min="50" max="500" value={ftpInput} onChange={(event) => { setFtpInput(Number(event.target.value)); setFtpSaveMessage(""); setFtpSaveState("idle"); }} /></label>{prediction?.midpointWatts && <button className="text-button" onClick={() => { setFtpInput(prediction.midpointWatts!); setFtpSaveMessage(""); setFtpSaveState("idle"); }}>Use midpoint</button>}<button className="primary-button" onClick={() => void saveFtp()} disabled={actionState === "working"}>{ftpSaveState === "working" ? "Saving…" : "Save FTP"}</button></div>
+        <p className={`ftp-save-status ${ftpSaveState}`} aria-live="polite">{ftpSaveMessage || `Current saved FTP: ${currentFtp} W.`}</p>
         <p className="chart-note"><i /> Predictions are advisory ranges. Your working FTP changes only after you confirm it.</p>
       </section>
 

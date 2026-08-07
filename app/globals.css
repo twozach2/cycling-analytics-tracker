@@ -370,6 +370,10 @@ blockquote { margin: 16px 0 0; padding: 14px 16px; border-left: 3px solid var(--
 .confirm-ftp label, .goal-control label { display: flex; flex-direction: column; gap: 6px; }
 .confirm-ftp label span, .goal-control label span { color: var(--muted); font: 650 8px/1 var(--font-data); text-transform: uppercase; }
 .confirm-ftp input, .goal-control select { width: 112px; height: 42px; padding: 0 10px; border: 1px solid var(--line); border-radius: 5px; background: #fffefa; font: 600 12px/1 var(--font-data); }
+.ftp-save-status { min-height: 18px; margin: 10px 0 0; color: var(--muted); font: 650 8px/1.4 var(--font-data); }
+.ftp-save-status.working { color: #35515c; }
+.ftp-save-status.success { color: #426533; }
+.ftp-save-status.error { color: #8e3826; }
 .goal-control { display: flex; align-items: flex-end; justify-content: space-between; gap: 12px; }
 .projection-list { display: flex; flex-direction: column; margin-top: 20px; border-top: 1px solid var(--line); }
 .projection-list div { display: flex; align-items: center; justify-content: space-between; padding: 14px 0; border-bottom: 1px solid var(--line); }

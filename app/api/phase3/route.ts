@@ -75,11 +75,15 @@ export async function POST(request: Request) {
     if (!Number.isFinite(ftpWatts) || ftpWatts < 50 || ftpWatts > 500) {
       return Response.json({ error: "FTP must be between 50 and 500 watts." }, { status: 400 });
     }
+    const [profile] = await db.select({ ftpWatts: riders.defaultFtpWatts }).from(riders).where(eq(riders.id, rider.id)).limit(1);
+    if (profile?.ftpWatts === ftpWatts) {
+      return Response.json({ ftpWatts, unchanged: true });
+    }
     const effectiveAt = new Date().toISOString();
     await db.update(riders).set({ defaultFtpWatts: ftpWatts }).where(eq(riders.id, rider.id));
     await db.insert(ftpHistory).values({ id: crypto.randomUUID(), riderId: rider.id, effectiveAt, ftpWatts, source: "manual confirmation", notes: "Confirmed from the Phase 3 workspace." });
     await db.update(riderGoals).set({ status: "achieved", achievedAt: effectiveAt }).where(and(eq(riderGoals.riderId, rider.id), eq(riderGoals.status, "active"), lte(riderGoals.targetFtpWatts, ftpWatts)));
-    return Response.json({ ftpWatts, effectiveAt }, { status: 201 });
+    return Response.json({ ftpWatts, effectiveAt, unchanged: false }, { status: 201 });
   }
 
   return Response.json({ error: "Unsupported Phase 3 action." }, { status: 400 });
