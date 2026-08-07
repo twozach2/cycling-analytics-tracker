@@ -784,13 +784,15 @@ function Overview({ selectedRide, rides, openRide, setView, isDemo, currentFtp }
   const trainingLabel = `${Math.floor(trainingSeconds / 3600)}h ${Math.round((trainingSeconds % 3600) / 60).toString().padStart(2, "0")}`;
   const efficiencyRides = rides.filter((ride) => ride.powerHeartRateRatio > 0).slice(0, 7).reverse();
   const efficiencyValues = efficiencyRides.map((ride) => ride.powerHeartRateRatio);
-  const efficiencyMin = efficiencyValues.length ? Math.min(...efficiencyValues) : 0;
   const efficiencyMax = efficiencyValues.length ? Math.max(...efficiencyValues) : 1;
-  const efficiencyRange = Math.max(0.08, efficiencyMax - efficiencyMin);
+  const efficiencyScaleMax = Math.max(1, Math.ceil(efficiencyMax * 5) / 5);
   const efficiencyDelta = efficiencyValues.length > 1
     ? ((efficiencyValues.at(-1)! - efficiencyValues[0]) / efficiencyValues[0]) * 100
     : null;
   const currentEfficiency = efficiencyValues.at(-1) ?? 0;
+  const wattsHeartRides = rides.filter((ride) => ride.averagePower > 0 && ride.averageHeartRate > 0).slice(0, 7).reverse();
+  const wattsScaleMax = Math.max(250, Math.ceil(Math.max(0, ...wattsHeartRides.map((ride) => ride.averagePower)) / 50) * 50);
+  const heartRateScaleMax = 200;
   const weeklyLoadValues = Array.from({ length: 7 }, (_, index) => {
     const weeksAgo = 6 - index;
     const end = anchorMs - (weeksAgo * 7 * dayMs) + dayMs;
@@ -822,10 +824,13 @@ function Overview({ selectedRide, rides, openRide, setView, isDemo, currentFtp }
           <span>Selected heart rate <strong>{selectedRide.averageHeartRate ? `${selectedRide.averageHeartRate} bpm` : "—"}</strong></span>
           <span>Efficiency <strong>{selectedRide.powerHeartRateRatio ? `${selectedRide.powerHeartRateRatio.toFixed(2)} W/bpm` : "—"}</strong></span>
         </div>
-        {efficiencyRides.length ? <div className="efficiency-chart" aria-label="Power to heart-rate ratio across recent rides">
-          {efficiencyRides.map((ride) => <div className="trend-column" key={ride.id}><span className="trend-value">{ride.powerHeartRateRatio.toFixed(2)}</span><div className="trend-track"><i style={{ height: `${Math.max(12, ((ride.powerHeartRateRatio - efficiencyMin + 0.02) / (efficiencyRange + 0.02)) * 100)}%` }} /></div><small>{ride.dateLabel}</small></div>)}
+        {efficiencyRides.length ? <div className="efficiency-plot">
+          <div className="efficiency-axis" aria-hidden="true"><span>{efficiencyScaleMax.toFixed(1)}</span><span>{(efficiencyScaleMax / 2).toFixed(1)}</span><span>0</span></div>
+          <div className="efficiency-chart" aria-label={`Power to heart-rate ratio across recent rides, scaled from zero to ${efficiencyScaleMax.toFixed(1)} watts per beat`}>
+            {efficiencyRides.map((ride) => <div className="trend-column" key={ride.id}><span className="trend-value">{ride.powerHeartRateRatio.toFixed(2)}</span><div className="trend-track"><i style={{ height: `${Math.max(2, (ride.powerHeartRateRatio / efficiencyScaleMax) * 100)}%` }} /></div><small>{ride.dateLabel}</small></div>)}
+          </div>
         </div> : <div className="chart-empty">Power and heart-rate data from the same ride are needed for this trend.</div>}
-        <p className="chart-note"><i /> Best compared across steady rides in similar conditions. Temperature, hydration, fatigue, and caffeine can move this ratio.</p>
+        <p className="chart-note"><i /> The scale starts at zero, so differences such as 0.72 to 0.85 stay proportional. Compare steady rides in similar conditions.</p>
       </section>
 
       <section className="load-card panel">
@@ -834,6 +839,25 @@ function Overview({ selectedRide, rides, openRide, setView, isDemo, currentFtp }
           {weeklyLoadValues.map((value, index) => <div key={`${value}-${index}`}><i style={{ height: `${Math.max(2, (value / loadScale) * 100)}%` }} className={index === weeklyLoadValues.length - 1 ? "current" : ""} /><small>{value}</small></div>)}
         </div>
         <div className="load-footer"><span>Acute load <strong>{sevenDayLoad}</strong></span><span>28-day avg <strong>{twentyEightDayAverage}</strong></span></div>
+      </section>
+
+      <section className="power-heart-card panel full-width">
+        <div className="section-heading"><div><span className="eyebrow">Watts + heart rate</span><h2>Workload and response</h2><p>Average power and average heartbeat for the same recent rides.</p></div><span className="small-badge">zero-based scales</span></div>
+        {wattsHeartRides.length ? <div className="raw-series-grid">
+          <article className="raw-series power-series">
+            <div className="raw-series-heading"><span>Average power</span><strong>0–{wattsScaleMax} W</strong></div>
+            <div className="raw-series-chart">
+              {wattsHeartRides.map((ride) => <div className="raw-series-column" key={`power-${ride.id}`}><span>{ride.averagePower}</span><div><i style={{ height: `${(ride.averagePower / wattsScaleMax) * 100}%` }} /></div><small>{ride.dateLabel}</small></div>)}
+            </div>
+          </article>
+          <article className="raw-series heart-series">
+            <div className="raw-series-heading"><span>Average heart rate</span><strong>0–{heartRateScaleMax} bpm</strong></div>
+            <div className="raw-series-chart">
+              {wattsHeartRides.map((ride) => <div className="raw-series-column" key={`heart-${ride.id}`}><span>{ride.averageHeartRate}</span><div><i style={{ height: `${Math.min(100, (ride.averageHeartRate / heartRateScaleMax) * 100)}%` }} /></div><small>{ride.dateLabel}</small></div>)}
+            </div>
+          </article>
+        </div> : <div className="chart-empty">Import rides containing both power and heart-rate data to build this chart.</div>}
+        <p className="chart-note"><i /> Each panel has its own labeled, zero-based scale. Compare how heart rate responds as power changes; the bar heights are not the same unit.</p>
       </section>
 
       <section className="ride-detail panel span-two">

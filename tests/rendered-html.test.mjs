@@ -29,6 +29,8 @@ test("server-renders the cycling analytics dashboard", async () => {
   assert.match(html, /Ride log/);
   assert.match(html, /Watts \/ heartbeat/);
   assert.match(html, /Power-to-heart-rate trend/);
+  assert.match(html, /Workload and response/);
+  assert.match(html, /zero-based scales/);
   assert.match(html, /Import ride/);
   assert.doesNotMatch(html, /Phase 2|Phase 3/);
   assert.doesNotMatch(html, /codex-preview|react-loading-skeleton|Your site is taking shape/i);
