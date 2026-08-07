@@ -1122,17 +1122,37 @@ function PhaseThree({ rides, recovery, currentFtp, setCurrentFtp, refreshRides }
     }
   };
 
-  const syncStrava = async () => {
+  const syncStrava = async (mode: "new" | "six_months") => {
     setActionState("working");
-    setActionMessage("Syncing the latest rides and streams…");
+    setActionMessage(mode === "six_months"
+      ? "Importing six months of Strava rides… Summaries are saved first, then detailed streams are added within the rate limit."
+      : "Checking Strava for new rides…");
     try {
-      const response = await fetch("/api/integrations/strava/sync", { method: "POST" });
-      const payload = await response.json() as { imported?: number; skipped?: number; streamFailures?: number; error?: string };
+      const response = await fetch("/api/integrations/strava/sync", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ mode }),
+      });
+      const payload = await response.json() as {
+        imported?: number;
+        updated?: number;
+        skipped?: number;
+        streamsImported?: number;
+        streamFailures?: number;
+        streamDeferred?: number;
+        error?: string;
+      };
       if (!response.ok) throw new Error(payload.error ?? "Strava sync failed.");
       await refreshRides();
       await loadInsights();
       setActionState("success");
-      setActionMessage(`${payload.imported ?? 0} new rides imported · ${payload.skipped ?? 0} already present${payload.streamFailures ? ` · ${payload.streamFailures} without streams` : ""}`);
+      const base = mode === "six_months"
+        ? `${payload.imported ?? 0} rides saved from the last six months · ${payload.skipped ?? 0} already stored`
+        : `${payload.imported ?? 0} new rides saved · ${payload.skipped ?? 0} existing rides checked`;
+      const streamNote = payload.streamsImported ? ` · ${payload.streamsImported} detailed streams added` : "";
+      const deferredNote = payload.streamDeferred ? ` · ${payload.streamDeferred} detailed streams will fill in on a later import` : "";
+      const failureNote = payload.streamFailures ? ` · ${payload.streamFailures} stream requests unavailable` : "";
+      setActionMessage(`${base}${streamNote}${deferredNote}${failureNote}`);
     } catch (error) {
       setActionState("error");
       setActionMessage(error instanceof Error ? error.message : "Strava sync failed.");
@@ -1204,7 +1224,22 @@ function PhaseThree({ rides, recovery, currentFtp, setCurrentFtp, refreshRides }
       <section className="connections-card panel full-width">
         <div className="section-heading"><div><span className="eyebrow">Connected sources</span><h2>Bring activities in automatically</h2></div><span className="small-badge">private account</span></div>
         <div className="connection-grid">
-          <article className="connection-tile"><div className="connection-mark strava">S</div><div><strong>Strava</strong><span>{insights?.integrations.strava.connected ? `Connected${insights.integrations.strava.displayName ? ` · ${insights.integrations.strava.displayName}` : ""}` : insights?.integrations.strava.configured ? "Ready to connect with read-only activity access" : "App registration credentials are still needed"}</span>{insights?.integrations.strava.lastSyncedAt && <small>Last sync {new Date(insights.integrations.strava.lastSyncedAt).toLocaleString()}</small>}</div><div className="connection-actions">{insights?.integrations.strava.connected ? <><button className="primary-button" onClick={() => void syncStrava()} disabled={actionState === "working"}>Sync latest 10</button><button className="text-button" onClick={() => void disconnectStrava()} disabled={actionState === "working"}>Disconnect</button></> : <button className="primary-button strava-button" onClick={() => window.location.assign("/api/integrations/strava/start")} disabled={!insights?.integrations.strava.configured}>Connect with Strava</button>}</div></article>
+          <article className="connection-tile strava-source">
+            <div className="connection-mark strava">S</div>
+            <div>
+              <strong>Strava</strong>
+              <span>{insights?.integrations.strava.connected ? `Connected${insights.integrations.strava.displayName ? ` · ${insights.integrations.strava.displayName}` : ""}` : insights?.integrations.strava.configured ? "Ready to connect with read-only activity access" : "App registration credentials are still needed"}</span>
+              {insights?.integrations.strava.connected && <small>Six-month history and new-ride sync use Strava IDs to prevent duplicates.</small>}
+              {insights?.integrations.strava.lastSyncedAt && <small>Last sync {new Date(insights.integrations.strava.lastSyncedAt).toLocaleString()}</small>}
+            </div>
+            <div className="connection-actions">
+              {insights?.integrations.strava.connected ? <>
+                <button className="primary-button" onClick={() => void syncStrava("new")} disabled={actionState === "working"}>Sync new rides</button>
+                <button className="secondary-button" onClick={() => void syncStrava("six_months")} disabled={actionState === "working"}>Import last 6 months</button>
+                <button className="text-button" onClick={() => void disconnectStrava()} disabled={actionState === "working"}>Disconnect</button>
+              </> : <button className="primary-button strava-button" onClick={() => window.location.assign("/api/integrations/strava/start")} disabled={!insights?.integrations.strava.configured}>Connect with Strava</button>}
+            </div>
+          </article>
           <article className="connection-tile"><div className="connection-mark garmin">G</div><div><strong>Garmin Connect</strong><span>Cloud sync requires Garmin Developer Program approval.</span><small>Garmin FIT files already receive full stream analysis.</small></div><a className="secondary-link" href="https://developer.garmin.com/gc-developer-program/activity-api/" target="_blank" rel="noreferrer">Application details ↗</a></article>
         </div>
       </section>

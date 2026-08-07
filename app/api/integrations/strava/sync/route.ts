@@ -5,6 +5,7 @@ import { activityStreams, externalConnections, powerDuration as powerDurationTab
 import { currentRider } from "../../../../../lib/current-rider";
 import { derivePowerDuration, deriveStreamMetrics, type ActivitySample } from "../../../../../lib/activity-parser";
 import { deriveRideMetrics } from "../../../../../lib/metrics";
+import { isCyclingActivity, parseReadBudget, syncAfterEpoch, type StravaSyncMode } from "../../../../../lib/strava-sync";
 
 type StravaActivity = {
   id: number;
@@ -33,6 +34,11 @@ type StravaActivity = {
 type Stream = { data?: number[] };
 type StreamSet = Record<string, Stream | undefined>;
 type TokenResponse = { access_token?: string; refresh_token?: string; expires_at?: number; message?: string };
+type SyncPayload = { mode?: StravaSyncMode };
+
+const ACTIVITIES_PER_PAGE = 200;
+const MAX_ACTIVITY_PAGES = 10;
+const MAX_STREAM_REQUESTS = 40;
 
 const finite = (value: unknown) => typeof value === "number" && Number.isFinite(value) ? value : null;
 
@@ -83,6 +89,16 @@ async function refreshAccessToken(connection: typeof externalConnections.$inferS
 export async function POST(request: Request) {
   const rider = await currentRider(request);
   if (!rider) return Response.json({ error: "Sign in to sync Strava rides." }, { status: 401 });
+
+  let payload: SyncPayload = {};
+  if (request.headers.get("content-type")?.includes("application/json")) {
+    try {
+      payload = await request.json() as SyncPayload;
+    } catch {
+      return Response.json({ error: "Choose a valid Strava sync option." }, { status: 400 });
+    }
+  }
+  const mode: StravaSyncMode = payload.mode === "six_months" ? "six_months" : "new";
   const db = getDb();
   const [[connection], [profile]] = await Promise.all([
     db.select().from(externalConnections).where(and(eq(externalConnections.riderId, rider.id), eq(externalConnections.provider, "strava"))).limit(1),
@@ -96,35 +112,44 @@ export async function POST(request: Request) {
   } catch (error) {
     return Response.json({ error: error instanceof Error ? error.message : "Strava access could not be refreshed." }, { status: 502 });
   }
+
   const authorization = { Authorization: `Bearer ${accessToken}` };
-  const activitiesResponse = await fetch("https://www.strava.com/api/v3/athlete/activities?per_page=10&page=1", { headers: authorization });
-  const activities = await activitiesResponse.json() as StravaActivity[] | { message?: string };
-  if (!activitiesResponse.ok || !Array.isArray(activities)) {
-    return Response.json({ error: !Array.isArray(activities) ? activities.message ?? "Strava activities could not be loaded." : "Strava activities could not be loaded." }, { status: activitiesResponse.status === 429 ? 429 : 502 });
+  const syncStartedAt = new Date();
+  const afterEpoch = syncAfterEpoch(mode, syncStartedAt, connection.lastSyncedAt);
+  const activitiesById = new Map<number, StravaActivity>();
+  let activitiesScanned = 0;
+  let streamBudget = MAX_STREAM_REQUESTS;
+
+  for (let page = 1; page <= MAX_ACTIVITY_PAGES; page += 1) {
+    const activityUrl = new URL("https://www.strava.com/api/v3/athlete/activities");
+    activityUrl.searchParams.set("after", String(afterEpoch));
+    activityUrl.searchParams.set("page", String(page));
+    activityUrl.searchParams.set("per_page", String(ACTIVITIES_PER_PAGE));
+    const activitiesResponse = await fetch(activityUrl, { headers: authorization });
+    const pageActivities = await activitiesResponse.json() as StravaActivity[] | { message?: string };
+    if (!activitiesResponse.ok || !Array.isArray(pageActivities)) {
+      const message = !Array.isArray(pageActivities) ? pageActivities.message : null;
+      return Response.json({ error: message ?? "Strava activities could not be loaded." }, { status: activitiesResponse.status === 429 ? 429 : 502 });
+    }
+
+    streamBudget = Math.min(streamBudget, parseReadBudget(activitiesResponse.headers, MAX_STREAM_REQUESTS));
+    activitiesScanned += pageActivities.length;
+    for (const activity of pageActivities) activitiesById.set(activity.id, activity);
+    if (pageActivities.length === 0) break;
   }
 
-  let imported = 0;
-  let skipped = 0;
-  let streamFailures = 0;
   const ftp = profile?.ftp ?? 165;
   const fileStore = (env as unknown as { RIDE_FILES: R2Bucket }).RIDE_FILES;
-  for (const activity of activities.filter((entry) => (entry.sport_type ?? entry.type ?? "").toLowerCase().includes("ride"))) {
+  const streamCandidates: Array<{ activity: StravaActivity; rideId: string }> = [];
+  let imported = 0;
+  let updated = 0;
+  let skipped = 0;
+
+  for (const activity of [...activitiesById.values()].filter(isCyclingActivity)) {
     const externalId = String(activity.id);
     const [existing] = await db.select({ id: rides.id }).from(rides)
       .where(and(eq(rides.riderId, rider.id), eq(rides.externalId, externalId)))
       .limit(1);
-    if (existing) {
-      skipped += 1;
-      continue;
-    }
-
-    let streams: StreamSet = {};
-    const streamsResponse = await fetch(`https://www.strava.com/api/v3/activities/${activity.id}/streams?keys=time,distance,heartrate,cadence,watts,altitude&key_by_type=true`, { headers: authorization });
-    if (streamsResponse.ok) streams = await streamsResponse.json() as StreamSet;
-    else streamFailures += 1;
-    const samples = samplesFromStreams(streams, activity.start_date);
-    const streamMetrics = deriveStreamMetrics(samples);
-    const bests = derivePowerDuration(samples);
     const normalizedPower = finite(activity.weighted_average_watts);
     const averagePower = finite(activity.average_watts);
     const movingTime = Math.max(0, Math.round(finite(activity.moving_time) ?? 0));
@@ -135,12 +160,8 @@ export async function POST(request: Request) {
       averageHeartRateBpm: finite(activity.average_heartrate),
       ftpWatts: ftp,
     });
-    const rideId = crypto.randomUUID();
-    await db.insert(rides).values({
-      id: rideId,
-      riderId: rider.id,
-      externalId,
-      source: "strava_export",
+    const rideSummary = {
+      source: "strava_export" as const,
       name: activity.name || "Strava ride",
       startedAt: activity.start_date,
       timezone: activity.timezone,
@@ -160,20 +181,82 @@ export async function POST(request: Request) {
       averagePowerWatts: averagePower,
       maximumPowerWatts: finite(activity.max_watts),
       normalizedPowerWatts: normalizedPower,
-      normalizedPowerSource: normalizedPower === null ? "unavailable" : "recorded",
+      normalizedPowerSource: normalizedPower === null ? "unavailable" as const : "recorded" as const,
       totalWorkKj: finite(activity.kilojoules),
       calories: finite(activity.calories) === null ? null : Math.round(activity.calories!),
       ftpAtRideWatts: ftp,
       notes: "Synced from Strava. Original provider values are retained separately from calculated metrics.",
-    });
-    await db.insert(rideMetrics).values({
-      rideId,
-      powerHeartRateRatio: derived.powerHeartRateRatio,
-      intensityFactor: derived.intensityFactor,
-      intensityIsEstimated: derived.intensityIsEstimated,
-      trainingLoad: derived.trainingLoad,
-      trainingLoadIsEstimated: derived.trainingLoadIsEstimated,
-      variabilityIndex: normalizedPower !== null && averagePower !== null && averagePower > 0 ? normalizedPower / averagePower : null,
+      updatedAt: syncStartedAt.toISOString(),
+    };
+    let rideId = existing?.id;
+
+    if (rideId) {
+      await db.update(rides).set(rideSummary).where(eq(rides.id, rideId));
+      await db.update(rideMetrics).set({
+        powerHeartRateRatio: derived.powerHeartRateRatio,
+        intensityFactor: derived.intensityFactor,
+        intensityIsEstimated: derived.intensityIsEstimated,
+        trainingLoad: derived.trainingLoad,
+        trainingLoadIsEstimated: derived.trainingLoadIsEstimated,
+        variabilityIndex: normalizedPower !== null && averagePower !== null && averagePower > 0 ? normalizedPower / averagePower : null,
+      }).where(eq(rideMetrics.rideId, rideId));
+      updated += 1;
+      skipped += 1;
+    } else {
+      rideId = crypto.randomUUID();
+      await db.insert(rides).values({ id: rideId, riderId: rider.id, externalId, ...rideSummary });
+      await db.insert(rideMetrics).values({
+        rideId,
+        powerHeartRateRatio: derived.powerHeartRateRatio,
+        intensityFactor: derived.intensityFactor,
+        intensityIsEstimated: derived.intensityIsEstimated,
+        trainingLoad: derived.trainingLoad,
+        trainingLoadIsEstimated: derived.trainingLoadIsEstimated,
+        variabilityIndex: normalizedPower !== null && averagePower !== null && averagePower > 0 ? normalizedPower / averagePower : null,
+        algorithmVersion: "phase3.1",
+        dataQuality: "medium",
+      });
+      imported += 1;
+    }
+
+    const [storedStream] = await db.select({ rideId: activityStreams.rideId }).from(activityStreams)
+      .where(eq(activityStreams.rideId, rideId))
+      .limit(1);
+    if (!storedStream) streamCandidates.push({ activity, rideId });
+  }
+
+  let streamsImported = 0;
+  let streamFailures = 0;
+  let attemptedStreams = 0;
+  for (const candidate of streamCandidates.slice(0, streamBudget)) {
+    const streamsResponse = await fetch(`https://www.strava.com/api/v3/activities/${candidate.activity.id}/streams?keys=time,distance,heartrate,cadence,watts,altitude&key_by_type=true`, { headers: authorization });
+    if (streamsResponse.status === 429) break;
+    attemptedStreams += 1;
+    if (!streamsResponse.ok) {
+      streamFailures += 1;
+      continue;
+    }
+
+    const streams = await streamsResponse.json() as StreamSet;
+    const samples = samplesFromStreams(streams, candidate.activity.start_date);
+    if (!samples.length) {
+      streamFailures += 1;
+      continue;
+    }
+    const streamMetrics = deriveStreamMetrics(samples);
+    const bests = derivePowerDuration(samples);
+    const r2Key = `${rider.id}/strava/${candidate.activity.id}.json`;
+    await fileStore.put(r2Key, JSON.stringify(streams), { httpMetadata: { contentType: "application/json" } });
+    await db.insert(activityStreams).values({
+      rideId: candidate.rideId,
+      r2Key,
+      encoding: "json",
+      sampleCount: samples.length,
+      availableStreamsJson: JSON.stringify(Object.keys(streams)),
+      startedAt: candidate.activity.start_date,
+      endedAt: samples.at(-1)?.time ? new Date(samples.at(-1)!.time!).toISOString() : null,
+    }).onConflictDoNothing();
+    await db.update(rideMetrics).set({
       aerobicDecouplingPercent: streamMetrics.aerobicDecouplingPercent,
       cadenceStddev: streamMetrics.cadenceStddev,
       cadenceTargetPercent: streamMetrics.cadenceTargetPercent,
@@ -182,27 +265,27 @@ export async function POST(request: Request) {
       cadenceHighPercent: streamMetrics.cadenceHighPercent,
       first15HeartRateBpm: streamMetrics.first15HeartRate,
       final15HeartRateBpm: streamMetrics.final15HeartRate,
-      algorithmVersion: "phase3.0",
-      dataQuality: samples.length ? "high" : "medium",
-    });
-    if (bests.length) await db.insert(powerDurationTable).values(bests.map((best) => ({ rideId, ...best }))).onConflictDoNothing();
-    if (samples.length) {
-      const r2Key = `${rider.id}/strava/${activity.id}.json`;
-      await fileStore.put(r2Key, JSON.stringify(streams), { httpMetadata: { contentType: "application/json" } });
-      await db.insert(activityStreams).values({
-        rideId,
-        r2Key,
-        encoding: "json",
-        sampleCount: samples.length,
-        availableStreamsJson: JSON.stringify(Object.keys(streams)),
-        startedAt: activity.start_date,
-        endedAt: samples.at(-1)?.time ? new Date(samples.at(-1)!.time!).toISOString() : null,
-      });
+      algorithmVersion: "phase3.1",
+      dataQuality: "high",
+    }).where(eq(rideMetrics.rideId, candidate.rideId));
+    if (bests.length) {
+      await db.insert(powerDurationTable).values(bests.map((best) => ({ rideId: candidate.rideId, ...best }))).onConflictDoNothing();
     }
-    imported += 1;
+    streamsImported += 1;
   }
 
-  const lastSyncedAt = new Date().toISOString();
+  const lastSyncedAt = syncStartedAt.toISOString();
   await db.update(externalConnections).set({ lastSyncedAt, updatedAt: lastSyncedAt }).where(eq(externalConnections.id, connection.id));
-  return Response.json({ imported, skipped, streamFailures, lastSyncedAt });
+  return Response.json({
+    mode,
+    imported,
+    updated,
+    skipped,
+    activitiesScanned,
+    streamsImported,
+    streamFailures,
+    streamDeferred: Math.max(0, streamCandidates.length - attemptedStreams),
+    historyStart: new Date(afterEpoch * 1000).toISOString(),
+    lastSyncedAt,
+  });
 }
