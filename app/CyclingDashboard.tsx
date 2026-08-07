@@ -1,6 +1,7 @@
 "use client";
 
 import { ChangeEvent, DragEvent, useEffect, useRef, useState } from "react";
+import Image from "next/image";
 import { parseActivityFile, type DetectedActivity } from "@/lib/activity-parser";
 import {
   calculateReadiness,
@@ -1245,13 +1246,9 @@ function PlanToday({ rides, recovery, setRecovery, recoverySaveState, saveRecove
                   <em>{suggestion.recommended ? "Best fit" : isSelected ? "Selected" : "Option"}</em>
                 </span>
 
-                <span className="route-schematic" aria-hidden="true">
-                  <span className="terrain terrain-a" />
-                  <span className="terrain terrain-b" />
-                  {suggestion.route.trace.map((segment, index) => <i key={index} style={{ left: `${segment.x}%`, top: `${segment.y}%`, width: `${segment.width}%`, transform: `rotate(${segment.angle}deg)` }} />)}
-                  <span className="route-pin start" />
-                  <span className="route-pin finish" />
-                  <span className="map-label">Schematic route trace</span>
+                <span className="route-image-wrap">
+                  <Image src={`/zwift-routes/${suggestion.route.id}.png`} width={355} height={290} alt={`${suggestion.route.name} route map from Zwift`} />
+                  <span className="official-route-label">Official Zwift map</span>
                 </span>
 
                 <span className="route-facts">

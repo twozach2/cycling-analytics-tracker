@@ -433,18 +433,9 @@ blockquote { margin: 16px 0 0; padding: 14px 16px; border-left: 3px solid var(--
 .route-choice-head strong { margin-top: 7px; font-size: 17px; line-height: 1.1; letter-spacing: -.035em; }
 .route-choice-head em { flex: 0 0 auto; padding: 6px 7px; border-radius: 999px; background: #e8e5dc; color: var(--muted); font: 650 7px/1 var(--font-data); font-style: normal; letter-spacing: .06em; text-transform: uppercase; }
 .route-choice.selected .route-choice-head em { background: var(--lime); color: var(--ink); }
-.route-schematic { position: relative; display: block; height: 146px; margin: 0 10px; overflow: hidden; border: 1px solid #cdd7ca; border-radius: 7px; background: linear-gradient(146deg, #dae8de 0 36%, #b8dce5 36% 56%, #dce7d5 56% 100%); }
-.route-schematic::before, .route-schematic::after { content: ""; position: absolute; border: 1px solid rgba(53, 84, 60, .15); border-radius: 50%; }
-.route-schematic::before { width: 72px; height: 72px; top: 8px; left: 34%; box-shadow: 0 0 0 9px rgba(255,255,255,.08), 0 0 0 18px rgba(53,84,60,.06); }
-.route-schematic::after { width: 96px; height: 54px; right: -22px; bottom: -11px; transform: rotate(-18deg); }
-.route-schematic .terrain { position: absolute; z-index: 1; display: block; border: 1px solid rgba(59, 91, 63, .13); border-radius: 52% 48% 60% 40%; background: rgba(124, 166, 115, .24); }
-.route-schematic .terrain-a { width: 88px; height: 55px; top: -17px; left: -13px; transform: rotate(18deg); }
-.route-schematic .terrain-b { width: 96px; height: 70px; right: 7px; bottom: -27px; transform: rotate(-12deg); }
-.route-schematic > i { position: absolute; z-index: 3; display: block; height: 4px; transform-origin: 0 50%; border-radius: 99px; background: #252a24; box-shadow: 0 0 0 1px rgba(255,255,255,.58); }
-.route-pin { position: absolute; z-index: 4; display: block; width: 10px; height: 10px; border: 2px solid var(--panel); border-radius: 50%; box-shadow: 0 0 0 1px rgba(23,26,22,.45); }
-.route-pin.start { left: 7%; top: 58%; background: var(--lime); }
-.route-pin.finish { left: 15%; top: 65%; background: var(--coral); }
-.map-label { position: absolute; z-index: 4; right: 8px; bottom: 7px; padding: 4px 6px; border-radius: 4px; background: rgba(251,250,245,.8); color: #657066; font: 600 6px/1 var(--font-data); letter-spacing: .04em; text-transform: uppercase; }
+.route-image-wrap { position: relative; display: block; aspect-ratio: 355 / 290; margin: 0 10px; overflow: hidden; border: 1px solid #cdd7ca; border-radius: 7px; background: #dcebed; }
+.route-image-wrap img { display: block; width: 100%; height: 100%; object-fit: cover; }
+.official-route-label { position: absolute; right: 8px; bottom: 7px; padding: 5px 7px; border-radius: 4px; background: rgba(251,250,245,.88); color: #4f5c53; font: 650 6px/1 var(--font-data); letter-spacing: .05em; text-transform: uppercase; backdrop-filter: blur(5px); }
 .route-facts { display: grid; grid-template-columns: repeat(3, 1fr); margin: 10px 10px 0; border: 1px solid var(--line); border-radius: 6px; background: rgba(255,255,255,.48); }
 .route-facts > span { display: flex; min-width: 0; flex-direction: column; gap: 5px; padding: 10px; border-left: 1px solid var(--line); }
 .route-facts > span:first-child { border-left: 0; }
@@ -589,8 +580,7 @@ blockquote { margin: 16px 0 0; padding: 14px 16px; border-left: 3px solid var(--
   .week-grid { grid-template-columns: repeat(2, 1fr); }
   .route-choice-grid { grid-template-columns: 1fr; }
   .route-choice { display: grid; grid-template-columns: minmax(230px, .85fr) 1.15fr; }
-  .route-choice-head, .route-schematic, .route-facts { grid-column: 1; }
-  .route-schematic { min-height: 150px; }
+  .route-choice-head, .route-image-wrap, .route-facts { grid-column: 1; }
   .route-elevation-wrap, .route-prescription, .route-reason, .route-time-cue { grid-column: 2; }
   .route-elevation-wrap { grid-row: 1; padding-top: 20px; }
   .route-prescription { grid-row: 2; }
@@ -638,8 +628,7 @@ blockquote { margin: 16px 0 0; padding: 14px 16px; border-left: 3px solid var(--
   .route-suite-heading, .route-suite-footer, .route-guardrail { align-items: flex-start; flex-direction: column; }
   .route-suite-heading .small-badge { align-self: flex-start; }
   .route-choice { display: flex; }
-  .route-schematic { min-height: 146px; }
-  .route-choice-head, .route-schematic, .route-facts, .route-elevation-wrap, .route-prescription, .route-reason, .route-time-cue { width: auto; }
+  .route-choice-head, .route-image-wrap, .route-facts, .route-elevation-wrap, .route-prescription, .route-reason, .route-time-cue { width: auto; }
   .dropzone { min-height: 370px; }
   .method-row div { grid-template-columns: 1fr; }
   .method-row p { grid-column: 1; }
