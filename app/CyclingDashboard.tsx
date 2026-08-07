@@ -11,6 +11,7 @@ import {
 } from "@/lib/metrics";
 import { buildWeeklyPlan, projectFtpGoal, recommendWorkout } from "@/lib/phase3";
 import { recommendZwiftRoutes } from "@/lib/zwift-routes";
+import type { ZwiftRotation } from "@/lib/zwift-world-rotation";
 
 type View = "dashboard" | "plan" | "rides" | "import" | "method";
 type DataMode = "loading" | "demo" | "saved" | "unavailable";
@@ -1082,6 +1083,7 @@ function PlanToday({ rides, recovery, setRecovery, recoverySaveState, saveRecove
   const [actionState, setActionState] = useState<"idle" | "working" | "success" | "error">("idle");
   const [actionMessage, setActionMessage] = useState("");
   const [selectedRouteId, setSelectedRouteId] = useState<string | null>(null);
+  const [worldRotation, setWorldRotation] = useState<ZwiftRotation | null>(null);
 
   const loadInsights = async () => {
     const response = await fetch("/api/phase3", { cache: "no-store" });
@@ -1108,6 +1110,18 @@ function PlanToday({ rides, recovery, setRecovery, recoverySaveState, saveRecove
       .catch(() => { if (active) setActionMessage("Saved insights are temporarily unavailable."); });
     return () => { active = false; };
   }, [setCurrentFtp]);
+
+  useEffect(() => {
+    let active = true;
+    void fetch("/api/zwift/worlds")
+      .then(async (response) => {
+        if (!response.ok) throw new Error("Zwift world rotation could not be loaded.");
+        return response.json() as Promise<ZwiftRotation>;
+      })
+      .then((rotation) => { if (active) setWorldRotation(rotation); })
+      .catch(() => { if (active) setWorldRotation(null); });
+    return () => { active = false; };
+  }, []);
 
   const postAction = async (body: object, successMessage: string) => {
     setActionState("working");
@@ -1194,7 +1208,8 @@ function PlanToday({ rides, recovery, setRecovery, recoverySaveState, saveRecove
   });
   const planningInput = { readinessScore: readiness.score, kneePain: recovery.kneePain ?? 0, acuteChronicRatio: loadRatio, recentHardSessions: block(7, 0).rides ? rides.filter((ride) => (ride.type === "Tempo" || ride.type === "Threshold") && Date.parse(ride.date) > anchorMs - (7 * dayMs)).length : 0 };
   const workout = recommendWorkout(planningInput);
-  const routeSuite = recommendZwiftRoutes(workout.mode, currentFtp);
+  const availableWorlds = worldRotation?.availableWorlds ?? ["Watopia"];
+  const routeSuite = recommendZwiftRoutes(workout.mode, currentFtp, availableWorlds);
   const selectedRoute = routeSuite.find((suggestion) => suggestion.route.id === selectedRouteId)
     ?? routeSuite.find((suggestion) => suggestion.recommended)
     ?? routeSuite[0];
@@ -1223,8 +1238,14 @@ function PlanToday({ rides, recovery, setRecovery, recoverySaveState, saveRecove
 
       <section className="route-suite panel full-width">
         <div className="section-heading route-suite-heading">
-          <div><span className="eyebrow">Zwift route match</span><h2>Choose the time you actually have</h2><p>Three Watopia options matched to today&apos;s effort. The timer is the commitment; finishing the route is optional.</p></div>
+          <div><span className="eyebrow">Zwift route match</span><h2>Choose the time you actually have</h2><p>Three options from the worlds available in Zwift today. The timer is the commitment; finishing the route is optional.</p></div>
           <span className={`small-badge ${workout.mode === "rest" ? "paused" : ""}`}>{workout.mode === "rest" ? "paused by rest guardrail" : "30 · 60 · 90 min"}</span>
+        </div>
+
+        <div className="available-worlds" aria-label="Zwift worlds available today">
+          <span>Available today</span>
+          {availableWorlds.map((world) => <strong key={world}>{world}</strong>)}
+          <small>{worldRotation ? (worldRotation.status === "live" ? "Live rotation" : "Saved rotation") : "Checking rotation…"}</small>
         </div>
 
         {workout.mode === "rest" && <div className="route-guardrail"><strong>Routes are on hold today.</strong><span>Update the recovery check-in when you feel ready; the choices will unlock when the plan no longer calls for complete rest.</span></div>}
@@ -1242,7 +1263,7 @@ function PlanToday({ rides, recovery, setRecovery, recoverySaveState, saveRecove
                 onClick={() => setSelectedRouteId(suggestion.route.id)}
               >
                 <span className="route-choice-head">
-                  <span><small>{suggestion.commitment} minutes</small><strong>{suggestion.route.name}</strong></span>
+                  <span><small>{suggestion.commitment} minutes · {suggestion.route.profile}</small><strong>{suggestion.route.name}</strong></span>
                   <em>{suggestion.recommended ? "Best fit" : isSelected ? "Selected" : "Option"}</em>
                 </span>
 
@@ -1255,11 +1276,6 @@ function PlanToday({ rides, recovery, setRecovery, recoverySaveState, saveRecove
                   <span><small>World</small><strong>{suggestion.route.world}</strong></span>
                   <span><small>Distance</small><strong>{suggestion.route.distanceMiles.toFixed(1)} mi</strong></span>
                   <span><small>Climbing</small><strong>{suggestion.route.elevationFeet} ft</strong></span>
-                </span>
-
-                <span className="route-elevation-wrap">
-                  <span className="route-elevation-heading"><small>Elevation shape</small><em>{suggestion.route.profile}</em></span>
-                  <span className="route-elevation" aria-hidden="true">{suggestion.route.elevation.map((height, index) => <i key={index} style={{ height: `${height}%` }} />)}</span>
                 </span>
 
                 <span className="route-prescription">
@@ -1275,7 +1291,7 @@ function PlanToday({ rides, recovery, setRecovery, recoverySaveState, saveRecove
 
         <div className="route-suite-footer">
           <span>{workout.mode === "rest" ? "Rest remains today's recommendation." : <><strong>Selected:</strong> {selectedRoute.route.name} · {selectedRoute.commitment} min · {selectedRoute.targetWatts}</>}</span>
-          <a href="https://support.zwift.com/en_us/watopia-cycling-routes-ByIReYtcC" target="_blank" rel="noreferrer">Official Zwift route details ↗</a>
+          <span className="route-source-links"><a href="https://support.zwift.com/zwift-worlds-and-cycling-routes-rk3PMBUht" target="_blank" rel="noreferrer">Official route details ↗</a><a href={worldRotation?.sourceUrl ?? "https://zwiftinsider.com/schedule/"} target="_blank" rel="noreferrer">World calendar ↗</a></span>
         </div>
       </section>
 

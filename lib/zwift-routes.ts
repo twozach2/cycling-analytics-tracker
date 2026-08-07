@@ -2,23 +2,29 @@ import type { WorkoutMode } from "./phase3";
 
 export type RouteCommitment = 30 | 60 | 90;
 
-export type RouteTraceSegment = {
-  x: number;
-  y: number;
-  width: number;
-  angle: number;
-};
+export const ZWIFT_WORLDS = [
+  "Watopia",
+  "France",
+  "Innsbruck",
+  "London",
+  "Makuri Islands",
+  "New York",
+  "Paris",
+  "Richmond",
+  "Scotland",
+  "Yorkshire",
+] as const;
+
+export type ZwiftWorld = (typeof ZWIFT_WORLDS)[number];
 
 export type ZwiftRoute = {
   id: string;
   name: string;
-  world: "Watopia";
+  world: ZwiftWorld;
   distanceMiles: number;
   elevationFeet: number;
   badgeXp: number;
   profile: "flat" | "rolling" | "climb";
-  trace: RouteTraceSegment[];
-  elevation: number[];
 };
 
 export type ZwiftRouteSuggestion = {
@@ -32,190 +38,81 @@ export type ZwiftRouteSuggestion = {
   disabled: boolean;
 };
 
+const route = (
+  id: string,
+  name: string,
+  world: ZwiftWorld,
+  distanceMiles: number,
+  elevationFeet: number,
+  badgeXp: number,
+  profile: ZwiftRoute["profile"],
+): ZwiftRoute => ({ id, name, world, distanceMiles, elevationFeet, badgeXp, profile });
+
 const routes: Record<string, ZwiftRoute> = {
-  "volcano-circuit": {
-    id: "volcano-circuit",
-    name: "Volcano Circuit",
-    world: "Watopia",
-    distanceMiles: 3.3,
-    elevationFeet: 91,
-    badgeXp: 80,
-    profile: "flat",
-    trace: [
-      { x: 9, y: 57, width: 27, angle: -17 },
-      { x: 31, y: 48, width: 23, angle: -48 },
-      { x: 44, y: 28, width: 27, angle: 5 },
-      { x: 67, y: 34, width: 22, angle: 53 },
-      { x: 73, y: 54, width: 23, angle: 140 },
-      { x: 53, y: 67, width: 27, angle: 176 },
-      { x: 27, y: 67, width: 21, angle: -151 },
-    ],
-    elevation: [18, 26, 34, 42, 54, 45, 30, 24, 20, 27, 34, 22],
-  },
-  "volcano-flat": {
-    id: "volcano-flat",
-    name: "Volcano Flat",
-    world: "Watopia",
-    distanceMiles: 7.8,
-    elevationFeet: 167,
-    badgeXp: 240,
-    profile: "flat",
-    trace: [
-      { x: 8, y: 67, width: 28, angle: -18 },
-      { x: 32, y: 58, width: 24, angle: -45 },
-      { x: 47, y: 38, width: 33, angle: -6 },
-      { x: 75, y: 35, width: 18, angle: 54 },
-      { x: 78, y: 53, width: 27, angle: 139 },
-      { x: 55, y: 68, width: 25, angle: 171 },
-      { x: 32, y: 68, width: 20, angle: -158 },
-    ],
-    elevation: [16, 20, 24, 30, 38, 44, 37, 29, 33, 27, 22, 18],
-  },
-  "tempus-fugit": {
-    id: "tempus-fugit",
-    name: "Tempus Fugit",
-    world: "Watopia",
-    distanceMiles: 12.2,
-    elevationFeet: 105,
-    badgeXp: 380,
-    profile: "flat",
-    trace: [
-      { x: 8, y: 58, width: 26, angle: -7 },
-      { x: 31, y: 53, width: 30, angle: -20 },
-      { x: 57, y: 43, width: 28, angle: 8 },
-      { x: 80, y: 50, width: 16, angle: 76 },
-      { x: 77, y: 66, width: 28, angle: 172 },
-      { x: 50, y: 68, width: 27, angle: -175 },
-      { x: 25, y: 66, width: 19, angle: 163 },
-    ],
-    elevation: [20, 24, 22, 27, 25, 31, 28, 34, 27, 24, 29, 21],
-  },
-  "beach-island-loop": {
-    id: "beach-island-loop",
-    name: "Beach Island Loop",
-    world: "Watopia",
-    distanceMiles: 8,
-    elevationFeet: 160,
-    badgeXp: 255,
-    profile: "flat",
-    trace: [
-      { x: 8, y: 61, width: 24, angle: -19 },
-      { x: 29, y: 51, width: 20, angle: -58 },
-      { x: 39, y: 32, width: 34, angle: -3 },
-      { x: 69, y: 35, width: 20, angle: 47 },
-      { x: 74, y: 53, width: 25, angle: 139 },
-      { x: 52, y: 67, width: 28, angle: 176 },
-      { x: 26, y: 67, width: 20, angle: -160 },
-    ],
-    elevation: [18, 24, 29, 42, 52, 44, 31, 24, 35, 31, 25, 20],
-  },
-  "tick-tock": {
-    id: "tick-tock",
-    name: "Tick Tock",
-    world: "Watopia",
-    distanceMiles: 12,
-    elevationFeet: 194,
-    badgeXp: 380,
-    profile: "flat",
-    trace: [
-      { x: 8, y: 63, width: 28, angle: -18 },
-      { x: 33, y: 53, width: 24, angle: -39 },
-      { x: 49, y: 37, width: 32, angle: 1 },
-      { x: 78, y: 40, width: 17, angle: 62 },
-      { x: 78, y: 57, width: 29, angle: 150 },
-      { x: 52, y: 69, width: 27, angle: 177 },
-      { x: 27, y: 69, width: 20, angle: -161 },
-    ],
-    elevation: [16, 20, 27, 35, 46, 39, 33, 30, 42, 35, 26, 19],
-  },
-  "big-flat-8": {
-    id: "big-flat-8",
-    name: "Big Flat 8",
-    world: "Watopia",
-    distanceMiles: 18.1,
-    elevationFeet: 338,
-    badgeXp: 580,
-    profile: "rolling",
-    trace: [
-      { x: 7, y: 64, width: 25, angle: -22 },
-      { x: 29, y: 51, width: 20, angle: -61 },
-      { x: 38, y: 31, width: 28, angle: -12 },
-      { x: 62, y: 25, width: 25, angle: 22 },
-      { x: 80, y: 36, width: 18, angle: 75 },
-      { x: 78, y: 55, width: 25, angle: 139 },
-      { x: 57, y: 68, width: 29, angle: 176 },
-      { x: 30, y: 68, width: 22, angle: -166 },
-    ],
-    elevation: [17, 24, 31, 45, 63, 47, 38, 54, 44, 32, 25, 19],
-  },
-  "hilly-route": {
-    id: "hilly-route",
-    name: "Hilly Route",
-    world: "Watopia",
-    distanceMiles: 5.8,
-    elevationFeet: 359,
-    badgeXp: 180,
-    profile: "rolling",
-    trace: [
-      { x: 8, y: 66, width: 22, angle: -28 },
-      { x: 27, y: 53, width: 20, angle: -69 },
-      { x: 34, y: 33, width: 28, angle: -17 },
-      { x: 59, y: 25, width: 24, angle: 31 },
-      { x: 76, y: 39, width: 20, angle: 92 },
-      { x: 70, y: 60, width: 25, angle: 157 },
-      { x: 47, y: 68, width: 24, angle: 177 },
-      { x: 25, y: 68, width: 19, angle: -173 },
-    ],
-    elevation: [12, 18, 28, 54, 85, 65, 39, 73, 50, 33, 22, 16],
-  },
-  "volcano-climb": {
-    id: "volcano-climb",
-    name: "Volcano Climb",
-    world: "Watopia",
-    distanceMiles: 14.3,
-    elevationFeet: 669,
-    badgeXp: 460,
-    profile: "climb",
-    trace: [
-      { x: 8, y: 68, width: 25, angle: -14 },
-      { x: 30, y: 59, width: 20, angle: -51 },
-      { x: 41, y: 41, width: 22, angle: -23 },
-      { x: 60, y: 32, width: 19, angle: 44 },
-      { x: 70, y: 47, width: 16, angle: 133 },
-      { x: 57, y: 59, width: 14, angle: -143 },
-      { x: 45, y: 51, width: 12, angle: -45 },
-      { x: 51, y: 40, width: 10, angle: 51 },
-    ],
-    elevation: [10, 16, 23, 31, 43, 58, 75, 92, 80, 62, 36, 18],
-  },
-  "triple-flat-loops": {
-    id: "triple-flat-loops",
-    name: "Triple Flat Loops",
-    world: "Watopia",
-    distanceMiles: 21.1,
-    elevationFeet: 514,
-    badgeXp: 680,
-    profile: "rolling",
-    trace: [
-      { x: 7, y: 65, width: 24, angle: -25 },
-      { x: 28, y: 52, width: 18, angle: -66 },
-      { x: 35, y: 34, width: 28, angle: -18 },
-      { x: 60, y: 25, width: 22, angle: 30 },
-      { x: 76, y: 38, width: 18, angle: 88 },
-      { x: 72, y: 57, width: 22, angle: 151 },
-      { x: 52, y: 67, width: 20, angle: 179 },
-      { x: 33, y: 66, width: 14, angle: -154 },
-      { x: 24, y: 57, width: 20, angle: -18 },
-    ],
-    elevation: [14, 21, 31, 48, 67, 44, 35, 59, 47, 33, 24, 16],
-  },
+  "volcano-circuit": route("volcano-circuit", "Volcano Circuit", "Watopia", 3.3, 91, 80, "flat"),
+  "volcano-flat": route("volcano-flat", "Volcano Flat", "Watopia", 7.8, 167, 240, "flat"),
+  "tempus-fugit": route("tempus-fugit", "Tempus Fugit", "Watopia", 12.2, 105, 380, "flat"),
+  "beach-island-loop": route("beach-island-loop", "Beach Island Loop", "Watopia", 8, 160, 255, "flat"),
+  "tick-tock": route("tick-tock", "Tick Tock", "Watopia", 12, 194, 380, "flat"),
+  "big-flat-8": route("big-flat-8", "Big Flat 8", "Watopia", 18.1, 338, 580, "rolling"),
+  "hilly-route": route("hilly-route", "Hilly Route", "Watopia", 5.8, 359, 180, "rolling"),
+  "volcano-climb": route("volcano-climb", "Volcano Climb", "Watopia", 14.3, 669, 460, "climb"),
+  "triple-flat-loops": route("triple-flat-loops", "Triple Flat Loops", "Watopia", 21.1, 514, 680, "rolling"),
+
+  "france-croissant": route("france-croissant", "Croissant", "France", 7.7, 230, 185, "flat"),
+  "france-douce-france": route("france-douce-france", "Douce France", "France", 15.4, 446, 465, "rolling"),
+  "france-three-musketeers": route("france-three-musketeers", "Three Musketeers", "France", 22.2, 656, 705, "rolling"),
+
+  "innsbruck-innsbruckring": route("innsbruck-innsbruckring", "Innsbruckring", "Innsbruck", 5.7, 256, 170, "rolling"),
+  "innsbruck-2018-worlds-short-lap": route("innsbruck-2018-worlds-short-lap", "2018 Worlds Short Lap", "Innsbruck", 14.9, 1627, 480, "climb"),
+  "innsbruck-kom-after-party": route("innsbruck-kom-after-party", "Innsbruck KOM After Party", "Innsbruck", 23, 2156, 735, "climb"),
+
+  "london-classique": route("london-classique", "London Classique", "London", 3.7, 82, 110, "flat"),
+  "london-greater-london-flat": route("london-greater-london-flat", "Greater London Flat", "London", 7.3, 174, 230, "flat"),
+  "london-calling": route("london-calling", "London Calling", "London", 19.4, 682, 620, "rolling"),
+
+  "makuri-electric-loop": route("makuri-electric-loop", "Electric Loop", "Makuri Islands", 5.6, 141, 180, "flat"),
+  "makuri-neon-flats": route("makuri-neon-flats", "Neon Flats", "Makuri Islands", 9.2, 236, 290, "flat"),
+  "makuri-chasing-the-sun": route("makuri-chasing-the-sun", "Chasing the Sun", "Makuri Islands", 21.8, 1037, 700, "rolling"),
+
+  "new-york-the-6-train": route("new-york-the-6-train", "The 6 Train", "New York", 4.4, 230, 130, "rolling"),
+  "new-york-spinfinity": route("new-york-spinfinity", "Spinfinity", "New York", 12.1, 509, 390, "rolling"),
+  "new-york-the-greenway": route("new-york-the-greenway", "The Greenway", "New York", 22.8, 968, 805, "rolling"),
+
+  "paris-lutece-express": route("paris-lutece-express", "Lutece Express", "Paris", 6.1, 210, 140, "flat"),
+  "paris-cirque-du-suffer": route("paris-cirque-du-suffer", "Cirque du Suffer", "Paris", 13, 95, 415, "flat"),
+  "paris-montmartre-mixer": route("paris-montmartre-mixer", "Montmartre Mixer", "Paris", 15.6, 623, 505, "rolling"),
+
+  "richmond-fan-flats": route("richmond-fan-flats", "Fan Flats", "Richmond", 4.7, 112, 150, "flat"),
+  "richmond-uci-worlds": route("richmond-uci-worlds", "UCI Worlds", "Richmond", 10.3, 528, 330, "rolling"),
+  "richmond-libby-hill-after-party": route("richmond-libby-hill-after-party", "Libby Hill After Party", "Richmond", 20.4, 525, 655, "rolling"),
+
+  "scotland-loch-loop": route("scotland-loch-loop", "Loch Loop", "Scotland", 5, 233, 160, "rolling"),
+  "scotland-rolling-highlands": route("scotland-rolling-highlands", "Rolling Highlands", "Scotland", 8.7, 344, 280, "rolling"),
+  "scotland-the-muckle-yin": route("scotland-the-muckle-yin", "The Muckle Yin", "Scotland", 14.6, 925, 470, "climb"),
+
+  "yorkshire-duchy-estate": route("yorkshire-duchy-estate", "Duchy Estate", "Yorkshire", 3, 230, 60, "rolling"),
+  "yorkshire-harrogate-circuit": route("yorkshire-harrogate-circuit", "Harrogate Circuit", "Yorkshire", 8.6, 804, 270, "climb"),
+  "yorkshire-double-loop": route("yorkshire-double-loop", "Yorkshire Double Loop", "Yorkshire", 18.4, 1795, 590, "climb"),
 };
 
-const routeIdsByMode: Record<WorkoutMode, [string, string, string]> = {
+const watopiaRouteIdsByMode: Record<WorkoutMode, [string, string, string]> = {
   rest: ["volcano-circuit", "volcano-flat", "tempus-fugit"],
   recovery: ["volcano-circuit", "volcano-flat", "tempus-fugit"],
   endurance: ["beach-island-loop", "tick-tock", "big-flat-8"],
   tempo: ["hilly-route", "volcano-climb", "triple-flat-loops"],
+};
+
+const guestRouteIds: Record<Exclude<ZwiftWorld, "Watopia">, [string, string, string]> = {
+  France: ["france-croissant", "france-douce-france", "france-three-musketeers"],
+  Innsbruck: ["innsbruck-innsbruckring", "innsbruck-2018-worlds-short-lap", "innsbruck-kom-after-party"],
+  London: ["london-classique", "london-greater-london-flat", "london-calling"],
+  "Makuri Islands": ["makuri-electric-loop", "makuri-neon-flats", "makuri-chasing-the-sun"],
+  "New York": ["new-york-the-6-train", "new-york-spinfinity", "new-york-the-greenway"],
+  Paris: ["paris-lutece-express", "paris-cirque-du-suffer", "paris-montmartre-mixer"],
+  Richmond: ["richmond-fan-flats", "richmond-uci-worlds", "richmond-libby-hill-after-party"],
+  Scotland: ["scotland-loch-loop", "scotland-rolling-highlands", "scotland-the-muckle-yin"],
+  Yorkshire: ["yorkshire-duchy-estate", "yorkshire-harrogate-circuit", "yorkshire-double-loop"],
 };
 
 const commitments: RouteCommitment[] = [30, 60, 90];
@@ -227,48 +124,72 @@ const intensity: Record<WorkoutMode, { low: number; high: number; heartRateCue: 
   tempo: { low: 0.76, high: 0.88, heartRateCue: "Controlled rise · RPE 6–7" },
 };
 
-const reasons: Record<WorkoutMode, [string, string, string]> = {
-  rest: [
-    "Held in reserve only if the check-in improves and movement is pain-free.",
-    "A flat fallback, not a replacement for the rest recommendation.",
-    "Shown for planning ahead; keep today off the bike while the rest guardrail is active.",
-  ],
-  recovery: [
-    "Short, flat, and easy to stop on time without chasing extra work.",
-    "A low-climbing route that keeps the focus on smooth, quiet pedaling.",
-    "Longer flat terrain for an easy day when the shorter option feels too brief.",
-  ],
-  endurance: [
-    "Enough route variety for a compact aerobic session without unnecessary climbing.",
-    "Steady terrain makes it easier to hold an even endurance effort for an hour.",
-    "A longer loop with modest climbing for durability without turning into a threshold day.",
-  ],
-  tempo: [
-    "Short rollers give the 30-minute option enough structure without a long commitment.",
-    "The sustained climb naturally supports controlled tempo blocks and easy recoveries.",
-    "Rolling terrain suits a longer tempo day while leaving room to settle between efforts.",
-  ],
-};
-
 const timingCues: Record<RouteCommitment, string> = {
   30: "Stop at 30 min; completing the route is optional.",
   60: "Use the route as structure and cool down at 60 min.",
   90: "Continue or add easy riding to reach the 90-min cap.",
 };
 
-export function recommendZwiftRoutes(mode: WorkoutMode, ftpWatts: number): ZwiftRouteSuggestion[] {
+const modeReason: Record<WorkoutMode, Record<ZwiftRoute["profile"], string>> = {
+  rest: {
+    flat: "Held in reserve only if the check-in improves and movement is pain-free.",
+    rolling: "Shown for planning ahead; do not let the terrain override today's rest guardrail.",
+    climb: "Shown for planning ahead; climbing is intentionally paused while the rest guardrail is active.",
+  },
+  recovery: {
+    flat: "Flat terrain keeps the focus on smooth, quiet pedaling and makes it easy to stop on time.",
+    rolling: "Gentle terrain variation without turning this into a workout; stay easy on every rise.",
+    climb: "This world is in rotation, but keep gearing light and turn around before the climb drives intensity.",
+  },
+  endurance: {
+    flat: "Steady terrain makes it easier to hold an even aerobic effort without unnecessary surges.",
+    rolling: "Rolling terrain adds variety while still supporting a controlled endurance rhythm.",
+    climb: "Use easy gearing on the climbs and protect the endurance ceiling instead of chasing speed.",
+  },
+  tempo: {
+    flat: "The uninterrupted roads suit controlled tempo blocks with clean recoveries between them.",
+    rolling: "The rollers provide natural structure for tempo work without requiring a single long climb.",
+    climb: "The sustained climbing supports controlled tempo blocks; cap the effort before threshold.",
+  },
+};
+
+function isZwiftWorld(value: string): value is ZwiftWorld {
+  return (ZWIFT_WORLDS as readonly string[]).includes(value);
+}
+
+function worldsForSuite(activeWorlds: readonly string[]): [ZwiftWorld, ZwiftWorld, ZwiftWorld] {
+  const normalized = Array.from(new Set(activeWorlds.filter(isZwiftWorld)));
+  const guests = normalized.filter((world): world is Exclude<ZwiftWorld, "Watopia"> => world !== "Watopia");
+  if (guests.length >= 2) return [guests[0], guests[1], "Watopia"];
+  if (guests.length === 1) return [guests[0], "Watopia", "Watopia"];
+  return ["Watopia", "Watopia", "Watopia"];
+}
+
+export function recommendZwiftRoutes(
+  mode: WorkoutMode,
+  ftpWatts: number,
+  activeWorlds: readonly string[] = ["Watopia"],
+): ZwiftRouteSuggestion[] {
   const safeFtp = Number.isFinite(ftpWatts) && ftpWatts > 0 ? ftpWatts : 165;
   const watts = intensity[mode];
   const recommendedCommitment: RouteCommitment = mode === "recovery" || mode === "rest" ? 30 : 60;
+  const suggestionWorlds = worldsForSuite(activeWorlds);
 
-  return routeIdsByMode[mode].map((routeId, index) => ({
-    commitment: commitments[index],
-    route: routes[routeId],
-    targetWatts: `${Math.round(safeFtp * watts.low)}–${Math.round(safeFtp * watts.high)} W`,
-    heartRateCue: watts.heartRateCue,
-    reason: reasons[mode][index],
-    timingCue: timingCues[commitments[index]],
-    recommended: commitments[index] === recommendedCommitment,
-    disabled: mode === "rest",
-  }));
+  return suggestionWorlds.map((world, index) => {
+    const routeId = world === "Watopia"
+      ? watopiaRouteIdsByMode[mode][index]
+      : guestRouteIds[world][index];
+    const selectedRoute = routes[routeId];
+
+    return {
+      commitment: commitments[index],
+      route: selectedRoute,
+      targetWatts: `${Math.round(safeFtp * watts.low)}–${Math.round(safeFtp * watts.high)} W`,
+      heartRateCue: watts.heartRateCue,
+      reason: `${selectedRoute.world} is available in today's rotation. ${modeReason[mode][selectedRoute.profile]}`,
+      timingCue: timingCues[commitments[index]],
+      recommended: commitments[index] === recommendedCommitment,
+      disabled: mode === "rest",
+    };
+  });
 }

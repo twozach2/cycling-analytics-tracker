@@ -3,6 +3,7 @@ import test from "node:test";
 import { derivePowerDuration, deriveStreamMetrics, type ActivitySample } from "../lib/activity-parser.ts";
 import { buildWeeklyPlan, predictFtp, projectFtpGoal, recommendWorkout } from "../lib/phase3.ts";
 import { recommendZwiftRoutes } from "../lib/zwift-routes.ts";
+import { fallbackGuestWorlds, parseGuestWorldsFromSchedule } from "../lib/zwift-world-rotation.ts";
 
 test("derives rolling power evidence from timestamped samples", () => {
   const samples: ActivitySample[] = Array.from({ length: 1201 }, (_, second) => ({
@@ -80,6 +81,27 @@ test("Zwift route suite offers three distinct time commitments with FTP-based ta
   assert.deepEqual(suite.map((suggestion) => suggestion.targetWatts), ["152–176 W", "152–176 W", "152–176 W"]);
   assert.equal(suite.find((suggestion) => suggestion.recommended)?.commitment, 60);
   assert.ok(suite.every((suggestion) => suggestion.route.world === "Watopia"));
+});
+
+test("Zwift route suite uses both guest worlds in today's rotation", () => {
+  const suite = recommendZwiftRoutes("endurance", 200, ["Watopia", "Paris", "France"]);
+  assert.deepEqual(suite.map((suggestion) => suggestion.route.world), ["Paris", "France", "Watopia"]);
+  assert.deepEqual(suite.map((suggestion) => suggestion.route.name), ["Lutece Express", "Douce France", "Big Flat 8"]);
+  assert.ok(suite.every((suggestion) => suggestion.reason.includes("available in today's rotation")));
+});
+
+test("parses the guest worlds for a calendar day", () => {
+  const html = `
+    <td class="spiffy-day-7 current-day day-with-date">
+      <span class="spiffy-title">Paris</span>
+      <span class="spiffy-title">France</span>
+    </td>`;
+  assert.deepEqual(parseGuestWorldsFromSchedule(html, { year: 2026, month: 8, day: 7 }), ["Paris", "France"]);
+});
+
+test("has a current-month fallback when the live calendar is unavailable", () => {
+  assert.deepEqual(fallbackGuestWorlds({ year: 2026, month: 8, day: 12 }), ["Makuri Islands", "Scotland"]);
+  assert.deepEqual(fallbackGuestWorlds({ year: 2026, month: 9, day: 1 }), []);
 });
 
 test("rest guardrail pauses every route choice", () => {
