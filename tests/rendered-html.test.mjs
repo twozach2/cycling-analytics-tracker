@@ -50,10 +50,12 @@ test("removes starter preview metadata and dependencies", async () => {
   assert.doesNotMatch(packageJson, /react-loading-skeleton/);
   assert.match(dashboard, /label: "Plan today"/);
   assert.match(dashboard, /Zwift route match/);
-  assert.match(dashboard, /All 10 workout-accessible Zwift worlds are in the deck/);
+  assert.match(dashboard, /All 10 workout-accessible worlds are in the deck/);
+  assert.match(dashboard, /30 min ±10, 60 min ±15, and 90 min ±15/);
   assert.match(dashboard, /Any-world mode/);
   assert.match(dashboard, /Shuffle routes/);
   assert.match(dashboard, /workout access/);
+  assert.match(dashboard, /Recent routes stay out of the next six deals/);
   assert.match(dashboard, /World calendar/);
   assert.match(dashboard, /official Zwift map/i);
   assert.match(dashboard, /\/zwift-routes\//);

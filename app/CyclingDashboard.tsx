@@ -1085,6 +1085,7 @@ function PlanToday({ rides, recovery, setRecovery, recoverySaveState, saveRecove
   const [selectedRouteId, setSelectedRouteId] = useState<string | null>(null);
   const [worldRotation, setWorldRotation] = useState<ZwiftRotation | null>(null);
   const [routeShuffleIndex, setRouteShuffleIndex] = useState(0);
+  const [recentRouteIds, setRecentRouteIds] = useState<string[]>([]);
 
   const loadInsights = async () => {
     const response = await fetch("/api/phase3", { cache: "no-store" });
@@ -1210,7 +1211,7 @@ function PlanToday({ rides, recovery, setRecovery, recoverySaveState, saveRecove
   const planningInput = { readinessScore: readiness.score, kneePain: recovery.kneePain ?? 0, acuteChronicRatio: loadRatio, recentHardSessions: block(7, 0).rides ? rides.filter((ride) => (ride.type === "Tempo" || ride.type === "Threshold") && Date.parse(ride.date) > anchorMs - (7 * dayMs)).length : 0 };
   const workout = recommendWorkout(planningInput);
   const availableWorlds = worldRotation?.availableWorlds ?? ["Watopia"];
-  const routeSuite = recommendZwiftRoutes(workout.mode, currentFtp, ZWIFT_WORLDS, routeShuffleIndex);
+  const routeSuite = recommendZwiftRoutes(workout.mode, currentFtp, ZWIFT_WORLDS, routeShuffleIndex, recentRouteIds);
   const selectedRoute = routeSuite.find((suggestion) => suggestion.route.id === selectedRouteId)
     ?? routeSuite.find((suggestion) => suggestion.recommended)
     ?? routeSuite[0];
@@ -1239,13 +1240,18 @@ function PlanToday({ rides, recovery, setRecovery, recoverySaveState, saveRecove
 
       <section className="route-suite panel full-width">
         <div className="section-heading route-suite-heading">
-          <div><span className="eyebrow">Zwift route match</span><h2>Choose the time—and scenery—you want</h2><p>All 10 workout-accessible Zwift worlds are in the deck. The timer is the commitment; finishing the route is optional.</p></div>
+          <div><span className="eyebrow">Zwift route match</span><h2>Choose the time—and scenery—you want</h2><p>All 10 workout-accessible worlds are in the deck. Route windows: 30 min ±10, 60 min ±15, and 90 min ±15. Estimates use distance and climbing—not a promised finish time.</p></div>
           <span className={`small-badge ${workout.mode === "rest" ? "paused" : ""}`}>{workout.mode === "rest" ? "paused by rest guardrail" : "30 · 60 · 90 min"}</span>
         </div>
 
         <div className="route-deck" aria-live="polite">
-          <span className="route-deck-copy"><small>Any-world mode</small><strong>{ZWIFT_WORLDS.length} workout-accessible worlds · {ZWIFT_ROUTE_COUNT} curated routes</strong><em>In rotation now: {availableWorlds.join(" · ")}. For another suggested world, enter it through a workout.</em></span>
-          <button type="button" className="route-shuffle" onClick={() => { setSelectedRouteId(null); setRouteShuffleIndex((value) => value + 1); }}><span aria-hidden="true">↻</span> Shuffle routes</button>
+          <span className="route-deck-copy"><small>Any-world mode</small><strong>{ZWIFT_WORLDS.length} workout-accessible worlds · {ZWIFT_ROUTE_COUNT} curated routes</strong><em>In rotation now: {availableWorlds.join(" · ")}. Other suggestions are reachable through a workout. Recent routes stay out of the next six deals.</em></span>
+          <button type="button" className="route-shuffle" onClick={() => {
+            const visibleRouteIds = routeSuite.map((suggestion) => suggestion.route.id);
+            setRecentRouteIds((current) => [...new Set([...visibleRouteIds, ...current])].slice(0, 18));
+            setSelectedRouteId(null);
+            setRouteShuffleIndex((value) => value + 1);
+          }}><span aria-hidden="true">↻</span> Shuffle routes</button>
         </div>
 
         {workout.mode === "rest" && <div className="route-guardrail"><strong>Routes are on hold today.</strong><span>Update the recovery check-in when you feel ready; the choices will unlock when the plan no longer calls for complete rest.</span></div>}
@@ -1264,7 +1270,7 @@ function PlanToday({ rides, recovery, setRecovery, recoverySaveState, saveRecove
                 onClick={() => setSelectedRouteId(suggestion.route.id)}
               >
                 <span className="route-choice-head">
-                  <span><small>{suggestion.commitment} minutes · {suggestion.route.profile}</small><strong>{suggestion.route.name}</strong></span>
+                  <span><small>{suggestion.commitment} min target · ~{suggestion.estimatedMinutes} min route</small><strong>{suggestion.route.name}</strong></span>
                   <em>{suggestion.recommended ? "Best fit" : isSelected ? "Selected" : "Option"}</em>
                 </span>
 
@@ -1291,7 +1297,7 @@ function PlanToday({ rides, recovery, setRecovery, recoverySaveState, saveRecove
         </div>
 
         <div className="route-suite-footer">
-          <span>{workout.mode === "rest" ? "Rest remains today's recommendation." : <><strong>Selected:</strong> {selectedRoute.route.name} · {selectedRoute.commitment} min · {selectedRoute.targetWatts}</>}</span>
+          <span>{workout.mode === "rest" ? "Rest remains today's recommendation." : <><strong>Selected:</strong> {selectedRoute.route.name} · ~{selectedRoute.estimatedMinutes} min · {selectedRoute.targetWatts}</>}</span>
           <span className="route-source-links"><a href="https://support.zwift.com/zwift-worlds-and-cycling-routes-rk3PMBUht" target="_blank" rel="noreferrer">Official route details ↗</a><a href={worldRotation?.sourceUrl ?? "https://zwiftinsider.com/schedule/"} target="_blank" rel="noreferrer">World calendar ↗</a></span>
         </div>
       </section>

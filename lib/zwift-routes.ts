@@ -27,15 +27,28 @@ export type ZwiftRoute = {
   profile: "flat" | "rolling" | "climb";
 };
 
+export type RouteTimeWindow = {
+  minimumMinutes: number;
+  maximumMinutes: number;
+};
+
 export type ZwiftRouteSuggestion = {
   commitment: RouteCommitment;
   route: ZwiftRoute;
+  estimatedMinutes: number;
+  timeWindow: RouteTimeWindow;
   targetWatts: string;
   heartRateCue: string;
   reason: string;
   timingCue: string;
   recommended: boolean;
   disabled: boolean;
+};
+
+export const ROUTE_TIME_WINDOWS: Record<RouteCommitment, RouteTimeWindow> = {
+  30: { minimumMinutes: 20, maximumMinutes: 40 },
+  60: { minimumMinutes: 45, maximumMinutes: 75 },
+  90: { minimumMinutes: 75, maximumMinutes: 105 },
 };
 
 const route = (
@@ -58,77 +71,86 @@ const routes: Record<string, ZwiftRoute> = {
   "hilly-route": route("hilly-route", "Hilly Route", "Watopia", 5.8, 359, 180, "rolling"),
   "volcano-climb": route("volcano-climb", "Volcano Climb", "Watopia", 14.3, 669, 460, "climb"),
   "triple-flat-loops": route("triple-flat-loops", "Triple Flat Loops", "Watopia", 21.1, 514, 680, "rolling"),
+  "watopia-flat-route": route("watopia-flat-route", "Flat Route", "Watopia", 6.7, 200, 200, "flat"),
+  "sand-and-sequoias": route("sand-and-sequoias", "Sand and Sequoias", "Watopia", 14, 594, 400, "rolling"),
+  "watopia-figure-8": route("watopia-figure-8", "Figure 8", "Watopia", 18.7, 837, 580, "rolling"),
+  "watopia-figure-8-reverse": route("watopia-figure-8-reverse", "Figure 8 Reverse", "Watopia", 18.5, 833, 580, "rolling"),
+  "watopia-mountain-route": route("watopia-mountain-route", "Mountain Route", "Watopia", 18.8, 2244, 580, "climb"),
+  "road-to-sky": route("road-to-sky", "Road to Sky", "Watopia", 11.1, 3448, 380, "climb"),
 
   "france-croissant": route("france-croissant", "Croissant", "France", 7.7, 230, 185, "flat"),
   "france-douce-france": route("france-douce-france", "Douce France", "France", 15.4, 446, 465, "rolling"),
   "france-three-musketeers": route("france-three-musketeers", "Three Musketeers", "France", 22.2, 656, 705, "rolling"),
+  "france-petite-douleur": route("france-petite-douleur", "Petite Douleur", "France", 8.6, 1266, 280, "climb"),
+  "france-casse-pattes": route("france-casse-pattes", "Casse-Pattes", "France", 14.8, 509, 460, "rolling"),
+  "france-rgv": route("france-rgv", "R.G.V.", "France", 15.5, 436, 480, "flat"),
+  "france-roule-ma-poule": route("france-roule-ma-poule", "Roule Ma Poule", "France", 16.1, 863, 460, "rolling"),
+  "france-la-reine": route("france-la-reine", "La Reine", "France", 14, 3940, 460, "climb"),
 
   "innsbruck-innsbruckring": route("innsbruck-innsbruckring", "Innsbruckring", "Innsbruck", 5.7, 256, 170, "rolling"),
   "innsbruck-2018-worlds-short-lap": route("innsbruck-2018-worlds-short-lap", "2018 Worlds Short Lap", "Innsbruck", 14.9, 1627, 480, "climb"),
   "innsbruck-kom-after-party": route("innsbruck-kom-after-party", "Innsbruck KOM After Party", "Innsbruck", 23, 2156, 735, "climb"),
+  "innsbruck-lutscher": route("innsbruck-lutscher", "Lutscher", "Innsbruck", 15.3, 2720, 270, "climb"),
+  "innsbruck-lutscher-ccw": route("innsbruck-lutscher-ccw", "Lutscher CCW", "Innsbruck", 14.1, 2713, 270, "climb"),
 
   "london-classique": route("london-classique", "London Classique", "London", 3.7, 82, 110, "flat"),
   "london-greater-london-flat": route("london-greater-london-flat", "Greater London Flat", "London", 7.3, 174, 230, "flat"),
   "london-calling": route("london-calling", "London Calling", "London", 19.4, 682, 620, "rolling"),
+  "london-flat": route("london-flat", "London Flat", "London", 7.5, 381, 240, "rolling"),
+  "london-loop": route("london-loop", "London Loop", "London", 9.5, 771, 300, "climb"),
+  "london-8": route("london-8", "London 8", "London", 12.7, 846, 410, "rolling"),
+  "london-greater-london-loop": route("london-greater-london-loop", "Greater London Loop", "London", 13.4, 850, 420, "rolling"),
+  "london-greatest-london-flat": route("london-greatest-london-flat", "Greatest London Flat", "London", 15, 554, 500, "rolling"),
 
   "makuri-electric-loop": route("makuri-electric-loop", "Electric Loop", "Makuri Islands", 5.6, 141, 180, "flat"),
   "makuri-neon-flats": route("makuri-neon-flats", "Neon Flats", "Makuri Islands", 9.2, 236, 290, "flat"),
   "makuri-chasing-the-sun": route("makuri-chasing-the-sun", "Chasing the Sun", "Makuri Islands", 21.8, 1037, 700, "rolling"),
+  "makuri-sleepless-city": route("makuri-sleepless-city", "Sleepless City", "Makuri Islands", 5.9, 141, 190, "flat"),
+  "makuri-two-village-loop": route("makuri-two-village-loop", "Two Village Loop", "Makuri Islands", 8, 289, 255, "flat"),
+  "makuri-red-zone-repeats": route("makuri-red-zone-repeats", "Red Zone Repeats", "Makuri Islands", 12.1, 285, 390, "flat"),
+  "makuri-neokyo-all-nighter": route("makuri-neokyo-all-nighter", "Neokyo All-Nighter", "Makuri Islands", 15.1, 551, 490, "rolling"),
+  "makuri-neon-shore-loop": route("makuri-neon-shore-loop", "Neon Shore Loop", "Makuri Islands", 20.5, 846, 660, "rolling"),
+  "makuri-country-to-coastal": route("makuri-country-to-coastal", "Country to Coastal", "Makuri Islands", 20.8, 919, 665, "rolling"),
 
   "new-york-the-6-train": route("new-york-the-6-train", "The 6 Train", "New York", 4.4, 230, 130, "rolling"),
   "new-york-spinfinity": route("new-york-spinfinity", "Spinfinity", "New York", 12.1, 509, 390, "rolling"),
   "new-york-the-greenway": route("new-york-the-greenway", "The Greenway", "New York", 22.8, 968, 805, "rolling"),
+  "new-york-gotham-grind": route("new-york-gotham-grind", "Gotham Grind", "New York", 5.8, 315, 190, "rolling"),
+  "new-york-astoria-line-8": route("new-york-astoria-line-8", "Astoria Line 8", "New York", 7.6, 509, 230, "rolling"),
+  "new-york-empire-elevation": route("new-york-empire-elevation", "Empire Elevation", "New York", 15, 873, 485, "rolling"),
+  "new-york-stay-puft-pursuit": route("new-york-stay-puft-pursuit", "Stay Puft Pursuit", "New York", 19.5, 1365, 625, "rolling"),
+  "new-york-spinfinity-ultra": route("new-york-spinfinity-ultra", "Spinfinity Ultra", "New York", 22.1, 955, 710, "rolling"),
 
   "paris-lutece-express": route("paris-lutece-express", "Lutece Express", "Paris", 6.1, 210, 140, "flat"),
   "paris-cirque-du-suffer": route("paris-cirque-du-suffer", "Cirque du Suffer", "Paris", 13, 95, 415, "flat"),
   "paris-montmartre-mixer": route("paris-montmartre-mixer", "Montmartre Mixer", "Paris", 15.6, 623, 505, "rolling"),
+  "paris-champs-elysees": route("paris-champs-elysees", "Champs-Élysées", "Paris", 6.1, 171, 140, "flat"),
 
   "richmond-fan-flats": route("richmond-fan-flats", "Fan Flats", "Richmond", 4.7, 112, 150, "flat"),
   "richmond-uci-worlds": route("richmond-uci-worlds", "UCI Worlds", "Richmond", 10.3, 528, 330, "rolling"),
   "richmond-libby-hill-after-party": route("richmond-libby-hill-after-party", "Libby Hill After Party", "Richmond", 20.4, 525, 655, "rolling"),
+  "richmond-cobbled-climbs": route("richmond-cobbled-climbs", "Cobbled Climbs", "Richmond", 5.9, 449, 180, "climb"),
+  "richmond-cobbled-crown": route("richmond-cobbled-crown", "Cobbled Crown", "Richmond", 14.9, 945, 480, "rolling"),
 
   "scotland-loch-loop": route("scotland-loch-loop", "Loch Loop", "Scotland", 5, 233, 160, "rolling"),
   "scotland-rolling-highlands": route("scotland-rolling-highlands", "Rolling Highlands", "Scotland", 8.7, 344, 280, "rolling"),
   "scotland-the-muckle-yin": route("scotland-the-muckle-yin", "The Muckle Yin", "Scotland", 14.6, 925, 470, "climb"),
+  "scotland-the-epiloch": route("scotland-the-epiloch", "The Epiloch", "Scotland", 5, 308, 160, "rolling"),
+  "scotland-city-and-the-sgurr": route("scotland-city-and-the-sgurr", "City and the Sgurr", "Scotland", 5.2, 545, 120, "climb"),
+  "scotland-braek-fast": route("scotland-braek-fast", "BRAEk-fast Crits and Grits", "Scotland", 13.7, 856, 415, "rolling"),
 
   "yorkshire-duchy-estate": route("yorkshire-duchy-estate", "Duchy Estate", "Yorkshire", 3, 230, 60, "rolling"),
   "yorkshire-harrogate-circuit": route("yorkshire-harrogate-circuit", "Harrogate Circuit", "Yorkshire", 8.6, 804, 270, "climb"),
   "yorkshire-double-loop": route("yorkshire-double-loop", "Yorkshire Double Loop", "Yorkshire", 18.4, 1795, 590, "climb"),
+  "yorkshire-queens-highway": route("yorkshire-queens-highway", "Queen's Highway", "Yorkshire", 3.4, 272, 60, "rolling"),
+  "yorkshire-tour-of-tewit-well": route("yorkshire-tour-of-tewit-well", "Tour of Tewit Well", "Yorkshire", 6.9, 673, 210, "climb"),
+  "yorkshire-queens-highway-after-party": route("yorkshire-queens-highway-after-party", "Queen's Highway After Party", "Yorkshire", 12.3, 988, 340, "climb"),
+  "yorkshire-royal-pump-room-8": route("yorkshire-royal-pump-room-8", "Royal Pump Room 8", "Yorkshire", 17.4, 1611, 550, "climb"),
 };
 
-export const ZWIFT_ROUTE_COUNT = Object.keys(routes).length;
-
-const anyWorldDeck: ZwiftWorld[] = [
-  "Makuri Islands",
-  "Scotland",
-  "London",
-  "Paris",
-  "Yorkshire",
-  "New York",
-  "France",
-  "Innsbruck",
-  "Richmond",
-  "Watopia",
-];
-
-const watopiaRouteIdsByMode: Record<WorkoutMode, [string, string, string]> = {
-  rest: ["volcano-circuit", "volcano-flat", "tempus-fugit"],
-  recovery: ["volcano-circuit", "volcano-flat", "tempus-fugit"],
-  endurance: ["beach-island-loop", "tick-tock", "big-flat-8"],
-  tempo: ["hilly-route", "volcano-climb", "triple-flat-loops"],
-};
-
-const guestRouteIds: Record<Exclude<ZwiftWorld, "Watopia">, [string, string, string]> = {
-  France: ["france-croissant", "france-douce-france", "france-three-musketeers"],
-  Innsbruck: ["innsbruck-innsbruckring", "innsbruck-2018-worlds-short-lap", "innsbruck-kom-after-party"],
-  London: ["london-classique", "london-greater-london-flat", "london-calling"],
-  "Makuri Islands": ["makuri-electric-loop", "makuri-neon-flats", "makuri-chasing-the-sun"],
-  "New York": ["new-york-the-6-train", "new-york-spinfinity", "new-york-the-greenway"],
-  Paris: ["paris-lutece-express", "paris-cirque-du-suffer", "paris-montmartre-mixer"],
-  Richmond: ["richmond-fan-flats", "richmond-uci-worlds", "richmond-libby-hill-after-party"],
-  Scotland: ["scotland-loch-loop", "scotland-rolling-highlands", "scotland-the-muckle-yin"],
-  Yorkshire: ["yorkshire-duchy-estate", "yorkshire-harrogate-circuit", "yorkshire-double-loop"],
-};
+const routeList = Object.values(routes);
+export const ZWIFT_ROUTE_CATALOG: readonly ZwiftRoute[] = routeList;
+export const ZWIFT_ROUTE_COUNT = routeList.length;
 
 const commitments: RouteCommitment[] = [30, 60, 90];
 
@@ -137,12 +159,6 @@ const intensity: Record<WorkoutMode, { low: number; high: number; heartRateCue: 
   recovery: { low: 0.5, high: 0.6, heartRateCue: "Easy breathing · RPE 2–3" },
   endurance: { low: 0.6, high: 0.72, heartRateCue: "Conversational · RPE 3–4" },
   tempo: { low: 0.76, high: 0.88, heartRateCue: "Controlled rise · RPE 6–7" },
-};
-
-const timingCues: Record<RouteCommitment, string> = {
-  30: "Stop at 30 min; completing the route is optional.",
-  60: "Use the route as structure and cool down at 60 min.",
-  90: "Continue or add easy riding to reach the 90-min cap.",
 };
 
 const modeReason: Record<WorkoutMode, Record<ZwiftRoute["profile"], string>> = {
@@ -154,7 +170,7 @@ const modeReason: Record<WorkoutMode, Record<ZwiftRoute["profile"], string>> = {
   recovery: {
     flat: "Flat terrain keeps the focus on smooth, quiet pedaling and makes it easy to stop on time.",
     rolling: "Gentle terrain variation without turning this into a workout; stay easy on every rise.",
-    climb: "This world is in rotation, but keep gearing light and turn around before the climb drives intensity.",
+    climb: "Keep gearing light and turn around before the climb drives intensity above recovery effort.",
   },
   endurance: {
     flat: "Steady terrain makes it easier to hold an even aerobic effort without unnecessary surges.",
@@ -168,17 +184,48 @@ const modeReason: Record<WorkoutMode, Record<ZwiftRoute["profile"], string>> = {
   },
 };
 
+const profilePenalty: Record<WorkoutMode, Record<ZwiftRoute["profile"], number>> = {
+  rest: { flat: 0, rolling: 0.2, climb: 0.7 },
+  recovery: { flat: 0, rolling: 0.2, climb: 0.65 },
+  endurance: { flat: 0.1, rolling: 0, climb: 0.2 },
+  tempo: { flat: 0.28, rolling: 0, climb: 0.08 },
+};
+
 function isZwiftWorld(value: string): value is ZwiftWorld {
   return (ZWIFT_WORLDS as readonly string[]).includes(value);
 }
 
-function worldsForSuite(worldPool: readonly string[], shuffleIndex: number): [ZwiftWorld, ZwiftWorld, ZwiftWorld] {
-  const allowed = new Set(worldPool.filter(isZwiftWorld));
-  const normalized = anyWorldDeck.filter((world) => allowed.has(world));
-  const deck = normalized.length ? normalized : anyWorldDeck;
-  const safeShuffleIndex = Number.isFinite(shuffleIndex) ? Math.max(0, Math.trunc(shuffleIndex)) : 0;
-  const offset = (safeShuffleIndex * commitments.length) % deck.length;
-  return commitments.map((_, index) => deck[(offset + index) % deck.length]) as [ZwiftWorld, ZwiftWorld, ZwiftWorld];
+export function estimateZwiftRouteMinutes(routeValue: ZwiftRoute): number {
+  const flatMinutes = (routeValue.distanceMiles / 17) * 60;
+  const climbingMinutes = routeValue.elevationFeet / 125;
+  return Math.ceil(flatMinutes + climbingMinutes);
+}
+
+function seededUnit(value: string): number {
+  let hash = 2166136261;
+  for (let index = 0; index < value.length; index += 1) {
+    hash ^= value.charCodeAt(index);
+    hash = Math.imul(hash, 16777619);
+  }
+  return (hash >>> 0) / 4294967295;
+}
+
+function rankRoute(
+  routeValue: ZwiftRoute,
+  mode: WorkoutMode,
+  commitment: RouteCommitment,
+  shuffleIndex: number,
+  recentWorldCounts: ReadonlyMap<ZwiftWorld, number>,
+): number {
+  const window = ROUTE_TIME_WINDOWS[commitment];
+  const estimate = estimateZwiftRouteMinutes(routeValue);
+  const center = (window.minimumMinutes + window.maximumMinutes) / 2;
+  const distancePenalty = Math.abs(estimate - center) / (window.maximumMinutes - window.minimumMinutes);
+  const recentWorldPenalty = Math.min(3, recentWorldCounts.get(routeValue.world) ?? 0) * 0.24;
+  return seededUnit(`${shuffleIndex}:${commitment}:${routeValue.id}`)
+    + profilePenalty[mode][routeValue.profile]
+    + (distancePenalty * 0.12)
+    + recentWorldPenalty;
 }
 
 export function recommendZwiftRoutes(
@@ -186,26 +233,58 @@ export function recommendZwiftRoutes(
   ftpWatts: number,
   worldPool: readonly string[] = ZWIFT_WORLDS,
   shuffleIndex = 0,
+  recentRouteIds: readonly string[] = [],
 ): ZwiftRouteSuggestion[] {
   const safeFtp = Number.isFinite(ftpWatts) && ftpWatts > 0 ? ftpWatts : 165;
   const watts = intensity[mode];
   const recommendedCommitment: RouteCommitment = mode === "recovery" || mode === "rest" ? 30 : 60;
-  const suggestionWorlds = worldsForSuite(worldPool, shuffleIndex);
+  const allowedWorlds = new Set(worldPool.filter(isZwiftWorld));
+  if (!allowedWorlds.size) ZWIFT_WORLDS.forEach((world) => allowedWorlds.add(world));
+  const recent = new Set(recentRouteIds);
+  const recentWorldCounts = new Map<ZwiftWorld, number>();
+  recentRouteIds.forEach((routeId) => {
+    const recentRoute = routes[routeId];
+    if (recentRoute) recentWorldCounts.set(recentRoute.world, (recentWorldCounts.get(recentRoute.world) ?? 0) + 1);
+  });
+  const selectedRouteIds = new Set<string>();
+  const selectedWorlds = new Set<ZwiftWorld>();
 
-  return suggestionWorlds.map((world, index) => {
-    const routeId = world === "Watopia"
-      ? watopiaRouteIdsByMode[mode][index]
-      : guestRouteIds[world][index];
-    const selectedRoute = routes[routeId];
+  return commitments.map((commitment) => {
+    const window = ROUTE_TIME_WINDOWS[commitment];
+    const inWindow = routeList.filter((routeValue) => {
+      const estimate = estimateZwiftRouteMinutes(routeValue);
+      return allowedWorlds.has(routeValue.world)
+        && estimate >= window.minimumMinutes
+        && estimate <= window.maximumMinutes;
+    });
+    const routePools = [
+      inWindow.filter((routeValue) => !recent.has(routeValue.id) && !selectedWorlds.has(routeValue.world)),
+      inWindow.filter((routeValue) => !recent.has(routeValue.id)),
+      inWindow.filter((routeValue) => !selectedWorlds.has(routeValue.world)),
+      inWindow,
+      routeList.filter((routeValue) => allowedWorlds.has(routeValue.world)),
+    ];
+    const candidatePool = routePools.find((pool) => pool.some((routeValue) => !selectedRouteIds.has(routeValue.id))) ?? routeList;
+    const selectedRoute = [...candidatePool]
+      .filter((routeValue) => !selectedRouteIds.has(routeValue.id))
+      .sort((a, b) => (
+        rankRoute(a, mode, commitment, shuffleIndex, recentWorldCounts)
+          - rankRoute(b, mode, commitment, shuffleIndex, recentWorldCounts)
+      ))[0];
+    const estimatedMinutes = estimateZwiftRouteMinutes(selectedRoute);
+    selectedRouteIds.add(selectedRoute.id);
+    selectedWorlds.add(selectedRoute.world);
 
     return {
-      commitment: commitments[index],
+      commitment,
       route: selectedRoute,
+      estimatedMinutes,
+      timeWindow: window,
       targetWatts: `${Math.round(safeFtp * watts.low)}–${Math.round(safeFtp * watts.high)} W`,
       heartRateCue: watts.heartRateCue,
       reason: `${selectedRoute.world} brings a change of scenery. ${modeReason[mode][selectedRoute.profile]}`,
-      timingCue: timingCues[commitments[index]],
-      recommended: commitments[index] === recommendedCommitment,
+      timingCue: `Estimated ${estimatedMinutes} min · fits the ${window.minimumMinutes}–${window.maximumMinutes} min route window.`,
+      recommended: commitment === recommendedCommitment,
       disabled: mode === "rest",
     };
   });

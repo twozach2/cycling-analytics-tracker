@@ -1,8 +1,9 @@
 import assert from "node:assert/strict";
+import { access } from "node:fs/promises";
 import test from "node:test";
 import { derivePowerDuration, deriveStreamMetrics, type ActivitySample } from "../lib/activity-parser.ts";
 import { buildWeeklyPlan, predictFtp, projectFtpGoal, recommendWorkout } from "../lib/phase3.ts";
-import { recommendZwiftRoutes, ZWIFT_WORLDS } from "../lib/zwift-routes.ts";
+import { recommendZwiftRoutes, ROUTE_TIME_WINDOWS, ZWIFT_ROUTE_CATALOG, ZWIFT_ROUTE_COUNT, ZWIFT_WORLDS } from "../lib/zwift-routes.ts";
 import { fallbackGuestWorlds, parseGuestWorldsFromSchedule } from "../lib/zwift-world-rotation.ts";
 
 test("derives rolling power evidence from timestamped samples", () => {
@@ -74,34 +75,46 @@ test("pain makes workout guidance and the generated week cautious", () => {
   assert.equal(buildWeeklyPlan(input)[0].session, "Rest + mobility");
 });
 
-test("Zwift route suite offers three distinct time commitments with FTP-based targets", () => {
+test("Zwift route suite uses the requested time windows and FTP-based targets", () => {
   const suite = recommendZwiftRoutes("tempo", 200);
   assert.deepEqual(suite.map((suggestion) => suggestion.commitment), [30, 60, 90]);
   assert.equal(new Set(suite.map((suggestion) => suggestion.route.id)).size, 3);
   assert.deepEqual(suite.map((suggestion) => suggestion.targetWatts), ["152–176 W", "152–176 W", "152–176 W"]);
   assert.equal(suite.find((suggestion) => suggestion.recommended)?.commitment, 60);
-  assert.deepEqual(suite.map((suggestion) => suggestion.route.world), ["Makuri Islands", "Scotland", "London"]);
+  assert.equal(ZWIFT_ROUTE_COUNT, 75);
+  assert.ok(suite.every((suggestion) => (
+    suggestion.estimatedMinutes >= ROUTE_TIME_WINDOWS[suggestion.commitment].minimumMinutes
+      && suggestion.estimatedMinutes <= ROUTE_TIME_WINDOWS[suggestion.commitment].maximumMinutes
+  )));
 });
 
 test("Zwift route suite can be limited to a supplied world pool", () => {
   const suite = recommendZwiftRoutes("endurance", 200, ["Watopia", "Paris", "France"]);
-  assert.deepEqual(suite.map((suggestion) => suggestion.route.world), ["Paris", "France", "Watopia"]);
-  assert.deepEqual(suite.map((suggestion) => suggestion.route.name), ["Lutece Express", "Douce France", "Big Flat 8"]);
+  assert.ok(suite.every((suggestion) => ["Watopia", "Paris", "France"].includes(suggestion.route.world)));
   assert.ok(suite.every((suggestion) => suggestion.reason.includes("change of scenery")));
 });
 
-test("shuffling deals three new worlds without duplicates", () => {
-  const firstDeal = recommendZwiftRoutes("endurance", 200, undefined, 0);
-  const secondDeal = recommendZwiftRoutes("endurance", 200, undefined, 1);
-  const firstWorlds = firstDeal.map((suggestion) => suggestion.route.world);
-  const secondWorlds = secondDeal.map((suggestion) => suggestion.route.world);
-  assert.equal(new Set(firstWorlds).size, 3);
-  assert.equal(new Set(secondWorlds).size, 3);
-  assert.ok(secondWorlds.every((world) => !firstWorlds.includes(world)));
-  const worldsSeenAcrossFourDeals = new Set(Array.from({ length: 4 }, (_, index) => (
-    recommendZwiftRoutes("endurance", 200, undefined, index).map((suggestion) => suggestion.route.world)
-  )).flat());
-  assert.deepEqual([...worldsSeenAcrossFourDeals].sort(), [...ZWIFT_WORLDS].sort());
+test("shuffling avoids recent routes while exposing the full world catalog", () => {
+  let recentRouteIds: string[] = [];
+  const seenRouteIds = new Set<string>();
+  const seenWorlds = new Set<string>();
+  for (let index = 0; index < 12; index += 1) {
+    const deal = recommendZwiftRoutes("endurance", 200, undefined, index, recentRouteIds);
+    const routeIds = deal.map((suggestion) => suggestion.route.id);
+    assert.ok(routeIds.every((routeId) => !recentRouteIds.includes(routeId)));
+    assert.equal(new Set(deal.map((suggestion) => suggestion.route.world)).size, 3);
+    routeIds.forEach((routeId) => seenRouteIds.add(routeId));
+    deal.forEach((suggestion) => seenWorlds.add(suggestion.route.world));
+    recentRouteIds = [...new Set([...routeIds, ...recentRouteIds])].slice(0, 18);
+  }
+  assert.ok(seenRouteIds.size >= 24);
+  assert.deepEqual([...seenWorlds].sort(), [...ZWIFT_WORLDS].sort());
+});
+
+test("every curated route has an official map asset", async () => {
+  await Promise.all(ZWIFT_ROUTE_CATALOG.map((route) => (
+    access(new URL(`../public/zwift-routes/${route.id}.png`, import.meta.url))
+  )));
 });
 
 test("parses the guest worlds for a calendar day", () => {
