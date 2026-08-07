@@ -79,17 +79,26 @@ export type PlanningInput = {
   recentHardSessions: number;
 };
 
-export function recommendWorkout(input: PlanningInput) {
+export type WorkoutMode = "rest" | "recovery" | "endurance" | "tempo";
+
+export type WorkoutRecommendation = {
+  mode: WorkoutMode;
+  primary: string;
+  detail: string;
+  avoid: string;
+};
+
+export function recommendWorkout(input: PlanningInput): WorkoutRecommendation {
   if (input.kneePain >= 3) {
-    return { primary: "Rest or pain-free recovery spin", detail: "No intensity while knee symptoms are elevated.", avoid: "Intervals and forceful low-cadence work" };
+    return { mode: "rest", primary: "Rest or pain-free recovery spin", detail: "No intensity while knee symptoms are elevated.", avoid: "Intervals and forceful low-cadence work" };
   }
   if (input.readinessScore < 40 || (input.acuteChronicRatio ?? 0) > 1.5) {
-    return { primary: "Complete rest", detail: "Let fatigue settle, then reassess the morning check-in.", avoid: "Adding load to rescue the week" };
+    return { mode: "rest", primary: "Complete rest", detail: "Let fatigue settle, then reassess the morning check-in.", avoid: "Adding load to rescue the week" };
   }
   if (input.readinessScore < 70 || input.recentHardSessions >= 2) {
-    return { primary: "Easy Zone 1–2 · 30–50 min", detail: "Conversational effort with smooth 85–90 rpm cadence.", avoid: "Threshold or VO₂ work" };
+    return { mode: "recovery", primary: "Easy Zone 1–2 · 30–50 min", detail: "Conversational effort with smooth 85–90 rpm cadence.", avoid: "Threshold or VO₂ work" };
   }
-  return { primary: "Tempo development · 3 × 10 min", detail: "Ride controlled tempo with five easy minutes between efforts.", avoid: "Turning the final interval into a maximal test" };
+  return { mode: "tempo", primary: "Tempo development · 3 × 10 min", detail: "Ride controlled tempo with five easy minutes between efforts.", avoid: "Turning the final interval into a maximal test" };
 }
 
 export function buildWeeklyPlan(input: PlanningInput) {

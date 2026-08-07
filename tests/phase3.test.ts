@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { derivePowerDuration, deriveStreamMetrics, type ActivitySample } from "../lib/activity-parser.ts";
 import { buildWeeklyPlan, predictFtp, projectFtpGoal, recommendWorkout } from "../lib/phase3.ts";
+import { recommendZwiftRoutes } from "../lib/zwift-routes.ts";
 
 test("derives rolling power evidence from timestamped samples", () => {
   const samples: ActivitySample[] = Array.from({ length: 1201 }, (_, second) => ({
@@ -68,5 +69,21 @@ test("goal projection presents three scenarios", () => {
 test("pain makes workout guidance and the generated week cautious", () => {
   const input = { readinessScore: 80, kneePain: 3, acuteChronicRatio: 1, recentHardSessions: 0 };
   assert.match(recommendWorkout(input).primary, /Rest|recovery/);
+  assert.equal(recommendWorkout(input).mode, "rest");
   assert.equal(buildWeeklyPlan(input)[0].session, "Rest + mobility");
+});
+
+test("Zwift route suite offers three distinct time commitments with FTP-based targets", () => {
+  const suite = recommendZwiftRoutes("tempo", 200);
+  assert.deepEqual(suite.map((suggestion) => suggestion.commitment), [30, 60, 90]);
+  assert.equal(new Set(suite.map((suggestion) => suggestion.route.id)).size, 3);
+  assert.deepEqual(suite.map((suggestion) => suggestion.targetWatts), ["152–176 W", "152–176 W", "152–176 W"]);
+  assert.equal(suite.find((suggestion) => suggestion.recommended)?.commitment, 60);
+  assert.ok(suite.every((suggestion) => suggestion.route.world === "Watopia"));
+});
+
+test("rest guardrail pauses every route choice", () => {
+  const suite = recommendZwiftRoutes("rest", 165);
+  assert.ok(suite.every((suggestion) => suggestion.disabled));
+  assert.equal(suite.find((suggestion) => suggestion.recommended)?.commitment, 30);
 });

@@ -9,6 +9,7 @@ import {
   type SubjectiveRecovery,
 } from "@/lib/metrics";
 import { buildWeeklyPlan, projectFtpGoal, recommendWorkout } from "@/lib/phase3";
+import { recommendZwiftRoutes } from "@/lib/zwift-routes";
 
 type View = "dashboard" | "plan" | "rides" | "import" | "method";
 type DataMode = "loading" | "demo" | "saved" | "unavailable";
@@ -1079,6 +1080,7 @@ function PlanToday({ rides, recovery, setRecovery, recoverySaveState, saveRecove
   const [ftpSaveState, setFtpSaveState] = useState<"idle" | "working" | "success" | "error">("idle");
   const [actionState, setActionState] = useState<"idle" | "working" | "success" | "error">("idle");
   const [actionMessage, setActionMessage] = useState("");
+  const [selectedRouteId, setSelectedRouteId] = useState<string | null>(null);
 
   const loadInsights = async () => {
     const response = await fetch("/api/phase3", { cache: "no-store" });
@@ -1191,6 +1193,10 @@ function PlanToday({ rides, recovery, setRecovery, recoverySaveState, saveRecove
   });
   const planningInput = { readinessScore: readiness.score, kneePain: recovery.kneePain ?? 0, acuteChronicRatio: loadRatio, recentHardSessions: block(7, 0).rides ? rides.filter((ride) => (ride.type === "Tempo" || ride.type === "Threshold") && Date.parse(ride.date) > anchorMs - (7 * dayMs)).length : 0 };
   const workout = recommendWorkout(planningInput);
+  const routeSuite = recommendZwiftRoutes(workout.mode, currentFtp);
+  const selectedRoute = routeSuite.find((suggestion) => suggestion.route.id === selectedRouteId)
+    ?? routeSuite.find((suggestion) => suggestion.recommended)
+    ?? routeSuite[0];
   const weeklyPlan = buildWeeklyPlan(planningInput);
   const prediction = insights?.prediction;
   const projectedFromFtp = prediction?.midpointWatts ?? currentFtp;
@@ -1212,6 +1218,68 @@ function PlanToday({ rides, recovery, setRecovery, recoverySaveState, saveRecove
       <section className="workout-card panel">
         <div className="section-heading"><div><span className="eyebrow">Why this choice</span><h2>Keep the guardrails visible</h2></div></div>
         <p>{workout.detail}</p><div className="avoid-strip"><span>Avoid today</span><strong>{workout.avoid}</strong></div>
+      </section>
+
+      <section className="route-suite panel full-width">
+        <div className="section-heading route-suite-heading">
+          <div><span className="eyebrow">Zwift route match</span><h2>Choose the time you actually have</h2><p>Three Watopia options matched to today&apos;s effort. The timer is the commitment; finishing the route is optional.</p></div>
+          <span className={`small-badge ${workout.mode === "rest" ? "paused" : ""}`}>{workout.mode === "rest" ? "paused by rest guardrail" : "30 · 60 · 90 min"}</span>
+        </div>
+
+        {workout.mode === "rest" && <div className="route-guardrail"><strong>Routes are on hold today.</strong><span>Update the recovery check-in when you feel ready; the choices will unlock when the plan no longer calls for complete rest.</span></div>}
+
+        <div className="route-choice-grid" role="radiogroup" aria-label="Choose a Zwift route by time commitment">
+          {routeSuite.map((suggestion) => {
+            const isSelected = selectedRoute.route.id === suggestion.route.id;
+            return (
+              <button
+                type="button"
+                key={`${suggestion.commitment}-${suggestion.route.id}`}
+                className={`route-choice ${isSelected ? "selected" : ""}`}
+                aria-pressed={isSelected}
+                disabled={suggestion.disabled}
+                onClick={() => setSelectedRouteId(suggestion.route.id)}
+              >
+                <span className="route-choice-head">
+                  <span><small>{suggestion.commitment} minutes</small><strong>{suggestion.route.name}</strong></span>
+                  <em>{suggestion.recommended ? "Best fit" : isSelected ? "Selected" : "Option"}</em>
+                </span>
+
+                <span className="route-schematic" aria-hidden="true">
+                  <span className="terrain terrain-a" />
+                  <span className="terrain terrain-b" />
+                  {suggestion.route.trace.map((segment, index) => <i key={index} style={{ left: `${segment.x}%`, top: `${segment.y}%`, width: `${segment.width}%`, transform: `rotate(${segment.angle}deg)` }} />)}
+                  <span className="route-pin start" />
+                  <span className="route-pin finish" />
+                  <span className="map-label">Schematic route trace</span>
+                </span>
+
+                <span className="route-facts">
+                  <span><small>World</small><strong>{suggestion.route.world}</strong></span>
+                  <span><small>Distance</small><strong>{suggestion.route.distanceMiles.toFixed(1)} mi</strong></span>
+                  <span><small>Climbing</small><strong>{suggestion.route.elevationFeet} ft</strong></span>
+                </span>
+
+                <span className="route-elevation-wrap">
+                  <span className="route-elevation-heading"><small>Elevation shape</small><em>{suggestion.route.profile}</em></span>
+                  <span className="route-elevation" aria-hidden="true">{suggestion.route.elevation.map((height, index) => <i key={index} style={{ height: `${height}%` }} />)}</span>
+                </span>
+
+                <span className="route-prescription">
+                  <span><small>Target power</small><strong>{suggestion.targetWatts}</strong></span>
+                  <span><small>Heart-rate cue</small><strong>{suggestion.heartRateCue}</strong></span>
+                </span>
+                <span className="route-reason">{suggestion.reason}</span>
+                <span className="route-time-cue">{suggestion.timingCue}</span>
+              </button>
+            );
+          })}
+        </div>
+
+        <div className="route-suite-footer">
+          <span>{workout.mode === "rest" ? "Rest remains today's recommendation." : <><strong>Selected:</strong> {selectedRoute.route.name} · {selectedRoute.commitment} min · {selectedRoute.targetWatts}</>}</span>
+          <a href="https://support.zwift.com/en_us/watopia-cycling-routes-ByIReYtcC" target="_blank" rel="noreferrer">Official Zwift route details ↗</a>
+        </div>
       </section>
 
       <section className="weekly-plan panel full-width">
