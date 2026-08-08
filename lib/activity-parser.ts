@@ -3,6 +3,7 @@ export type DetectedActivity = {
   startedAt: string;
   distanceMeters: number | null;
   movingTimeSeconds: number | null;
+  elapsedTimeSeconds: number | null;
   elevationGainMeters: number | null;
   averageHeartRate: number | null;
   maximumHeartRate: number | null;
@@ -13,6 +14,8 @@ export type DetectedActivity = {
   normalizedPower: number | null;
   sourceTrainingLoad: number | null;
   aerobicDecouplingPercent: number | null;
+  pairedSampleCount: number;
+  pairedCoveragePercent: number;
   variabilityIndex: number | null;
   cadenceStddev: number | null;
   cadenceTargetPercent: number | null;
@@ -23,6 +26,8 @@ export type DetectedActivity = {
   final15HeartRate: number | null;
   powerDuration: Array<{ durationSeconds: number; bestPowerWatts: number }>;
   sampleCount: number;
+  environment: "virtual" | "indoor" | "outdoor";
+  workoutSubtype: "trainer_workout" | "race" | null;
   warnings: string[];
 };
 
@@ -102,8 +107,8 @@ export function deriveStreamMetrics(samples: ActivitySample[]) {
     };
     const bucketEfficiencies = buckets.map((bucket) => bucket.length >= 4 ? efficiency(bucket) : null);
     const midpoint = Math.floor(bucketCount / 2);
-    const firstValues = bucketEfficiencies.slice(0, midpoint).filter((value): value is number => value !== null);
-    const secondValues = bucketEfficiencies.slice(midpoint).filter((value): value is number => value !== null);
+    const firstValues = bucketEfficiencies.slice(1, midpoint).filter((value): value is number => value !== null);
+    const secondValues = bucketEfficiencies.slice(midpoint, bucketCount - 1).filter((value): value is number => value !== null);
     const first = firstValues.length >= 3 ? median(firstValues) : null;
     const second = secondValues.length >= 3 ? median(secondValues) : null;
     if (first !== null && second !== null && first > 0) aerobicDecouplingPercent = round(((first - second) / first) * 100);
@@ -117,6 +122,8 @@ export function deriveStreamMetrics(samples: ActivitySample[]) {
 
   return {
     aerobicDecouplingPercent,
+    pairedSampleCount: paired.length,
+    pairedCoveragePercent: samples.length ? round((paired.length / samples.length) * 100) : 0,
     cadenceStddev: cadenceStddev === null ? null : round(cadenceStddev),
     cadenceTargetPercent: cadencePercent((value) => value >= 85 && value <= 90),
     cadenceAcceptablePercent: cadencePercent((value) => value >= 80 && value <= 95),
@@ -226,11 +233,13 @@ export function parseXmlActivity(xmlText: string, filename: string): DetectedAct
 
   const fileBase = filename.replace(/\.(gpx|tcx)$/i, "").replace(/[_-]+/g, " ");
   const streams = deriveStreamMetrics(samples);
+  const virtual = /\bzwift\b/i.test(xmlText);
   return {
     name: fileBase || "Imported ride",
     startedAt: firstTime !== null ? new Date(firstTime).toISOString() : "",
     distanceMeters: distance || null,
     movingTimeSeconds: duration,
+    elapsedTimeSeconds: duration,
     elevationGainMeters: elevationGain || null,
     averageHeartRate: average(samples.map((sample) => sample.heartRate)),
     maximumHeartRate: maximum(samples.map((sample) => sample.heartRate)),
@@ -244,6 +253,8 @@ export function parseXmlActivity(xmlText: string, filename: string): DetectedAct
     variabilityIndex: null,
     powerDuration: derivePowerDuration(samples),
     sampleCount: samples.length,
+    environment: virtual ? "virtual" : "outdoor",
+    workoutSubtype: null,
     warnings,
   };
 }
@@ -318,11 +329,15 @@ export async function parseFitActivity(buffer: ArrayBuffer, filename: string): P
   const averagePower = fitNumber(session?.avgPower) ?? average(powerValues);
   const normalizedPower = fitNumber(session?.normalizedPower);
   const streams = deriveStreamMetrics(recordSamples);
+  const subSport = String(session?.subSport ?? "").toLowerCase().replace(/[^a-z]/g, "");
+  const virtual = subSport.includes("virtual");
+  const indoor = virtual || subSport.includes("indoor");
   return {
     name: fileBase || "Imported FIT ride",
     startedAt: startedAt?.toISOString() ?? "",
     distanceMeters: fitNumber(session?.totalDistance) ?? (recordDistances.length ? Math.max(...recordDistances) : null),
     movingTimeSeconds: fitNumber(session?.totalTimerTime) ?? fitNumber(session?.totalMovingTime) ?? recordDuration,
+    elapsedTimeSeconds: fitNumber(session?.totalElapsedTime) ?? recordDuration,
     elevationGainMeters: fitNumber(session?.totalAscent) ?? (calculatedElevationGain || null),
     averageHeartRate: fitNumber(session?.avgHeartRate) ?? average(heartRateValues),
     maximumHeartRate: fitNumber(session?.maxHeartRate) ?? maximum(heartRateValues),
@@ -336,6 +351,8 @@ export async function parseFitActivity(buffer: ArrayBuffer, filename: string): P
     variabilityIndex: normalizedPower !== null && averagePower !== null && averagePower > 0 ? round(normalizedPower / averagePower, 2) : null,
     powerDuration: derivePowerDuration(recordSamples),
     sampleCount: records.length,
+    environment: virtual ? "virtual" : indoor ? "indoor" : "outdoor",
+    workoutSubtype: null,
     warnings,
   };
 }

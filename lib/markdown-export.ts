@@ -6,6 +6,8 @@ export type MarkdownRide = {
   type: string;
   source: string;
   indoor: boolean;
+  environment?: "virtual" | "indoor" | "outdoor";
+  workoutSubtype?: "trainer_workout" | "race" | null;
   distanceMiles: number;
   movingTimeSeconds: number;
   elevationFeet: number;
@@ -18,8 +20,13 @@ export type MarkdownRide = {
   maximumCadence: number;
   trainingLoad: number;
   intensityFactor: number;
+  ftpAtRideWatts?: number | null;
+  ftpSnapshotSource?: string | null;
   powerHeartRateRatio: number;
   decoupling: number | null;
+  decouplingEligible?: boolean;
+  decouplingEligibilityReason?: string;
+  stoppedPercent?: number | null;
   variabilityIndex: number | null;
   cadenceStddev?: number | null;
   cadenceTargetPercent?: number | null;
@@ -40,9 +47,9 @@ export type MethodDefinition = {
 
 export const METHOD_DEFINITIONS: readonly MethodDefinition[] = [
   { id: "01", title: "Power / HR ratio", formula: "average power ÷ average heart rate", note: "Contextual efficiency signal for comparable steady rides." },
-  { id: "02", title: "Intensity factor", formula: "normalized power ÷ FTP", note: "Average power is used only as an explicitly marked estimate." },
+  { id: "02", title: "Intensity factor", formula: "normalized power ÷ FTP at ride date", note: "Every ride keeps its own FTP snapshot; changing today's FTP does not rewrite historical IF or load." },
   { id: "03", title: "Training load", formula: "hours × intensity² × 100", note: "A transparent TSS-like load, not a licensed physiological diagnosis." },
-  { id: "04", title: "Aerobic decoupling", formula: "median interval efficiency · first half vs second half", note: "Ten equal-duration intervals reduce distortion from normal surges and coasting; variable rides remain directional." },
+  { id: "04", title: "Aerobic decoupling", formula: "median central-interval efficiency · first half vs second half", note: "Ten equal-duration intervals are formed, with warm-up and cooldown edge buckets excluded. Interpretation requires ≥45 minutes, VI ≤1.08, ≤5% stopped time, a non-workout effort, sufficient paired power/HR samples, and no outsized warm-up signal." },
   { id: "05", title: "Load ratio", formula: "7-day load ÷ 28-day weekly average", note: "A review signal for abrupt changes, never an exact injury threshold." },
   { id: "06", title: "Readiness", formula: "recovery time + load + check-in", note: "A weighted, explainable score. Pain caps the result and overrides hard-ride advice." },
   { id: "07", title: "FTP prediction", formula: "20–60 min best power × duration factor", note: "A conservative range from recorded efforts, with confidence tied to available evidence." },
@@ -117,6 +124,11 @@ export function buildCyclingMarkdown(
   if (!sortedRides.length) lines.push("No rides are currently available.", "");
 
   sortedRides.forEach((ride) => {
+    const environment = ride.environment === "virtual" ? "Virtual / Indoor" : ride.environment === "indoor" || (ride.environment === undefined && ride.indoor) ? "Indoor" : "Outdoor";
+    const workoutSubtype = ride.workoutSubtype === "trainer_workout" ? "Trainer Workout" : ride.workoutSubtype === "race" ? "Race" : "None";
+    const decoupling = ride.decouplingEligible && ride.decoupling !== null
+      ? `${finite(ride.decoupling, 1, false)}%`
+      : "Not suitable for interpretation";
     lines.push(
       `### ${clean(ride.date)} · ${clean(ride.name)}`,
       "",
@@ -124,7 +136,8 @@ export function buildCyclingMarkdown(
       `- Type: ${clean(ride.type)}`,
       `- Source: ${clean(ride.source)}`,
       `- Route/course: ${clean(ride.route)}`,
-      `- Environment: ${ride.indoor ? "Indoor" : "Outdoor"}`,
+      `- Environment: ${environment}`,
+      `- Workout subtype: ${workoutSubtype}`,
       `- Distance: ${finite(ride.distanceMiles, 1)} mi`,
       `- Moving time: ${duration(ride.movingTimeSeconds)}`,
       `- Elevation gain: ${finite(ride.elevationFeet)} ft`,
@@ -137,8 +150,12 @@ export function buildCyclingMarkdown(
       `- Maximum cadence: ${finite(ride.maximumCadence)} rpm`,
       `- Training load: ${finite(ride.trainingLoad)}`,
       `- Intensity factor: ${finite(ride.intensityFactor, 3)}`,
+      `- FTP at ride: ${finite(ride.ftpAtRideWatts)} W`,
+      `- FTP snapshot source: ${clean(ride.ftpSnapshotSource ?? "Not available")}`,
       `- Watts / heartbeat: ${finite(ride.powerHeartRateRatio, 3)}`,
-      `- Aerobic decoupling: ${finite(ride.decoupling, 1, false)}%`,
+      `- Aerobic decoupling: ${decoupling}`,
+      `- Decoupling eligibility: ${ride.decouplingEligible ? "Eligible" : `Not eligible — ${clean(ride.decouplingEligibilityReason ?? "Reason unavailable")}`}`,
+      `- Stopped time: ${finite(ride.stoppedPercent, 1, false)}%`,
       `- Variability index: ${finite(ride.variabilityIndex, 3)}`,
       `- Cadence standard deviation: ${finite(ride.cadenceStddev, 1)} rpm`,
       `- Cadence in 85–90 rpm target: ${finite(ride.cadenceTargetPercent, 1, false)}%`,

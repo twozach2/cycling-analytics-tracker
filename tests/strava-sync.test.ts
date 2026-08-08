@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { isCyclingActivity, parseReadBudget, sixMonthsBefore, syncAfterEpoch } from "../lib/strava-sync.ts";
+import { classifyStravaActivity, ftpSnapshotForRide, isCyclingActivity, parseReadBudget, sixMonthsBefore, syncAfterEpoch } from "../lib/strava-sync.ts";
 
 test("six-month imports use a calendar-aware cutoff", () => {
   assert.equal(sixMonthsBefore(new Date("2026-08-31T12:30:00Z")).toISOString(), "2026-02-28T12:30:00.000Z");
@@ -17,6 +17,29 @@ test("the cycling filter includes Strava ride variants", () => {
     assert.equal(isCyclingActivity({ sport_type }), true, sport_type);
   }
   assert.equal(isCyclingActivity({ sport_type: "Run" }), false);
+});
+
+test("Strava virtual and trainer rides are classified as indoor", () => {
+  assert.deepEqual(classifyStravaActivity({ sport_type: "VirtualRide", trainer: false }), {
+    environment: "virtual",
+    indoor: true,
+    workoutSubtype: null,
+  });
+  assert.deepEqual(classifyStravaActivity({ sport_type: "Ride", trainer: true, name: "ERG endurance workout" }), {
+    environment: "indoor",
+    indoor: true,
+    workoutSubtype: "trainer_workout",
+  });
+  assert.equal(classifyStravaActivity({ sport_type: "Ride" }).environment, "outdoor");
+});
+
+test("FTP snapshots use dated history and never fall forward to today's FTP", () => {
+  const history = [
+    { effectiveAt: "2026-07-01T00:00:00Z", ftpWatts: 160 },
+    { effectiveAt: "2026-08-01T00:00:00Z", ftpWatts: 165 },
+  ];
+  assert.deepEqual(ftpSnapshotForRide({ startedAt: "2026-07-15T12:00:00Z", history, currentFtpWatts: 180 }), { ftpWatts: 160, source: "ftp_history" });
+  assert.deepEqual(ftpSnapshotForRide({ startedAt: "2026-06-15T12:00:00Z", history, currentFtpWatts: 180, existingFtpWatts: 155, existingSource: "legacy_import" }), { ftpWatts: 155, source: "legacy_import" });
 });
 
 test("stream enrichment leaves headroom under Strava read limits", () => {

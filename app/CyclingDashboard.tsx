@@ -16,6 +16,8 @@ import type { ZwiftRotation } from "@/lib/zwift-world-rotation";
 
 type View = "dashboard" | "plan" | "rides" | "import" | "method";
 type DataMode = "loading" | "demo" | "saved" | "unavailable";
+type RideEnvironment = "virtual" | "indoor" | "outdoor";
+type WorkoutSubtype = "trainer_workout" | "race" | null;
 
 type Ride = {
   id: string;
@@ -27,6 +29,8 @@ type Ride = {
   type: "Zone 2" | "Zone 2 benchmark" | "Recovery" | "Tempo" | "Threshold" | "Free ride";
   source: "Strava" | "Zwift" | "Upload";
   indoor: boolean;
+  environment?: RideEnvironment;
+  workoutSubtype?: WorkoutSubtype;
   distanceMiles: number;
   movingTimeSeconds: number;
   elevationFeet: number;
@@ -39,8 +43,13 @@ type Ride = {
   maximumCadence: number;
   trainingLoad: number;
   intensityFactor: number;
+  ftpAtRideWatts?: number | null;
+  ftpSnapshotSource?: string | null;
   powerHeartRateRatio: number;
   decoupling: number | null;
+  decouplingEligible?: boolean;
+  decouplingEligibilityReason?: string;
+  stoppedPercent?: number | null;
   variabilityIndex: number | null;
   cadenceStddev?: number | null;
   cadenceTargetPercent?: number | null;
@@ -233,6 +242,8 @@ type SavedRideRow = {
     startedAt: string;
     rideType: string;
     indoor: boolean;
+    environment: RideEnvironment;
+    workoutSubtype: WorkoutSubtype;
     routeName: string | null;
     distanceM: number | null;
     movingTimeS: number | null;
@@ -244,6 +255,8 @@ type SavedRideRow = {
     averagePowerWatts: number | null;
     maximumPowerWatts: number | null;
     normalizedPowerWatts: number | null;
+    ftpAtRideWatts: number | null;
+    ftpSnapshotSource: string | null;
     notes: string;
   };
   metrics: {
@@ -252,6 +265,9 @@ type SavedRideRow = {
     trainingLoad: number | null;
     variabilityIndex: number | null;
     aerobicDecouplingPercent: number | null;
+    decouplingEligible: boolean;
+    decouplingEligibilityReason: string;
+    stoppedPercent: number | null;
     cadenceStddev: number | null;
     cadenceTargetPercent: number | null;
     cadenceAcceptablePercent: number | null;
@@ -263,6 +279,9 @@ type SavedRideRow = {
 };
 
 const rideTypes = ["Zone 2", "Zone 2 benchmark", "Recovery", "Tempo", "Threshold", "Free ride"] as const;
+const environmentLabel = (environment: RideEnvironment | undefined, indoor = false) => environment === "virtual" ? "Virtual / Indoor" : environment === "indoor" || (environment === undefined && indoor) ? "Indoor" : "Outdoor";
+const workoutSubtypeLabel = (subtype: WorkoutSubtype | undefined) => subtype === "trainer_workout" ? "Trainer Workout" : subtype === "race" ? "Race" : null;
+const ftpSnapshotLabel = (source: string | null | undefined) => source === "ftp_history" ? "dated FTP history" : source === "current_at_import" ? "current FTP when imported" : source === "legacy_import" ? "original stored snapshot" : "stored ride snapshot";
 
 function mapSavedRide({ ride, metrics }: SavedRideRow): Ride {
   const startedAt = new Date(ride.startedAt);
@@ -283,6 +302,8 @@ function mapSavedRide({ ride, metrics }: SavedRideRow): Ride {
     type,
     source,
     indoor: ride.indoor,
+    environment: ride.environment ?? (ride.indoor ? "indoor" : "outdoor"),
+    workoutSubtype: ride.workoutSubtype,
     distanceMiles: miles(ride.distanceM),
     movingTimeSeconds: Math.round(ride.movingTimeS ?? 0),
     elevationFeet: feet(ride.elevationGainM),
@@ -295,8 +316,13 @@ function mapSavedRide({ ride, metrics }: SavedRideRow): Ride {
     maximumCadence: Math.round(ride.maximumCadenceRpm ?? 0),
     trainingLoad: Math.round(metrics?.trainingLoad ?? 0),
     intensityFactor: metrics?.intensityFactor ?? 0,
+    ftpAtRideWatts: ride.ftpAtRideWatts,
+    ftpSnapshotSource: ride.ftpSnapshotSource,
     powerHeartRateRatio: metrics?.powerHeartRateRatio ?? 0,
     decoupling: metrics?.aerobicDecouplingPercent ?? null,
+    decouplingEligible: metrics?.decouplingEligible ?? false,
+    decouplingEligibilityReason: metrics?.decouplingEligibilityReason ?? "Detailed power and heart-rate streams are required.",
+    stoppedPercent: metrics?.stoppedPercent ?? null,
     variabilityIndex: metrics?.variabilityIndex ?? null,
     cadenceStddev: metrics?.cadenceStddev ?? null,
     cadenceTargetPercent: metrics?.cadenceTargetPercent ?? null,
@@ -346,6 +372,8 @@ export default function CyclingDashboard() {
   const [pendingFile, setPendingFile] = useState<File | null>(null);
   const [rideType, setRideType] = useState<Ride["type"]>("Free ride");
   const [routeName, setRouteName] = useState("");
+  const [importEnvironment, setImportEnvironment] = useState<RideEnvironment>("outdoor");
+  const [importWorkoutSubtype, setImportWorkoutSubtype] = useState<WorkoutSubtype>(null);
   const fileInput = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
@@ -462,7 +490,10 @@ export default function CyclingDashboard() {
     setRouteName(file.name.replace(/\.(fit|tcx|gpx)$/i, "").replace(/[_-]+/g, " "));
     setIsReading(true);
     try {
-      setDetected(await parseActivityFile(file));
+      const parsed = await parseActivityFile(file);
+      setDetected(parsed);
+      setImportEnvironment(parsed.environment);
+      setImportWorkoutSubtype(parsed.workoutSubtype);
     } catch (error) {
       setImportError(error instanceof Error ? error.message : "The activity could not be read.");
     } finally {
@@ -486,11 +517,14 @@ export default function CyclingDashboard() {
     setPendingFile(null);
     setRideType("Zone 2 benchmark");
     setRouteName("Watopia · Flat Route");
+    setImportEnvironment("virtual");
+    setImportWorkoutSubtype(null);
     setDetected({
       name: "Morning Zone 2",
       startedAt: "2026-08-06T13:10:00.000Z",
       distanceMeters: 29242,
       movingTimeSeconds: 3672,
+      elapsedTimeSeconds: 3672,
       elevationGainMeters: 91,
       averageHeartRate: 132,
       maximumHeartRate: 146,
@@ -501,6 +535,8 @@ export default function CyclingDashboard() {
       normalizedPower: 114,
       sourceTrainingLoad: 48,
       aerobicDecouplingPercent: 2.4,
+      pairedSampleCount: 3672,
+      pairedCoveragePercent: 100,
       variabilityIndex: 1.02,
       cadenceStddev: 4.1,
       cadenceTargetPercent: 64,
@@ -515,6 +551,8 @@ export default function CyclingDashboard() {
         { durationSeconds: 3600, bestPowerWatts: 112 },
       ],
       sampleCount: 3672,
+      environment: "virtual",
+      workoutSubtype: null,
       warnings: [],
     });
   };
@@ -525,6 +563,8 @@ export default function CyclingDashboard() {
     setImportError("");
     setPendingFile(null);
     setRouteName("");
+    setImportEnvironment("outdoor");
+    setImportWorkoutSubtype(null);
     if (fileInput.current) fileInput.current.value = "";
   };
 
@@ -552,7 +592,9 @@ export default function CyclingDashboard() {
       dayLabel: date.toLocaleDateString("en-US", { weekday: "short" }).toUpperCase(),
       type: rideType,
       source: "Upload",
-      indoor: false,
+      indoor: importEnvironment !== "outdoor",
+      environment: importEnvironment,
+      workoutSubtype: importWorkoutSubtype,
       distanceMiles: miles(detected.distanceMeters),
       movingTimeSeconds,
       elevationFeet: feet(detected.elevationGainMeters),
@@ -565,8 +607,12 @@ export default function CyclingDashboard() {
       maximumCadence: Math.round(detected.maximumCadence ?? 0),
       trainingLoad: Math.round(detected.sourceTrainingLoad ?? derived.trainingLoad ?? 0),
       intensityFactor: derived.intensityFactor ?? 0,
+      ftpAtRideWatts: ftpWatts,
+      ftpSnapshotSource: "current_at_import",
       powerHeartRateRatio: derived.powerHeartRateRatio ?? 0,
       decoupling: detected.aerobicDecouplingPercent,
+      decouplingEligible: detected.movingTimeSeconds !== null && detected.movingTimeSeconds >= 45 * 60 && detected.variabilityIndex !== null && detected.variabilityIndex <= 1.08 && detected.aerobicDecouplingPercent !== null && detected.aerobicDecouplingPercent >= -5 && importWorkoutSubtype !== "trainer_workout",
+      decouplingEligibilityReason: "Demo eligibility preview; saved rides are checked again on the server.",
       variabilityIndex: detected.variabilityIndex,
       cadenceStddev: detected.cadenceStddev,
       cadenceTargetPercent: detected.cadenceTargetPercent,
@@ -604,9 +650,12 @@ export default function CyclingDashboard() {
             name: detected.name,
             startedAt: detected.startedAt ?? new Date().toISOString(),
             rideType,
+            environment: importEnvironment,
+            workoutSubtype: importWorkoutSubtype,
             routeName: routeName.trim() || null,
             distanceM: detected.distanceMeters,
             movingTimeS: movingTimeSeconds,
+            elapsedTimeS: detected.elapsedTimeSeconds,
             elevationGainM: detected.elevationGainMeters,
             averageHeartRateBpm: detected.averageHeartRate,
             maximumHeartRateBpm: detected.maximumHeartRate,
@@ -627,6 +676,8 @@ export default function CyclingDashboard() {
             cadenceHighPercent: detected.cadenceHighPercent,
             first15HeartRateBpm: detected.first15HeartRate,
             final15HeartRateBpm: detected.final15HeartRate,
+            pairedSampleCount: detected.pairedSampleCount,
+            pairedCoveragePercent: detected.pairedCoveragePercent,
             powerDuration: detected.powerDuration,
           }),
         });
@@ -808,6 +859,10 @@ export default function CyclingDashboard() {
               setRideType={setRideType}
               routeName={routeName}
               setRouteName={setRouteName}
+              environment={importEnvironment}
+              setEnvironment={setImportEnvironment}
+              workoutSubtype={importWorkoutSubtype}
+              setWorkoutSubtype={setImportWorkoutSubtype}
               isDragging={isDragging}
               setIsDragging={setIsDragging}
               fileInput={fileInput}
@@ -883,8 +938,8 @@ function RiderSetup({ initialFtp, initialWeightKg, onSaved }: {
       <h1>Set your training baseline.</h1>
       <p>FTP and body weight are required before the dashboard can calculate training load, power targets, or realistic Zwift route times. Nothing is prefilled with a generic rider.</p>
       <form className="profile-setup-form" onSubmit={saveProfile}>
-        <label><span>Functional threshold power</span><span className="profile-input"><input type="number" min="50" max="500" required value={ftpValue} onChange={(event) => setFtpValue(event.target.value)} autoFocus={initialFtp === null} /><small>watts</small></span><em>Your current sustainable one-hour power estimate.</em></label>
-        <label><span>Body weight</span><span className="profile-input"><input type="number" min="80" max="500" step="1" required value={weightValue} onChange={(event) => setWeightValue(event.target.value)} autoFocus={initialFtp !== null && initialWeightKg === null} /><small>lb</small></span><em>Used with FTP for W/kg and climbing estimates.</em></label>
+        <label><span>Functional threshold power</span><span className="profile-input"><input type="number" min="50" max="500" required value={ftpValue} onChange={(event) => setFtpValue(event.target.value)} /><small>watts</small></span><em>Your current sustainable one-hour power estimate.</em></label>
+        <label><span>Body weight</span><span className="profile-input"><input type="number" min="80" max="500" step="1" required value={weightValue} onChange={(event) => setWeightValue(event.target.value)} /><small>lb</small></span><em>Used with FTP for W/kg and climbing estimates.</em></label>
         <button className="primary-button wide" type="submit" disabled={saveState === "saving"}>{saveState === "saving" ? "Saving…" : "Save and open dashboard"}</button>
         <p className={`profile-setup-message ${saveState}`} role="status">{message}</p>
       </form>
@@ -994,7 +1049,7 @@ function Overview({ selectedRide, rides, openRide, exportRide, setView, isDemo, 
       </section>
 
       <section className="ride-detail panel span-two">
-        <div className="section-heading"><div><span className="eyebrow">Selected ride · {selectedRide.dateLabel}</span><h2>{selectedRide.name}</h2><p>{selectedRide.route}</p></div><div className="ride-detail-actions"><span className={`ride-tag ${selectedRide.type.toLowerCase().replace(" ", "-")}`}>{selectedRide.type}</span><button className="ghost-button ride-export-button" type="button" onClick={() => exportRide(selectedRide)}>Export this ride <span aria-hidden="true">↓</span></button></div></div>
+        <div className="section-heading"><div><span className="eyebrow">Selected ride · {selectedRide.dateLabel}</span><h2>{selectedRide.name}</h2><p>{selectedRide.route}</p></div><div className="ride-detail-actions"><span className="environment-tag">{environmentLabel(selectedRide.environment, selectedRide.indoor)}</span>{workoutSubtypeLabel(selectedRide.workoutSubtype) && <span className="workout-tag">{workoutSubtypeLabel(selectedRide.workoutSubtype)}</span>}<span className={`ride-tag ${selectedRide.type.toLowerCase().replace(" ", "-")}`}>{selectedRide.type}</span><button className="ghost-button ride-export-button" type="button" onClick={() => exportRide(selectedRide)}>Export this ride <span aria-hidden="true">↓</span></button></div></div>
         <div className="ride-stats">
           <Stat label="Distance" value={selectedRide.distanceMiles.toFixed(1)} unit="mi" />
           <Stat label="Moving time" value={formatDuration(selectedRide.movingTimeSeconds)} />
@@ -1004,8 +1059,8 @@ function Overview({ selectedRide, rides, openRide, exportRide, setView, isDemo, 
           <Stat label="Load" value={String(selectedRide.trainingLoad)} unit="pts" />
         </div>
         <div className="ride-analysis-grid">
-          <div className="analysis-tile"><span>Intensity</span><strong>{selectedRide.intensityFactor.toFixed(2)} <small>IF</small></strong><p>{selectedRide.normalizedPower ? "Normalized power available" : "Estimated from average power"}</p></div>
-          <div className="analysis-tile"><span>Aerobic durability</span><strong>{selectedRide.decoupling === null ? "—" : `${selectedRide.decoupling.toFixed(1)}%`} <small>drift</small></strong><p>{selectedRide.decoupling === null ? "Needs detailed power + heart-rate data" : selectedRide.variabilityIndex && selectedRide.variabilityIndex > 1.05 ? "Directional estimate · variable pacing" : selectedRide.decoupling < 5 ? "Good durability" : "Moderate drift"}</p></div>
+          <div className="analysis-tile"><span>Intensity</span><strong>{selectedRide.intensityFactor.toFixed(2)} <small>IF</small></strong><p>{selectedRide.ftpAtRideWatts ? `FTP snapshot ${selectedRide.ftpAtRideWatts} W · ${ftpSnapshotLabel(selectedRide.ftpSnapshotSource)}` : "FTP at ride unavailable"}</p></div>
+          <div className="analysis-tile"><span>Aerobic durability</span><strong>{selectedRide.decouplingEligible && selectedRide.decoupling !== null ? `${selectedRide.decoupling.toFixed(1)}%` : "Not suitable"} <small>{selectedRide.decouplingEligible ? "drift" : ""}</small></strong><p>{selectedRide.decouplingEligible ? selectedRide.decoupling! < 5 ? "Good durability" : "Moderate drift" : selectedRide.decouplingEligibilityReason ?? "Needs detailed power + heart-rate data"}</p></div>
           <div className="analysis-tile"><span>Power variability</span><strong>{selectedRide.variabilityIndex?.toFixed(2) ?? "—"} <small>VI</small></strong><p>{selectedRide.variabilityIndex && selectedRide.variabilityIndex <= 1.05 ? "Very steady pacing" : "Variable effort"}</p></div>
         </div>
         <blockquote>{selectedRide.note}</blockquote>
@@ -1055,7 +1110,7 @@ function Stat({ label, value, unit }: { label: string; value: string; unit?: str
 }
 
 function RideRow({ ride, onClick, onExport }: { ride: Ride; onClick: () => void; onExport: () => void }) {
-  return <div className="ride-row-shell"><button className="ride-row" type="button" onClick={onClick}><span className="ride-date"><strong>{ride.dayLabel}</strong><small>{ride.dateLabel}</small></span><span className="ride-main"><strong>{ride.name}</strong><small>{ride.route}</small></span><span className={`ride-tag ${ride.type.toLowerCase().replace(" ", "-")}`}>{ride.type}</span><span className="ride-number"><strong>{ride.distanceMiles.toFixed(1)}</strong><small>mi</small></span><span className="ride-number"><strong>{ride.averagePower}</strong><small>W avg</small></span><span className="ride-number"><strong>{ride.trainingLoad}</strong><small>load</small></span><span className="row-arrow">→</span></button><button className="ride-row-export" type="button" onClick={onExport} aria-label={`Export ${ride.name} as Markdown`} title="Export this ride as Markdown"><span>.md</span><strong aria-hidden="true">↓</strong></button></div>;
+  return <div className="ride-row-shell"><button className="ride-row" type="button" onClick={onClick}><span className="ride-date"><strong>{ride.dayLabel}</strong><small>{ride.dateLabel}</small></span><span className="ride-main"><strong>{ride.name}</strong><small>{ride.route} · {environmentLabel(ride.environment, ride.indoor)}</small></span><span className={`ride-tag ${ride.type.toLowerCase().replace(" ", "-")}`}>{ride.type}</span><span className="ride-number"><strong>{ride.distanceMiles.toFixed(1)}</strong><small>mi</small></span><span className="ride-number"><strong>{ride.averagePower}</strong><small>W avg</small></span><span className="ride-number"><strong>{ride.trainingLoad}</strong><small>load</small></span><span className="row-arrow">→</span></button><button className="ride-row-export" type="button" onClick={onExport} aria-label={`Export ${ride.name} as Markdown`} title="Export this ride as Markdown"><span>.md</span><strong aria-hidden="true">↓</strong></button></div>;
 }
 
 function RideLog({ rides, allRides, filter, setFilter, search, setSearch, openRide, exportRide }: { rides: Ride[]; allRides: Ride[]; filter: string; setFilter: (value: string) => void; search: string; setSearch: (value: string) => void; openRide: (ride: Ride) => void; exportRide: (ride: Ride) => void }) {
@@ -1100,23 +1155,25 @@ function PerformanceDetails({ rides, currentFtp }: { rides: Ride[]; currentFtp: 
   const groupedRoutes = Array.from(rides.reduce((groups, ride) => {
     const route = ride.route.trim();
     if (!route || /^(fit|tcx|gpx) upload$/i.test(route)) return groups;
-    const key = route.toLowerCase();
+    const key = `${route.toLowerCase()}::${ride.environment ?? (ride.indoor ? "indoor" : "outdoor")}`;
     const group = groups.get(key) ?? [];
     group.push(ride);
     groups.set(key, group);
     return groups;
   }, new Map<string, Ride[]>()).values()).filter((group) => group.length >= 2);
-  const benchmarkRides = rides
+  const benchmarkCandidates = rides
     .filter((ride) => ride.type === "Zone 2 benchmark")
     .sort((a, b) => Date.parse(b.date) - Date.parse(a.date));
+  const benchmarkEnvironment = benchmarkCandidates[0]?.environment ?? (benchmarkCandidates[0]?.indoor ? "indoor" : "outdoor");
+  const benchmarkRides = benchmarkCandidates.filter((ride) => (ride.environment ?? (ride.indoor ? "indoor" : "outdoor")) === benchmarkEnvironment);
   const latestBenchmark = benchmarkRides[0];
   const previousBenchmark = benchmarkRides[1];
   const volumeHours = acuteRides.reduce((sum, ride) => sum + ride.movingTimeSeconds, 0) / 3600;
   const volumeDistance = acuteRides.reduce((sum, ride) => sum + ride.distanceMiles, 0);
   const volumeElevation = acuteRides.reduce((sum, ride) => sum + ride.elevationFeet, 0);
   const loadStatus = acuteChronicRatio !== null && acuteChronicRatio > 1.5 ? "Review recent spike" : "Building steadily";
-  const driftLabel = latestBenchmark?.decoupling === null || latestBenchmark?.decoupling === undefined
-    ? "Not available"
+  const driftLabel = !latestBenchmark?.decouplingEligible || latestBenchmark?.decoupling === null || latestBenchmark?.decoupling === undefined
+    ? "Not suitable for interpretation"
     : latestBenchmark.decoupling < 3 ? "Excellent durability" : latestBenchmark.decoupling <= 5 ? "Good durability" : latestBenchmark.decoupling <= 8 ? "Moderate drift" : "Significant drift";
   const percentChange = (current: number, previous: number, invert = false) => {
     if (!previous) return "—";
@@ -1144,7 +1201,7 @@ function PerformanceDetails({ rides, currentFtp }: { rides: Ride[]; currentFtp: 
           const sorted = [...group].sort((a, b) => Date.parse(a.date) - Date.parse(b.date));
           const first = sorted[0];
           const latest = sorted.at(-1)!;
-          return <article className="route-comparison" key={first.route.toLowerCase()}><div><strong>{first.route}</strong><span>{first.dateLabel} → {latest.dateLabel} · {group.length} efforts</span></div><dl><div><dt>Time</dt><dd>{percentChange(latest.movingTimeSeconds, first.movingTimeSeconds, true)}</dd></div><div><dt>Power</dt><dd>{percentChange(latest.averagePower, first.averagePower)}</dd></div><div><dt>Heart rate</dt><dd>{percentChange(latest.averageHeartRate, first.averageHeartRate, true)}</dd></div><div><dt>W / bpm</dt><dd>{percentChange(latest.powerHeartRateRatio, first.powerHeartRateRatio)}</dd></div></dl></article>;
+          return <article className="route-comparison" key={`${first.route.toLowerCase()}-${first.environment ?? (first.indoor ? "indoor" : "outdoor")}`}><div><strong>{first.route}</strong><span>{environmentLabel(first.environment, first.indoor)} · {first.dateLabel} → {latest.dateLabel} · {group.length} efforts</span></div><dl><div><dt>Time</dt><dd>{percentChange(latest.movingTimeSeconds, first.movingTimeSeconds, true)}</dd></div><div><dt>Power</dt><dd>{percentChange(latest.averagePower, first.averagePower)}</dd></div><div><dt>Heart rate</dt><dd>{percentChange(latest.averageHeartRate, first.averageHeartRate, true)}</dd></div><div><dt>W / bpm</dt><dd>{percentChange(latest.powerHeartRateRatio, first.powerHeartRateRatio)}</dd></div></dl></article>;
         })}</div> : <div className="analysis-empty"><strong>No repeated route names yet.</strong><span>Use the same route/course name when importing repeat attempts.</span></div>}
       </section>
 
@@ -1158,8 +1215,8 @@ function PerformanceDetails({ rides, currentFtp }: { rides: Ride[]; currentFtp: 
 
       <section className="durability-card panel">
         <div className="section-heading"><div><span className="eyebrow">Cardiac drift</span><h2>Aerobic durability</h2></div><span className="small-badge">steady rides only</span></div>
-        <div className="drift-result"><strong>{latestBenchmark?.decoupling === null || latestBenchmark?.decoupling === undefined ? "—" : `${latestBenchmark.decoupling.toFixed(1)}%`}</strong><span>{driftLabel}</span></div>
-        <p>Calculated from power / heart-rate efficiency in the first and second halves. Variable rides are intentionally excluded.</p>
+        <div className="drift-result"><strong>{latestBenchmark?.decouplingEligible && latestBenchmark.decoupling !== null && latestBenchmark.decoupling !== undefined ? `${latestBenchmark.decoupling.toFixed(1)}%` : "—"}</strong><span>{driftLabel}</span></div>
+        <p>{latestBenchmark?.decouplingEligible ? "Calculated from central power / heart-rate intervals after excluding warm-up and cooldown buckets." : latestBenchmark?.decouplingEligibilityReason ?? "Requires at least 45 minutes, VI ≤ 1.08, minimal stopped time, a steady non-workout effort, and sufficient paired power/HR data."}</p>
       </section>
 
       <section className="cadence-card panel">
@@ -1260,7 +1317,7 @@ function PlanToday({ rides, recovery, setRecovery, recoverySaveState, saveRecove
       })
       .catch(() => { if (active) setActionMessage("Saved insights are temporarily unavailable."); });
     return () => { active = false; };
-  }, [setCurrentFtp]);
+  }, [setCurrentFtp, setCurrentWeightKg]);
 
   useEffect(() => {
     let active = true;
@@ -1618,7 +1675,7 @@ function ConnectedSources({ refreshRides }: { refreshRides: () => Promise<void> 
   );
 }
 
-function ImportRide({ detected, filename, error, isReading, isSaving, isDragging, hasFile, rideType, setRideType, routeName, setRouteName, setIsDragging, fileInput, onFileChange, onDrop, onDemo, onAdd, onReset }: {
+function ImportRide({ detected, filename, error, isReading, isSaving, isDragging, hasFile, rideType, setRideType, routeName, setRouteName, environment, setEnvironment, workoutSubtype, setWorkoutSubtype, setIsDragging, fileInput, onFileChange, onDrop, onDemo, onAdd, onReset }: {
   detected: DetectedActivity | null;
   filename: string;
   error: string;
@@ -1630,6 +1687,10 @@ function ImportRide({ detected, filename, error, isReading, isSaving, isDragging
   setRideType: (value: Ride["type"]) => void;
   routeName: string;
   setRouteName: (value: string) => void;
+  environment: RideEnvironment;
+  setEnvironment: (value: RideEnvironment) => void;
+  workoutSubtype: WorkoutSubtype;
+  setWorkoutSubtype: (value: WorkoutSubtype) => void;
   setIsDragging: (value: boolean) => void;
   fileInput: React.RefObject<HTMLInputElement | null>;
   onFileChange: (event: ChangeEvent<HTMLInputElement>) => void;
@@ -1674,6 +1735,8 @@ function ImportRide({ detected, filename, error, isReading, isSaving, isDragging
               <ReviewField label="Cadence" value={detected.averageCadence ? `${Math.round(detected.averageCadence)} rpm` : "Missing"} />
               <label className="review-field"><span>Route / course</span><input value={routeName} onChange={(event) => setRouteName(event.target.value)} placeholder="Use the same name for repeated routes" /></label>
               <label className="review-field"><span>Ride type</span><select value={rideType} onChange={(event) => setRideType(event.target.value as Ride["type"])}>{rideTypes.map((type) => <option key={type}>{type}</option>)}</select></label>
+              <label className="review-field"><span>Environment</span><select value={environment} onChange={(event) => setEnvironment(event.target.value as RideEnvironment)}><option value="virtual">Virtual / Indoor</option><option value="indoor">Indoor</option><option value="outdoor">Outdoor</option></select></label>
+              <label className="review-field"><span>Workout subtype</span><select value={workoutSubtype ?? ""} onChange={(event) => setWorkoutSubtype(event.target.value ? event.target.value as Exclude<WorkoutSubtype, null> : null)}><option value="">None</option><option value="trainer_workout">Trainer Workout</option><option value="race">Race</option></select></label>
             </div>
             {detected.warnings.length > 0 && <div className="warning-box"><strong>Check before saving</strong>{detected.warnings.map((warning) => <span key={warning}>· {warning}</span>)}</div>}
             {error && <div className="warning-box error"><strong>Could not save this ride</strong><span>{error}</span></div>}
@@ -1690,5 +1753,5 @@ function ReviewField({ label, value }: { label: string; value: string }) {
 }
 
 function Methodology({ currentFtp, currentWeightKg }: { currentFtp: number; currentWeightKg: number }) {
-  return <div className="method-layout"><section className="method-hero panel-dark"><span className="eyebrow light">Explainable by design</span><h2>No mystery score.</h2><p>Every recommendation is assembled from visible inputs, conservative rules, and versioned calculations. Pain always overrides the number.</p><div className="version-stamp"><span>Current ruleset</span><strong>v3.2</strong></div></section><section className="method-list panel"><div className="section-heading"><div><span className="eyebrow">Metric dictionary</span><h2>What the app calculates</h2></div></div>{METHOD_DEFINITIONS.map((method) => <article key={method.id} className="method-row"><span>{method.id}</span><div><strong>{method.title}</strong><code>{method.formula}</code><p>{method.note}</p></div></article>)}</section><section className="config-card panel"><div className="section-heading"><div><span className="eyebrow">Athlete configuration</span><h2>Current working values</h2></div></div><div className="config-grid"><Stat label="FTP" value={String(currentFtp)} unit="W" /><Stat label="Body weight" value={String(Math.round(currentWeightKg * 2.2046226218))} unit="lb" /><Stat label="FTP / weight" value={(currentFtp / currentWeightKg).toFixed(2)} unit="W/kg" /><Stat label="Zone 2 target" value={String(Math.round(currentFtp * 2 / 3))} unit="W" /></div><p className="chart-note"><i /> FTP and body weight can be updated from Plan Today; each calculation records the working values used.</p></section></div>;
+  return <div className="method-layout"><section className="method-hero panel-dark"><span className="eyebrow light">Explainable by design</span><h2>No mystery score.</h2><p>Every recommendation is assembled from visible inputs, conservative rules, and versioned calculations. Pain always overrides the number.</p><div className="version-stamp"><span>Current ruleset</span><strong>v3.3</strong></div></section><section className="method-list panel"><div className="section-heading"><div><span className="eyebrow">Metric dictionary</span><h2>What the app calculates</h2></div></div>{METHOD_DEFINITIONS.map((method) => <article key={method.id} className="method-row"><span>{method.id}</span><div><strong>{method.title}</strong><code>{method.formula}</code><p>{method.note}</p></div></article>)}</section><section className="config-card panel"><div className="section-heading"><div><span className="eyebrow">Athlete configuration</span><h2>Current working values</h2></div></div><div className="config-grid"><Stat label="FTP" value={String(currentFtp)} unit="W" /><Stat label="Body weight" value={String(Math.round(currentWeightKg * 2.2046226218))} unit="lb" /><Stat label="FTP / weight" value={(currentFtp / currentWeightKg).toFixed(2)} unit="W/kg" /><Stat label="Zone 2 target" value={String(Math.round(currentFtp * 2 / 3))} unit="W" /></div><p className="chart-note"><i /> FTP and body weight can be updated from Plan Today. Every ride keeps its own FTP snapshot and source, so later FTP changes do not rewrite historical IF or load.</p></section></div>;
 }

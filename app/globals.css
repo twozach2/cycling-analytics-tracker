@@ -317,6 +317,8 @@ blockquote { margin: 16px 0 0; padding: 14px 16px; border-left: 3px solid var(--
 
 .ride-list { display: flex; flex-direction: column; }
 .ride-detail-actions { display: flex; align-items: center; justify-content: flex-end; gap: 8px; flex-wrap: wrap; }
+.environment-tag, .workout-tag { width: fit-content; padding: 6px 8px; border-radius: 4px; background: #dceaf0; color: var(--ink); font: 650 8px/1 var(--font-data); white-space: nowrap; text-transform: uppercase; }
+.workout-tag { background: #ece6ff; }
 .ride-export-button { min-height: 36px; padding: 0 11px; gap: 7px; font-size: 9px; }
 .ride-row-shell { display: grid; grid-template-columns: minmax(0, 1fr) 52px; align-items: stretch; column-gap: 12px; border-top: 1px solid var(--line); transition: background 150ms ease; }
 .ride-row-shell:hover { background: #f0eee6; }

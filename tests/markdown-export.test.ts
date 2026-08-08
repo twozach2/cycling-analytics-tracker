@@ -10,6 +10,8 @@ const ride: MarkdownRide = {
   type: "Zone 2",
   source: "Strava",
   indoor: true,
+  environment: "virtual",
+  workoutSubtype: null,
   distanceMiles: 14.2,
   movingTimeSeconds: 3723,
   elevationFeet: 410,
@@ -22,8 +24,13 @@ const ride: MarkdownRide = {
   maximumCadence: 102,
   trainingLoad: 54,
   intensityFactor: 0.81,
+  ftpAtRideWatts: 165,
+  ftpSnapshotSource: "ftp_history",
   powerHeartRateRatio: 0.97,
   decoupling: 3.2,
+  decouplingEligible: true,
+  decouplingEligibilityReason: "Eligible steady ride.",
+  stoppedPercent: 1.2,
   variabilityIndex: 1.047,
   cadenceStddev: 4.1,
   cadenceTargetPercent: 65,
@@ -52,18 +59,21 @@ test("Markdown export contains rider configuration, methodology, and complete ri
   assert.match(markdown, /Morning endurance/);
   assert.match(markdown, /Normalized power: 134 W/);
   assert.match(markdown, /Aerobic decoupling: 3\.2%/);
+  assert.match(markdown, /Environment: Virtual \/ Indoor/);
+  assert.match(markdown, /FTP at ride: 165 W/);
   assert.match(markdown, /Steady ride\. No pain\./);
   assert.equal(cyclingMarkdownFilename(new Date("2026-08-07T18:00:00.000Z")), "cycling-analytics-2026-08-07.md");
   assert.equal(cyclingRideMarkdownFilename(ride), "cycling-analytics-2026-08-07-morning-endurance.md");
 });
 
 test("Markdown export labels unavailable optional ride metrics", () => {
-  const markdown = buildCyclingMarkdown([{ ...ride, normalizedPower: null, decoupling: null }], {
+  const markdown = buildCyclingMarkdown([{ ...ride, normalizedPower: null, decoupling: -11.2, decouplingEligible: false, decouplingEligibilityReason: "Warm-up dominated." }], {
     ftpWatts: 200,
     bodyWeightKg: 80,
     dataMode: "demo",
   });
   assert.match(markdown, /Data status: Fictional demo data/);
   assert.match(markdown, /Normalized power: Not available W/);
-  assert.match(markdown, /Aerobic decoupling: Not available%/);
+  assert.match(markdown, /Aerobic decoupling: Not suitable for interpretation/);
+  assert.match(markdown, /Not eligible — Warm-up dominated/);
 });

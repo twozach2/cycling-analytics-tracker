@@ -1,11 +1,11 @@
-import { and, eq } from "drizzle-orm";
+import { and, desc, eq } from "drizzle-orm";
 import { env } from "cloudflare:workers";
 import { getDb } from "../../../../../db";
-import { activityStreams, externalConnections, powerDuration as powerDurationTable, rideMetrics, riders, rides } from "../../../../../db/schema";
+import { activityStreams, externalConnections, ftpHistory, powerDuration as powerDurationTable, rideMetrics, riders, rides } from "../../../../../db/schema";
 import { currentRider } from "../../../../../lib/current-rider";
 import { derivePowerDuration, deriveStreamMetrics, type ActivitySample } from "../../../../../lib/activity-parser";
-import { deriveRideMetrics } from "../../../../../lib/metrics";
-import { isCyclingActivity, parseReadBudget, syncAfterEpoch, type StravaSyncMode } from "../../../../../lib/strava-sync";
+import { deriveRideMetrics, evaluateDecouplingEligibility } from "../../../../../lib/metrics";
+import { classifyStravaActivity, ftpSnapshotForRide, isCyclingActivity, parseReadBudget, syncAfterEpoch, type StravaSyncMode } from "../../../../../lib/strava-sync";
 
 type StravaActivity = {
   id: number;
@@ -29,6 +29,7 @@ type StravaActivity = {
   kilojoules?: number;
   calories?: number;
   trainer?: boolean;
+  workout_type?: number | null;
 };
 
 type Stream = { data?: number[] };
@@ -100,9 +101,10 @@ export async function POST(request: Request) {
   }
   const mode: StravaSyncMode = payload.mode === "six_months" ? "six_months" : "new";
   const db = getDb();
-  const [[connection], [profile]] = await Promise.all([
+  const [[connection], [profile], ftpRows] = await Promise.all([
     db.select().from(externalConnections).where(and(eq(externalConnections.riderId, rider.id), eq(externalConnections.provider, "strava"))).limit(1),
     db.select({ ftp: riders.defaultFtpWatts, weightKg: riders.defaultWeightKg }).from(riders).where(eq(riders.id, rider.id)).limit(1),
+    db.select({ effectiveAt: ftpHistory.effectiveAt, ftpWatts: ftpHistory.ftpWatts }).from(ftpHistory).where(eq(ftpHistory.riderId, rider.id)).orderBy(desc(ftpHistory.effectiveAt)),
   ]);
   if (!connection) return Response.json({ error: "Connect Strava before syncing rides." }, { status: 409 });
   if (!profile?.ftp || !profile.weightKg) return Response.json({ error: "Complete rider setup with your FTP and weight before syncing rides." }, { status: 409 });
@@ -149,18 +151,28 @@ export async function POST(request: Request) {
 
   for (const activity of [...activitiesById.values()].filter(isCyclingActivity)) {
     const externalId = String(activity.id);
-    const [existing] = await db.select({ id: rides.id }).from(rides)
+    const [existing] = await db.select({ id: rides.id, ftpAtRideWatts: rides.ftpAtRideWatts, ftpSnapshotSource: rides.ftpSnapshotSource }).from(rides)
       .where(and(eq(rides.riderId, rider.id), eq(rides.externalId, externalId)))
       .limit(1);
     const normalizedPower = finite(activity.weighted_average_watts);
     const averagePower = finite(activity.average_watts);
     const movingTime = Math.max(0, Math.round(finite(activity.moving_time) ?? 0));
+    const elapsedTime = Math.max(0, Math.round(finite(activity.elapsed_time) ?? movingTime));
+    const stoppedPercent = elapsedTime > 0 ? Math.max(0, ((elapsedTime - movingTime) / elapsedTime) * 100) : null;
+    const classification = classifyStravaActivity(activity);
+    const ftpSnapshot = ftpSnapshotForRide({
+      startedAt: activity.start_date,
+      history: ftpRows,
+      currentFtpWatts: ftp,
+      existingFtpWatts: existing?.ftpAtRideWatts,
+      existingSource: existing?.ftpSnapshotSource,
+    });
     const derived = deriveRideMetrics({
       movingTimeSeconds: movingTime,
       averagePowerWatts: averagePower,
       normalizedPowerWatts: normalizedPower,
       averageHeartRateBpm: finite(activity.average_heartrate),
-      ftpWatts: ftp,
+      ftpWatts: ftpSnapshot.ftpWatts,
     });
     const rideSummary = {
       source: "strava_export" as const,
@@ -168,12 +180,14 @@ export async function POST(request: Request) {
       startedAt: activity.start_date,
       timezone: activity.timezone,
       rideType: "Free ride",
-      indoor: Boolean(activity.trainer),
+      indoor: classification.indoor,
+      environment: classification.environment,
+      workoutSubtype: classification.workoutSubtype,
       routeName: activity.name || null,
       activityUrl: `https://www.strava.com/activities/${activity.id}`,
       distanceM: finite(activity.distance),
       movingTimeS: movingTime,
-      elapsedTimeS: Math.max(0, Math.round(finite(activity.elapsed_time) ?? movingTime)),
+      elapsedTimeS: elapsedTime,
       elevationGainM: finite(activity.total_elevation_gain),
       averageSpeedMps: finite(activity.average_speed),
       maximumSpeedMps: finite(activity.max_speed),
@@ -186,7 +200,8 @@ export async function POST(request: Request) {
       normalizedPowerSource: normalizedPower === null ? "unavailable" as const : "recorded" as const,
       totalWorkKj: finite(activity.kilojoules),
       calories: finite(activity.calories) === null ? null : Math.round(activity.calories!),
-      ftpAtRideWatts: ftp,
+      ftpAtRideWatts: ftpSnapshot.ftpWatts,
+      ftpSnapshotSource: ftpSnapshot.source,
       weightAtRideKg: profile.weightKg,
       notes: "Synced from Strava. Original provider values are retained separately from calculated metrics.",
       updatedAt: syncStartedAt.toISOString(),
@@ -203,6 +218,9 @@ export async function POST(request: Request) {
         trainingLoad: derived.trainingLoad,
         trainingLoadIsEstimated: derived.trainingLoadIsEstimated,
         variabilityIndex: normalizedPower !== null && averagePower !== null && averagePower > 0 ? normalizedPower / averagePower : null,
+        stoppedPercent,
+        decouplingEligible: false,
+        decouplingEligibilityReason: "Detailed power and heart-rate streams are required.",
       }).where(eq(rideMetrics.rideId, rideId));
       updated += 1;
       skipped += 1;
@@ -218,7 +236,10 @@ export async function POST(request: Request) {
         trainingLoad: derived.trainingLoad,
         trainingLoadIsEstimated: derived.trainingLoadIsEstimated,
         variabilityIndex: normalizedPower !== null && averagePower !== null && averagePower > 0 ? normalizedPower / averagePower : null,
-        algorithmVersion: "phase3.2",
+        stoppedPercent,
+        decouplingEligible: false,
+        decouplingEligibilityReason: "Detailed power and heart-rate streams are required.",
+        algorithmVersion: "phase3.3",
         dataQuality: "medium",
       });
       imported += 1;
@@ -240,8 +261,27 @@ export async function POST(request: Request) {
       const samples = samplesFromStreams(streams, candidate.activity.start_date);
       if (!samples.length) continue;
       const streamMetrics = deriveStreamMetrics(samples);
+      const candidateMovingTime = Math.max(0, Math.round(finite(candidate.activity.moving_time) ?? 0));
+      const candidateElapsedTime = Math.max(0, Math.round(finite(candidate.activity.elapsed_time) ?? candidateMovingTime));
+      const candidateStoppedPercent = candidateElapsedTime > 0 ? Math.max(0, ((candidateElapsedTime - candidateMovingTime) / candidateElapsedTime) * 100) : null;
+      const candidateAveragePower = finite(candidate.activity.average_watts);
+      const candidateNormalizedPower = finite(candidate.activity.weighted_average_watts);
+      const candidateVariability = candidateNormalizedPower !== null && candidateAveragePower !== null && candidateAveragePower > 0 ? candidateNormalizedPower / candidateAveragePower : null;
+      const candidateClassification = classifyStravaActivity(candidate.activity);
+      const eligibility = evaluateDecouplingEligibility({
+        movingTimeSeconds: candidateMovingTime,
+        variabilityIndex: candidateVariability,
+        stoppedPercent: candidateStoppedPercent,
+        pairedSampleCount: streamMetrics.pairedSampleCount,
+        pairedCoveragePercent: streamMetrics.pairedCoveragePercent,
+        aerobicDecouplingPercent: streamMetrics.aerobicDecouplingPercent,
+        isIntervalWorkout: candidateClassification.workoutSubtype === "trainer_workout",
+      });
       await db.update(rideMetrics).set({
         aerobicDecouplingPercent: streamMetrics.aerobicDecouplingPercent,
+        decouplingEligible: eligibility.eligible,
+        decouplingEligibilityReason: eligibility.reason,
+        stoppedPercent: candidateStoppedPercent,
         cadenceStddev: streamMetrics.cadenceStddev,
         cadenceTargetPercent: streamMetrics.cadenceTargetPercent,
         cadenceAcceptablePercent: streamMetrics.cadenceAcceptablePercent,
@@ -249,7 +289,7 @@ export async function POST(request: Request) {
         cadenceHighPercent: streamMetrics.cadenceHighPercent,
         first15HeartRateBpm: streamMetrics.first15HeartRate,
         final15HeartRateBpm: streamMetrics.final15HeartRate,
-        algorithmVersion: "phase3.2",
+        algorithmVersion: "phase3.3",
         dataQuality: "high",
       }).where(eq(rideMetrics.rideId, candidate.rideId));
       streamsReprocessed += 1;
@@ -278,6 +318,22 @@ export async function POST(request: Request) {
     }
     const streamMetrics = deriveStreamMetrics(samples);
     const bests = derivePowerDuration(samples);
+    const candidateMovingTime = Math.max(0, Math.round(finite(candidate.activity.moving_time) ?? 0));
+    const candidateElapsedTime = Math.max(0, Math.round(finite(candidate.activity.elapsed_time) ?? candidateMovingTime));
+    const candidateStoppedPercent = candidateElapsedTime > 0 ? Math.max(0, ((candidateElapsedTime - candidateMovingTime) / candidateElapsedTime) * 100) : null;
+    const candidateAveragePower = finite(candidate.activity.average_watts);
+    const candidateNormalizedPower = finite(candidate.activity.weighted_average_watts);
+    const candidateVariability = candidateNormalizedPower !== null && candidateAveragePower !== null && candidateAveragePower > 0 ? candidateNormalizedPower / candidateAveragePower : null;
+    const candidateClassification = classifyStravaActivity(candidate.activity);
+    const eligibility = evaluateDecouplingEligibility({
+      movingTimeSeconds: candidateMovingTime,
+      variabilityIndex: candidateVariability,
+      stoppedPercent: candidateStoppedPercent,
+      pairedSampleCount: streamMetrics.pairedSampleCount,
+      pairedCoveragePercent: streamMetrics.pairedCoveragePercent,
+      aerobicDecouplingPercent: streamMetrics.aerobicDecouplingPercent,
+      isIntervalWorkout: candidateClassification.workoutSubtype === "trainer_workout",
+    });
     const r2Key = `${rider.id}/strava/${candidate.activity.id}.json`;
     await fileStore.put(r2Key, JSON.stringify(streams), { httpMetadata: { contentType: "application/json" } });
     await db.insert(activityStreams).values({
@@ -291,6 +347,9 @@ export async function POST(request: Request) {
     }).onConflictDoNothing();
     await db.update(rideMetrics).set({
       aerobicDecouplingPercent: streamMetrics.aerobicDecouplingPercent,
+      decouplingEligible: eligibility.eligible,
+      decouplingEligibilityReason: eligibility.reason,
+      stoppedPercent: candidateStoppedPercent,
       cadenceStddev: streamMetrics.cadenceStddev,
       cadenceTargetPercent: streamMetrics.cadenceTargetPercent,
       cadenceAcceptablePercent: streamMetrics.cadenceAcceptablePercent,
@@ -298,7 +357,7 @@ export async function POST(request: Request) {
       cadenceHighPercent: streamMetrics.cadenceHighPercent,
       first15HeartRateBpm: streamMetrics.first15HeartRate,
       final15HeartRateBpm: streamMetrics.final15HeartRate,
-      algorithmVersion: "phase3.2",
+      algorithmVersion: "phase3.3",
       dataQuality: "high",
     }).where(eq(rideMetrics.rideId, candidate.rideId));
     if (bests.length) {

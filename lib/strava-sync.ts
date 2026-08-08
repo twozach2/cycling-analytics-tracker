@@ -17,6 +17,50 @@ export function isCyclingActivity(activity: { sport_type?: string; type?: string
   return cyclingTypes.has((activity.sport_type ?? activity.type ?? "").toLowerCase());
 }
 
+export type ActivityEnvironment = "virtual" | "indoor" | "outdoor";
+export type WorkoutSubtype = "trainer_workout" | "race" | null;
+
+export function classifyStravaActivity(activity: {
+  sport_type?: string;
+  type?: string;
+  trainer?: boolean;
+  workout_type?: number | null;
+  name?: string;
+}): { environment: ActivityEnvironment; indoor: boolean; workoutSubtype: WorkoutSubtype } {
+  const sportType = (activity.sport_type ?? activity.type ?? "").toLowerCase();
+  const virtual = sportType === "virtualride";
+  const indoor = virtual || Boolean(activity.trainer);
+  const workoutName = activity.name ?? "";
+  const trainerWorkout = activity.workout_type === 11 || /\b(erg|workout|intervals?|ramp test)\b/i.test(workoutName);
+  const workoutSubtype = trainerWorkout ? "trainer_workout" : activity.workout_type === 10 ? "race" : null;
+  return { environment: virtual ? "virtual" : indoor ? "indoor" : "outdoor", indoor, workoutSubtype };
+}
+
+export type FtpHistoryEntry = { effectiveAt: string; ftpWatts: number };
+
+export function ftpSnapshotForRide(input: {
+  startedAt: string;
+  history: readonly FtpHistoryEntry[];
+  currentFtpWatts: number | null;
+  existingFtpWatts?: number | null;
+  existingSource?: string | null;
+}): { ftpWatts: number | null; source: string } {
+  const rideTime = Date.parse(input.startedAt);
+  const historyMatch = Number.isFinite(rideTime)
+    ? input.history
+      .filter((entry) => Number.isFinite(entry.ftpWatts) && entry.ftpWatts > 0 && Date.parse(entry.effectiveAt) <= rideTime)
+      .sort((a, b) => Date.parse(b.effectiveAt) - Date.parse(a.effectiveAt))[0]
+    : undefined;
+  if (historyMatch) return { ftpWatts: historyMatch.ftpWatts, source: "ftp_history" };
+  if (input.existingFtpWatts && input.existingFtpWatts > 0) {
+    return { ftpWatts: input.existingFtpWatts, source: input.existingSource || "stored_snapshot" };
+  }
+  if (input.currentFtpWatts && input.currentFtpWatts > 0) {
+    return { ftpWatts: input.currentFtpWatts, source: "current_at_import" };
+  }
+  return { ftpWatts: null, source: "unavailable" };
+}
+
 export function sixMonthsBefore(date: Date) {
   const year = date.getUTCFullYear();
   const month = date.getUTCMonth() - 6;

@@ -1,8 +1,9 @@
 import { and, desc, eq } from "drizzle-orm";
 import { getChatGPTUser } from "../../chatgpt-auth";
 import { getDb } from "../../../db";
-import { powerDuration, rideMetrics, rides, sourceFiles } from "../../../db/schema";
-import { deriveRideMetrics, recommendRecovery } from "../../../lib/metrics";
+import { ftpHistory, powerDuration, rideMetrics, riders, rides, sourceFiles } from "../../../db/schema";
+import { deriveRideMetrics, evaluateDecouplingEligibility, recommendRecovery } from "../../../lib/metrics";
+import { ftpSnapshotForRide, type ActivityEnvironment, type WorkoutSubtype } from "../../../lib/strava-sync";
 
 async function riderIdFor(request: Request) {
   const user = await getChatGPTUser();
@@ -32,6 +33,7 @@ type RidePayload = {
   startedAt?: string;
   distanceM?: number | null;
   movingTimeS?: number | null;
+  elapsedTimeS?: number | null;
   elevationGainM?: number | null;
   averageHeartRateBpm?: number | null;
   maximumHeartRateBpm?: number | null;
@@ -54,6 +56,10 @@ type RidePayload = {
   cadenceHighPercent?: number | null;
   first15HeartRateBpm?: number | null;
   final15HeartRateBpm?: number | null;
+  pairedSampleCount?: number;
+  pairedCoveragePercent?: number;
+  environment?: ActivityEnvironment;
+  workoutSubtype?: WorkoutSubtype;
   powerDuration?: Array<{ durationSeconds: number; bestPowerWatts: number }>;
 };
 
@@ -66,17 +72,27 @@ export async function POST(request: Request) {
   if (!name || !startedAt) return Response.json({ error: "Ride name and start time are required." }, { status: 400 });
 
   const movingTimeS = Math.max(0, Math.round(payload.movingTimeS ?? 0));
+  const elapsedTimeS = Math.max(movingTimeS, Math.round(payload.elapsedTimeS ?? movingTimeS));
+  const db = getDb();
+  const [[profile], ftpRows] = await Promise.all([
+    db.select({ ftp: riders.defaultFtpWatts, weightKg: riders.defaultWeightKg }).from(riders).where(eq(riders.id, riderId)).limit(1),
+    db.select({ effectiveAt: ftpHistory.effectiveAt, ftpWatts: ftpHistory.ftpWatts }).from(ftpHistory).where(eq(ftpHistory.riderId, riderId)).orderBy(desc(ftpHistory.effectiveAt)),
+  ]);
+  const ftpSnapshot = ftpSnapshotForRide({
+    startedAt,
+    history: ftpRows,
+    currentFtpWatts: profile?.ftp ?? payload.ftpAtRideWatts ?? null,
+  });
   const metrics = deriveRideMetrics({
     movingTimeSeconds: movingTimeS,
     averagePowerWatts: payload.averagePowerWatts ?? null,
     normalizedPowerWatts: payload.normalizedPowerWatts ?? null,
     averageHeartRateBpm: payload.averageHeartRateBpm ?? null,
-    ftpWatts: payload.ftpAtRideWatts ?? null,
+    ftpWatts: ftpSnapshot.ftpWatts,
   });
   const trainingLoad = payload.sourceTrainingLoad ?? metrics.trainingLoad;
   const finalMetrics = { ...metrics, trainingLoad, trainingLoadIsEstimated: payload.sourceTrainingLoad == null && metrics.trainingLoadIsEstimated };
   const recovery = recommendRecovery(finalMetrics, movingTimeS, 0);
-  const db = getDb();
 
   if (payload.sourceFileId) {
     const [ownedFile] = await db
@@ -100,6 +116,18 @@ export async function POST(request: Request) {
   const id = crypto.randomUUID();
   const allowedRideTypes = new Set(["Zone 2", "Zone 2 benchmark", "Recovery", "Tempo", "Threshold", "Free ride"]);
   const rideType = payload.rideType && allowedRideTypes.has(payload.rideType) ? payload.rideType : "Free ride";
+  const environment: ActivityEnvironment = ["virtual", "indoor", "outdoor"].includes(payload.environment ?? "") ? payload.environment! : "outdoor";
+  const workoutSubtype: WorkoutSubtype = payload.workoutSubtype === "trainer_workout" || payload.workoutSubtype === "race" ? payload.workoutSubtype : null;
+  const stoppedPercent = elapsedTimeS > 0 ? Math.max(0, ((elapsedTimeS - movingTimeS) / elapsedTimeS) * 100) : null;
+  const eligibility = evaluateDecouplingEligibility({
+    movingTimeSeconds: movingTimeS,
+    variabilityIndex: payload.variabilityIndex ?? null,
+    stoppedPercent,
+    pairedSampleCount: payload.pairedSampleCount ?? 0,
+    pairedCoveragePercent: payload.pairedCoveragePercent ?? 0,
+    aerobicDecouplingPercent: payload.aerobicDecouplingPercent ?? null,
+    isIntervalWorkout: workoutSubtype === "trainer_workout" || rideType === "Threshold",
+  });
   await db.insert(rides).values({
     id,
     riderId,
@@ -108,10 +136,13 @@ export async function POST(request: Request) {
     name,
     startedAt,
     rideType,
+    indoor: environment !== "outdoor",
+    environment,
+    workoutSubtype,
     routeName: payload.routeName?.trim() || null,
     distanceM: payload.distanceM,
     movingTimeS,
-    elapsedTimeS: movingTimeS,
+    elapsedTimeS,
     elevationGainM: payload.elevationGainM,
     averageHeartRateBpm: payload.averageHeartRateBpm,
     maximumHeartRateBpm: payload.maximumHeartRateBpm,
@@ -121,8 +152,9 @@ export async function POST(request: Request) {
     maximumPowerWatts: payload.maximumPowerWatts,
     normalizedPowerWatts: payload.normalizedPowerWatts,
     normalizedPowerSource: payload.normalizedPowerWatts == null ? "unavailable" : "recorded",
-    ftpAtRideWatts: payload.ftpAtRideWatts,
-    weightAtRideKg: payload.weightAtRideKg,
+    ftpAtRideWatts: ftpSnapshot.ftpWatts,
+    ftpSnapshotSource: ftpSnapshot.source,
+    weightAtRideKg: profile?.weightKg ?? payload.weightAtRideKg,
   });
   await db.insert(rideMetrics).values({
     rideId: id,
@@ -136,6 +168,9 @@ export async function POST(request: Request) {
     trainingLoadIsEstimated: finalMetrics.trainingLoadIsEstimated,
     variabilityIndex: payload.variabilityIndex,
     aerobicDecouplingPercent: payload.aerobicDecouplingPercent,
+    decouplingEligible: eligibility.eligible,
+    decouplingEligibilityReason: eligibility.reason,
+    stoppedPercent,
     cadenceStddev: payload.cadenceStddev,
     cadenceTargetPercent: payload.cadenceTargetPercent,
     cadenceAcceptablePercent: payload.cadenceAcceptablePercent,

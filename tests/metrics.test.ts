@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { calculateReadiness, deriveRideMetrics, recommendRecovery } from "../lib/metrics.ts";
+import { calculateReadiness, deriveRideMetrics, evaluateDecouplingEligibility, recommendRecovery } from "../lib/metrics.ts";
 
 test("uses normalized power for intensity and load when available", () => {
   const metrics = deriveRideMetrics({
@@ -84,4 +84,22 @@ test("pain caps readiness even when every other signal is strong", () => {
 
   assert.equal(readiness.score, 39);
   assert.equal(readiness.label, "Rest / recovery recommended");
+});
+
+test("decoupling eligibility rejects short, variable, stopped, and warm-up-dominated rides", () => {
+  const steady = {
+    movingTimeSeconds: 3600,
+    variabilityIndex: 1.04,
+    stoppedPercent: 1.5,
+    pairedSampleCount: 3500,
+    pairedCoveragePercent: 97,
+    aerobicDecouplingPercent: 3.2,
+    isIntervalWorkout: false,
+  };
+  assert.equal(evaluateDecouplingEligibility(steady).eligible, true);
+  assert.match(evaluateDecouplingEligibility({ ...steady, movingTimeSeconds: 2400 }).reason, /45 minutes/);
+  assert.match(evaluateDecouplingEligibility({ ...steady, variabilityIndex: 1.12 }).reason, /1\.08 VI/);
+  assert.match(evaluateDecouplingEligibility({ ...steady, stoppedPercent: 8 }).reason, /Stopped time/);
+  assert.match(evaluateDecouplingEligibility({ ...steady, aerobicDecouplingPercent: -11.2 }).reason, /warm-up/i);
+  assert.match(evaluateDecouplingEligibility({ ...steady, isIntervalWorkout: true }).reason, /workouts/i);
 });

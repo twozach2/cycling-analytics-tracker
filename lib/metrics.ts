@@ -36,6 +36,21 @@ export type DerivedRideMetrics = {
   trainingLoadIsEstimated: boolean;
 };
 
+export type DecouplingEligibilityInput = {
+  movingTimeSeconds: number;
+  variabilityIndex: number | null;
+  stoppedPercent: number | null;
+  pairedSampleCount: number;
+  pairedCoveragePercent: number;
+  aerobicDecouplingPercent: number | null;
+  isIntervalWorkout: boolean;
+};
+
+export type DecouplingEligibility = {
+  eligible: boolean;
+  reason: string;
+};
+
 const round = (value: number, digits = 1) => {
   const scale = 10 ** digits;
   return Math.round(value * scale) / scale;
@@ -102,6 +117,37 @@ export function deriveRideMetrics(input: RideMetricInput): DerivedRideMetrics {
     trainingLoad,
     trainingLoadIsEstimated: input.normalizedPowerWatts === null,
   };
+}
+
+export function evaluateDecouplingEligibility(input: DecouplingEligibilityInput): DecouplingEligibility {
+  if (input.movingTimeSeconds < 45 * 60) {
+    return { eligible: false, reason: "Ride is shorter than 45 minutes." };
+  }
+  if (input.isIntervalWorkout) {
+    return { eligible: false, reason: "Trainer or interval workouts are excluded." };
+  }
+  if (input.variabilityIndex === null) {
+    return { eligible: false, reason: "Variability index is unavailable." };
+  }
+  if (input.variabilityIndex > 1.08) {
+    return { eligible: false, reason: `Power variability is above the 1.08 VI limit (${input.variabilityIndex.toFixed(2)}).` };
+  }
+  if (input.stoppedPercent === null) {
+    return { eligible: false, reason: "Stopped-time data is unavailable." };
+  }
+  if (input.stoppedPercent > 5) {
+    return { eligible: false, reason: `Stopped time exceeds 5% (${input.stoppedPercent.toFixed(1)}%).` };
+  }
+  if (input.pairedSampleCount < 300 || input.pairedCoveragePercent < 60) {
+    return { eligible: false, reason: "Insufficient paired power and heart-rate samples." };
+  }
+  if (input.aerobicDecouplingPercent === null) {
+    return { eligible: false, reason: "Not enough complete intervals for analysis." };
+  }
+  if (input.aerobicDecouplingPercent < -5) {
+    return { eligible: false, reason: "Second-half efficiency improved by more than 5%; warm-up or pacing distribution is dominating the result." };
+  }
+  return { eligible: true, reason: "Eligible steady ride: sufficient duration, stable power, minimal stopped time, and complete power/heart-rate data." };
 }
 
 function baseRecovery(load: number): [number, number] {
