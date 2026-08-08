@@ -514,7 +514,10 @@ blockquote { margin: 16px 0 0; padding: 14px 16px; border-left: 3px solid var(--
 .week-grid { display: grid; grid-template-columns: repeat(7, 1fr); gap: 7px; }
 .week-grid article { display: flex; min-height: 135px; flex-direction: column; padding: 13px; border: 1px solid var(--line); border-radius: 7px; background: #f7f5ee; }
 .week-grid article.today { border-color: var(--ink); background: var(--lime); }
-.week-grid span { color: var(--muted); font: 700 8px/1 var(--font-data); }
+.week-date { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
+.week-date span { color: var(--muted); font: 700 8px/1 var(--font-data); text-transform: uppercase; }
+.week-date em { color: var(--muted); font: 650 7px/1 var(--font-data); font-style: normal; white-space: nowrap; }
+.week-grid article.today .week-date span, .week-grid article.today .week-date em { color: var(--ink); }
 .week-grid strong { margin-top: 22px; font-size: 10px; line-height: 1.3; }
 .week-grid small { margin-top: auto; padding-top: 12px; color: var(--muted); font-size: 8px; line-height: 1.35; }
 

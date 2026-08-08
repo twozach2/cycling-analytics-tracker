@@ -234,6 +234,7 @@ const miles = (meters: number | null) =>
   meters === null ? 0 : Math.round((meters / 1609.344) * 10) / 10;
 const feet = (meters: number | null) =>
   meters === null ? 0 : Math.round(meters * 3.28084);
+const localDateKey = (date = new Date()) => `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
 
 type SavedRideRow = {
   ride: {
@@ -1378,6 +1379,7 @@ function PlanToday({ rides, recovery, setRecovery, recoverySaveState, saveRecove
   const [worldRotation, setWorldRotation] = useState<ZwiftRotation | null>(null);
   const [routeShuffleIndex, setRouteShuffleIndex] = useState(0);
   const [recentRouteIds, setRecentRouteIds] = useState<string[]>([]);
+  const [planStartDate, setPlanStartDate] = useState(localDateKey);
 
   const loadInsights = async () => {
     const response = await fetch("/api/phase3", { cache: "no-store" });
@@ -1427,6 +1429,18 @@ function PlanToday({ rides, recovery, setRecovery, recoverySaveState, saveRecove
       .then((rotation) => { if (active) setWorldRotation(rotation); })
       .catch(() => { if (active) setWorldRotation(null); });
     return () => { active = false; };
+  }, []);
+
+  useEffect(() => {
+    const updateCalendarDay = () => setPlanStartDate(localDateKey());
+    const visibilityHandler = () => { if (document.visibilityState === "visible") updateCalendarDay(); };
+    updateCalendarDay();
+    const interval = window.setInterval(updateCalendarDay, 60 * 1000);
+    document.addEventListener("visibilitychange", visibilityHandler);
+    return () => {
+      window.clearInterval(interval);
+      document.removeEventListener("visibilitychange", visibilityHandler);
+    };
   }, []);
 
   const postAction = async (body: object, successMessage: string) => {
@@ -1548,7 +1562,7 @@ function PlanToday({ rides, recovery, setRecovery, recoverySaveState, saveRecove
   const selectedRoute = routeSuite.find((suggestion) => suggestion.route.id === selectedRouteId)
     ?? routeSuite.find((suggestion) => suggestion.recommended)
     ?? routeSuite[0];
-  const weeklyPlan = buildWeeklyPlan(planningInput);
+  const weeklyPlan = buildWeeklyPlan(planningInput, planStartDate);
   const prediction = insights?.prediction;
   const projectedFromFtp = prediction?.midpointWatts ?? currentFtp;
   const projection = projectFtpGoal(projectedFromFtp, goalTarget, new Date(anchorMs).toISOString());
@@ -1638,9 +1652,9 @@ function PlanToday({ rides, recovery, setRecovery, recoverySaveState, saveRecove
       </section>
 
       <section className="weekly-plan panel full-width">
-        <div className="section-heading"><div><span className="eyebrow">The next seven days</span><h2>A useful plan, not a rigid prescription</h2></div><span className="small-badge">adapts to check-in + load</span></div>
-        <div className="week-grid">{weeklyPlan.map((day, index) => <article key={day.day} className={index === 0 ? "today" : ""}><span>{day.day}</span><strong>{day.session}</strong><small>{day.purpose}</small></article>)}</div>
-        <p className="chart-note"><i /> Regenerate the guidance by updating the recovery check-in or importing new training. Stop for pain or unusual symptoms.</p>
+        <div className="section-heading"><div><span className="eyebrow">The next seven days</span><h2>A useful plan, not a rigid prescription</h2></div><span className="small-badge">updates daily · local time</span></div>
+        <div className="week-grid">{weeklyPlan.map((day, index) => <article key={day.dateIso} className={index === 0 ? "today" : ""}><div className="week-date"><span>{index === 0 ? "Today" : day.day}</span><em>{day.dateLabel}</em></div><strong>{day.session}</strong><small>{day.purpose}</small></article>)}</div>
+        <p className="chart-note"><i /> The calendar advances automatically at local midnight. Updating the recovery check-in or importing training refreshes the guidance. Stop for pain or unusual symptoms.</p>
       </section>
 
       <section className="ftp-forecast panel">

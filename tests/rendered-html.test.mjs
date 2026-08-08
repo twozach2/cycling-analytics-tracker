@@ -67,6 +67,8 @@ test("removes starter preview metadata and dependencies", async () => {
   assert.match(dashboard, /every 15 minutes while open/);
   assert.match(dashboard, /Estimated cycling VO₂ max/);
   assert.match(dashboard, /rolling 90-day peak/);
+  assert.match(dashboard, /updates daily · local time/);
+  assert.match(dashboard, /advances automatically at local midnight/);
   assert.match(styles, /--ride-data-columns: 52px minmax\(190px, 1fr\) 112px 72px 66px 52px 18px/);
   assert.match(styles, /grid-template-columns: var\(--ride-data-columns\) 52px/);
   assert.match(styles, /\.forecast-stamp \{[^}]*width: 168px;[^}]*height: 168px;/);

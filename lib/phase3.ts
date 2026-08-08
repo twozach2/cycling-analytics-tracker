@@ -186,9 +186,9 @@ export function recommendWorkout(input: PlanningInput): WorkoutRecommendation {
   return { mode: "tempo", primary: "Tempo development · 3 × 10 min", detail: "Ride controlled tempo with five easy minutes between efforts.", avoid: "Turning the final interval into a maximal test" };
 }
 
-export function buildWeeklyPlan(input: PlanningInput) {
+export function buildWeeklyPlan(input: PlanningInput, startDateIso = new Date().toISOString().slice(0, 10)) {
   const cautious = input.kneePain >= 3 || input.readinessScore < 55 || (input.acuteChronicRatio ?? 0) > 1.5;
-  return cautious ? [
+  const schedule = cautious ? [
     { day: "Mon", session: "Rest + mobility", purpose: "Absorb recent load" },
     { day: "Tue", session: "Easy spin · 35 min", purpose: "Pain-free movement only" },
     { day: "Wed", session: "Rest", purpose: "Reassess readiness" },
@@ -205,4 +205,21 @@ export function buildWeeklyPlan(input: PlanningInput) {
     { day: "Sat", session: "Endurance · 75–90 min", purpose: "Durability" },
     { day: "Sun", session: "Rest", purpose: "Start next week ready" },
   ];
+  const parsedStart = new Date(`${startDateIso.slice(0, 10)}T12:00:00.000Z`);
+  const start = Number.isNaN(parsedStart.getTime()) ? new Date() : parsedStart;
+  const dayLabels = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+  const plan = Array.from({ length: 7 }, (_, offset) => {
+    const date = new Date(start);
+    date.setUTCDate(start.getUTCDate() + offset);
+    const day = dayLabels[date.getUTCDay()];
+    const scheduled = schedule.find((item) => item.day === day)!;
+    return {
+      ...scheduled,
+      dateIso: date.toISOString().slice(0, 10),
+      dateLabel: date.toLocaleDateString("en-US", { month: "short", day: "numeric", timeZone: "UTC" }),
+    };
+  });
+  const todayWorkout = recommendWorkout(input);
+  plan[0] = { ...plan[0], session: todayWorkout.primary, purpose: todayWorkout.detail };
+  return plan;
 }
