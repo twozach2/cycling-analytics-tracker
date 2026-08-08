@@ -9,7 +9,7 @@ A private, full-stack cycling dashboard for importing Strava and activity-file d
 - FIT, TCX, and GPX uploads with original-file retention
 - Power, heart-rate, cadence, workload, FTP, and aerobic-durability analysis
 - Personalized Zwift route-time ranges using rider weight, sustainable power, distance, and climbing
-- One-click Markdown export of the complete ride log, rider configuration, and methodology
+- Markdown export of the complete ride log or one selected ride, including rider configuration and methodology
 - Cloudflare D1 persistence, R2 file storage, and ChatGPT-authenticated rider profiles
 
 ## Local development

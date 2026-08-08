@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { buildCyclingMarkdown, cyclingMarkdownFilename, METHOD_DEFINITIONS, type MarkdownRide } from "../lib/markdown-export.ts";
+import { buildCyclingMarkdown, cyclingMarkdownFilename, cyclingRideMarkdownFilename, METHOD_DEFINITIONS, type MarkdownRide } from "../lib/markdown-export.ts";
 
 const ride: MarkdownRide = {
   id: "ride-1",
@@ -48,11 +48,13 @@ test("Markdown export contains rider configuration, methodology, and complete ri
   assert.match(markdown, /## Method/);
   assert.match(markdown, new RegExp(METHOD_DEFINITIONS.at(-1)!.title));
   assert.match(markdown, /## Ride log/);
+  assert.match(markdown, /Rides: 1/);
   assert.match(markdown, /Morning endurance/);
   assert.match(markdown, /Normalized power: 134 W/);
   assert.match(markdown, /Aerobic decoupling: 3\.2%/);
   assert.match(markdown, /Steady ride\. No pain\./);
   assert.equal(cyclingMarkdownFilename(new Date("2026-08-07T18:00:00.000Z")), "cycling-analytics-2026-08-07.md");
+  assert.equal(cyclingRideMarkdownFilename(ride), "cycling-analytics-2026-08-07-morning-endurance.md");
 });
 
 test("Markdown export labels unavailable optional ride metrics", () => {

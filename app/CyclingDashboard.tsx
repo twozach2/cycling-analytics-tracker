@@ -10,7 +10,7 @@ import {
   type SubjectiveRecovery,
 } from "@/lib/metrics";
 import { buildWeeklyPlan, projectFtpGoal, recommendWorkout } from "@/lib/phase3";
-import { buildCyclingMarkdown, cyclingMarkdownFilename, METHOD_DEFINITIONS } from "@/lib/markdown-export";
+import { buildCyclingMarkdown, cyclingMarkdownFilename, cyclingRideMarkdownFilename, METHOD_DEFINITIONS } from "@/lib/markdown-export";
 import { recommendZwiftRoutes, ROUTE_ESTIMATE_WATTS_PER_KG, ZWIFT_ROUTE_COUNT, ZWIFT_WORLDS } from "@/lib/zwift-routes";
 import type { ZwiftRotation } from "@/lib/zwift-world-rotation";
 
@@ -664,10 +664,9 @@ export default function CyclingDashboard() {
     }
   };
 
-  const exportMarkdown = () => {
+  const downloadMarkdown = (exportRides: readonly Ride[], filename: string, message: string, generatedAt = new Date()) => {
     if (currentFtp === null || currentWeightKg === null) return;
-    const generatedAt = new Date();
-    const markdown = buildCyclingMarkdown(rides, {
+    const markdown = buildCyclingMarkdown(exportRides, {
       ftpWatts: currentFtp,
       bodyWeightKg: currentWeightKg,
       dataMode,
@@ -675,12 +674,21 @@ export default function CyclingDashboard() {
     const url = URL.createObjectURL(new Blob(["\uFEFF", markdown], { type: "text/markdown;charset=utf-8" }));
     const link = document.createElement("a");
     link.href = url;
-    link.download = cyclingMarkdownFilename(generatedAt);
+    link.download = filename;
     document.body.appendChild(link);
     link.click();
     link.remove();
     window.setTimeout(() => URL.revokeObjectURL(url), 0);
-    setSyncNote(`${rides.length} rides exported · Markdown`);
+    setSyncNote(message);
+  };
+
+  const exportMarkdown = () => {
+    const generatedAt = new Date();
+    downloadMarkdown(rides, cyclingMarkdownFilename(generatedAt), `${rides.length} rides exported · Markdown`, generatedAt);
+  };
+
+  const exportRideMarkdown = (ride: Ride) => {
+    downloadMarkdown([ride], cyclingRideMarkdownFilename(ride), `${ride.name} exported · Markdown`);
   };
 
   const pageMeta: Record<View, { eyebrow: string; title: string }> = {
@@ -757,7 +765,7 @@ export default function CyclingDashboard() {
         )}
 
         {view === "dashboard" && <div className="dashboard-stack">
-          <Overview selectedRide={selectedRide} rides={rides} openRide={openRide} setView={setView} isDemo={dataMode !== "saved"} currentFtp={currentFtp} />
+          <Overview selectedRide={selectedRide} rides={rides} openRide={openRide} exportRide={exportRideMarkdown} setView={setView} isDemo={dataMode !== "saved"} currentFtp={currentFtp} />
           <details className="performance-drawer">
             <summary><span><strong>Performance details</strong><small>Route comparisons, benchmarks, cadence, and workload</small></span><i>+</i></summary>
             <PerformanceDetails rides={rides} currentFtp={currentFtp} />
@@ -783,6 +791,7 @@ export default function CyclingDashboard() {
             search={search}
             setSearch={setSearch}
             openRide={openRide}
+            exportRide={exportRideMarkdown}
           />
         )}
         {view === "import" && (
@@ -883,10 +892,11 @@ function RiderSetup({ initialFtp, initialWeightKg, onSaved }: {
   );
 }
 
-function Overview({ selectedRide, rides, openRide, setView, isDemo, currentFtp }: {
+function Overview({ selectedRide, rides, openRide, exportRide, setView, isDemo, currentFtp }: {
   selectedRide: Ride;
   rides: Ride[];
   openRide: (ride: Ride) => void;
+  exportRide: (ride: Ride) => void;
   setView: (view: View) => void;
   isDemo: boolean;
   currentFtp: number;
@@ -984,7 +994,7 @@ function Overview({ selectedRide, rides, openRide, setView, isDemo, currentFtp }
       </section>
 
       <section className="ride-detail panel span-two">
-        <div className="section-heading"><div><span className="eyebrow">Selected ride · {selectedRide.dateLabel}</span><h2>{selectedRide.name}</h2><p>{selectedRide.route}</p></div><span className={`ride-tag ${selectedRide.type.toLowerCase().replace(" ", "-")}`}>{selectedRide.type}</span></div>
+        <div className="section-heading"><div><span className="eyebrow">Selected ride · {selectedRide.dateLabel}</span><h2>{selectedRide.name}</h2><p>{selectedRide.route}</p></div><div className="ride-detail-actions"><span className={`ride-tag ${selectedRide.type.toLowerCase().replace(" ", "-")}`}>{selectedRide.type}</span><button className="ghost-button ride-export-button" type="button" onClick={() => exportRide(selectedRide)}>Export this ride <span aria-hidden="true">↓</span></button></div></div>
         <div className="ride-stats">
           <Stat label="Distance" value={selectedRide.distanceMiles.toFixed(1)} unit="mi" />
           <Stat label="Moving time" value={formatDuration(selectedRide.movingTimeSeconds)} />
@@ -1008,7 +1018,7 @@ function Overview({ selectedRide, rides, openRide, setView, isDemo, currentFtp }
 
       <section className="recent-rides panel full-width">
         <div className="section-heading"><div><span className="eyebrow">Recent work</span><h2>Ride log</h2></div><button className="text-button" onClick={() => setView("rides")}>View all →</button></div>
-        <div className="ride-list">{rides.slice(0, 4).map((ride) => <RideRow key={ride.id} ride={ride} onClick={() => openRide(ride)} />)}</div>
+        <div className="ride-list">{rides.slice(0, 4).map((ride) => <RideRow key={ride.id} ride={ride} onClick={() => openRide(ride)} onExport={() => exportRide(ride)} />)}</div>
       </section>
     </div>
   );
@@ -1044,11 +1054,11 @@ function Stat({ label, value, unit }: { label: string; value: string; unit?: str
   return <div className="stat"><span>{label}</span><strong>{value} {unit && <small>{unit}</small>}</strong></div>;
 }
 
-function RideRow({ ride, onClick }: { ride: Ride; onClick: () => void }) {
-  return <button className="ride-row" onClick={onClick}><span className="ride-date"><strong>{ride.dayLabel}</strong><small>{ride.dateLabel}</small></span><span className="ride-main"><strong>{ride.name}</strong><small>{ride.route}</small></span><span className={`ride-tag ${ride.type.toLowerCase().replace(" ", "-")}`}>{ride.type}</span><span className="ride-number"><strong>{ride.distanceMiles.toFixed(1)}</strong><small>mi</small></span><span className="ride-number"><strong>{ride.averagePower}</strong><small>W avg</small></span><span className="ride-number"><strong>{ride.trainingLoad}</strong><small>load</small></span><span className="row-arrow">→</span></button>;
+function RideRow({ ride, onClick, onExport }: { ride: Ride; onClick: () => void; onExport: () => void }) {
+  return <div className="ride-row-shell"><button className="ride-row" type="button" onClick={onClick}><span className="ride-date"><strong>{ride.dayLabel}</strong><small>{ride.dateLabel}</small></span><span className="ride-main"><strong>{ride.name}</strong><small>{ride.route}</small></span><span className={`ride-tag ${ride.type.toLowerCase().replace(" ", "-")}`}>{ride.type}</span><span className="ride-number"><strong>{ride.distanceMiles.toFixed(1)}</strong><small>mi</small></span><span className="ride-number"><strong>{ride.averagePower}</strong><small>W avg</small></span><span className="ride-number"><strong>{ride.trainingLoad}</strong><small>load</small></span><span className="row-arrow">→</span></button><button className="ride-row-export" type="button" onClick={onExport} aria-label={`Export ${ride.name} as Markdown`} title="Export this ride as Markdown"><span>.md</span><strong aria-hidden="true">↓</strong></button></div>;
 }
 
-function RideLog({ rides, allRides, filter, setFilter, search, setSearch, openRide }: { rides: Ride[]; allRides: Ride[]; filter: string; setFilter: (value: string) => void; search: string; setSearch: (value: string) => void; openRide: (ride: Ride) => void }) {
+function RideLog({ rides, allRides, filter, setFilter, search, setSearch, openRide, exportRide }: { rides: Ride[]; allRides: Ride[]; filter: string; setFilter: (value: string) => void; search: string; setSearch: (value: string) => void; openRide: (ride: Ride) => void; exportRide: (ride: Ride) => void }) {
   const distance = allRides.reduce((sum, ride) => sum + ride.distanceMiles, 0);
   const movingSeconds = allRides.reduce((sum, ride) => sum + ride.movingTimeSeconds, 0);
   const elevation = allRides.reduce((sum, ride) => sum + ride.elevationFeet, 0);
@@ -1067,8 +1077,8 @@ function RideLog({ rides, allRides, filter, setFilter, search, setSearch, openRi
           <label className="search-box"><span>⌕</span><input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search rides or routes" /></label>
           <div className="filter-buttons" role="group" aria-label="Filter ride type">{["All rides", "Zone 2", "Zone 2 benchmark", "Tempo", "Threshold", "Recovery", "Free ride"].map((value) => <button key={value} className={filter === value ? "selected" : ""} onClick={() => setFilter(value)}>{value}</button>)}</div>
         </div>
-        <div className="table-header"><span>Date</span><span>Ride</span><span>Type</span><span>Distance</span><span>Power</span><span>Load</span><span /></div>
-        <div className="ride-list full-list">{rides.map((ride) => <RideRow key={ride.id} ride={ride} onClick={() => openRide(ride)} />)}{!rides.length && <div className="empty-state"><strong>No rides match this view.</strong><span>Try a different ride type or search term.</span></div>}</div>
+        <div className="table-header"><span>Date</span><span>Ride</span><span>Type</span><span>Distance</span><span>Power</span><span>Load</span><span /><span>Export</span></div>
+        <div className="ride-list full-list">{rides.map((ride) => <RideRow key={ride.id} ride={ride} onClick={() => openRide(ride)} onExport={() => exportRide(ride)} />)}{!rides.length && <div className="empty-state"><strong>No rides match this view.</strong><span>Try a different ride type or search term.</span></div>}</div>
       </section>
     </div>
   );

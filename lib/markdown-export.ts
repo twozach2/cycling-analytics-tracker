@@ -159,3 +159,15 @@ export function buildCyclingMarkdown(
 export function cyclingMarkdownFilename(generatedAt = new Date()): string {
   return `cycling-analytics-${generatedAt.toISOString().slice(0, 10)}.md`;
 }
+
+export function cyclingRideMarkdownFilename(ride: Pick<MarkdownRide, "date" | "name">): string {
+  const safeDate = /^\d{4}-\d{2}-\d{2}$/.test(ride.date) ? ride.date : "ride";
+  const slug = ride.name
+    .normalize("NFKD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-|-$/g, "")
+    .slice(0, 60) || "activity";
+  return `cycling-analytics-${safeDate}-${slug}.md`;
+}
