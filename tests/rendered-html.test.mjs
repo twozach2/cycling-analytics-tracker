@@ -54,6 +54,8 @@ test("removes starter preview metadata and dependencies", async () => {
   assert.match(dashboard, /Body weight \(lb\)/);
   assert.match(dashboard, /Required rider setup/);
   assert.match(dashboard, /Save and open dashboard/);
+  assert.match(dashboard, /Export \.md/);
+  assert.match(dashboard, /buildCyclingMarkdown/);
   assert.match(dashboard, /World calendar/);
   assert.match(dashboard, /official Zwift map/i);
   assert.match(dashboard, /\/zwift-routes\//);

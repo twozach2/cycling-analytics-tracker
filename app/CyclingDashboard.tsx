@@ -10,6 +10,7 @@ import {
   type SubjectiveRecovery,
 } from "@/lib/metrics";
 import { buildWeeklyPlan, projectFtpGoal, recommendWorkout } from "@/lib/phase3";
+import { buildCyclingMarkdown, cyclingMarkdownFilename, METHOD_DEFINITIONS } from "@/lib/markdown-export";
 import { recommendZwiftRoutes, ROUTE_ESTIMATE_WATTS_PER_KG, ZWIFT_ROUTE_COUNT, ZWIFT_WORLDS } from "@/lib/zwift-routes";
 import type { ZwiftRotation } from "@/lib/zwift-world-rotation";
 
@@ -663,6 +664,25 @@ export default function CyclingDashboard() {
     }
   };
 
+  const exportMarkdown = () => {
+    if (currentFtp === null || currentWeightKg === null) return;
+    const generatedAt = new Date();
+    const markdown = buildCyclingMarkdown(rides, {
+      ftpWatts: currentFtp,
+      bodyWeightKg: currentWeightKg,
+      dataMode,
+    }, generatedAt);
+    const url = URL.createObjectURL(new Blob(["\uFEFF", markdown], { type: "text/markdown;charset=utf-8" }));
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = cyclingMarkdownFilename(generatedAt);
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    window.setTimeout(() => URL.revokeObjectURL(url), 0);
+    setSyncNote(`${rides.length} rides exported · Markdown`);
+  };
+
   const pageMeta: Record<View, { eyebrow: string; title: string }> = {
     dashboard: { eyebrow: "Your training at a glance", title: "Ride with the trend." },
     plan: { eyebrow: "Readiness + next steps", title: "Plan today" },
@@ -724,6 +744,7 @@ export default function CyclingDashboard() {
           </div>
           <div className="top-actions">
             <span className={`sync-status mode-${dataMode}`}><i /> {syncLabel}</span>
+            <button className="ghost-button export-button" type="button" onClick={exportMarkdown} aria-label="Export all ride data and methodology as Markdown">Export .md <span aria-hidden="true">↓</span></button>
             <button className="primary-button" onClick={() => setView("import")}>Import ride <span>+</span></button>
           </div>
         </header>
@@ -789,7 +810,7 @@ export default function CyclingDashboard() {
             />
           </div>
         )}
-        {view === "method" && <Methodology currentFtp={currentFtp} />}
+        {view === "method" && <Methodology currentFtp={currentFtp} currentWeightKg={currentWeightKg} />}
       </section>
     </main>
   );
@@ -1658,16 +1679,6 @@ function ReviewField({ label, value }: { label: string; value: string }) {
   return <label className="review-field"><span>{label}</span><input value={value} readOnly /></label>;
 }
 
-function Methodology({ currentFtp }: { currentFtp: number }) {
-  const methods = [
-    { id: "01", title: "Power / HR ratio", formula: "average power ÷ average heart rate", note: "Contextual efficiency signal for comparable steady rides." },
-    { id: "02", title: "Intensity factor", formula: "normalized power ÷ FTP", note: "Average power is used only as an explicitly marked estimate." },
-    { id: "03", title: "Training load", formula: "hours × intensity² × 100", note: "A transparent TSS-like load, not a licensed physiological diagnosis." },
-    { id: "04", title: "Aerobic decoupling", formula: "median interval efficiency · first half vs second half", note: "Ten equal-duration intervals reduce distortion from normal surges and coasting; variable rides remain directional." },
-    { id: "05", title: "Load ratio", formula: "7-day load ÷ 28-day weekly average", note: "A review signal for abrupt changes, never an exact injury threshold." },
-    { id: "06", title: "Readiness", formula: "recovery time + load + check-in", note: "A weighted, explainable score. Pain caps the result and overrides hard-ride advice." },
-    { id: "07", title: "FTP prediction", formula: "20–60 min best power × duration factor", note: "A conservative range from recorded efforts, with confidence tied to available evidence." },
-    { id: "08", title: "Goal scenarios", formula: "watts remaining ÷ monthly scenario", note: "Multiple clearly labeled estimates; never a promised achievement date." },
-  ];
-  return <div className="method-layout"><section className="method-hero panel-dark"><span className="eyebrow light">Explainable by design</span><h2>No mystery score.</h2><p>Every recommendation is assembled from visible inputs, conservative rules, and versioned calculations. Pain always overrides the number.</p><div className="version-stamp"><span>Current ruleset</span><strong>v3.1</strong></div></section><section className="method-list panel"><div className="section-heading"><div><span className="eyebrow">Metric dictionary</span><h2>What the app calculates</h2></div></div>{methods.map((method) => <article key={method.id} className="method-row"><span>{method.id}</span><div><strong>{method.title}</strong><code>{method.formula}</code><p>{method.note}</p></div></article>)}</section><section className="config-card panel"><div className="section-heading"><div><span className="eyebrow">Athlete configuration</span><h2>Current working values</h2></div></div><div className="config-grid"><Stat label="FTP" value={String(currentFtp)} unit="W" /><Stat label="Zone 2 target" value={String(Math.round(currentFtp * 2 / 3))} unit="W" /><Stat label="Cadence band" value="85–90" unit="rpm" /><Stat label="Next milestone" value="175" unit="W" /></div><p className="chart-note"><i /> FTP and goals can be updated from Plan Today; each calculation records the working value used.</p></section></div>;
+function Methodology({ currentFtp, currentWeightKg }: { currentFtp: number; currentWeightKg: number }) {
+  return <div className="method-layout"><section className="method-hero panel-dark"><span className="eyebrow light">Explainable by design</span><h2>No mystery score.</h2><p>Every recommendation is assembled from visible inputs, conservative rules, and versioned calculations. Pain always overrides the number.</p><div className="version-stamp"><span>Current ruleset</span><strong>v3.2</strong></div></section><section className="method-list panel"><div className="section-heading"><div><span className="eyebrow">Metric dictionary</span><h2>What the app calculates</h2></div></div>{METHOD_DEFINITIONS.map((method) => <article key={method.id} className="method-row"><span>{method.id}</span><div><strong>{method.title}</strong><code>{method.formula}</code><p>{method.note}</p></div></article>)}</section><section className="config-card panel"><div className="section-heading"><div><span className="eyebrow">Athlete configuration</span><h2>Current working values</h2></div></div><div className="config-grid"><Stat label="FTP" value={String(currentFtp)} unit="W" /><Stat label="Body weight" value={String(Math.round(currentWeightKg * 2.2046226218))} unit="lb" /><Stat label="FTP / weight" value={(currentFtp / currentWeightKg).toFixed(2)} unit="W/kg" /><Stat label="Zone 2 target" value={String(Math.round(currentFtp * 2 / 3))} unit="W" /></div><p className="chart-note"><i /> FTP and body weight can be updated from Plan Today; each calculation records the working values used.</p></section></div>;
 }

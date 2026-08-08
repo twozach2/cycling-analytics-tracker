@@ -9,7 +9,7 @@
     "dev": "vinext dev",
     "build": "vinext build",
     "start": "vinext start",
-    "test": "npm run build && node --test tests/rendered-html.test.mjs tests/metrics.test.ts tests/phase3.test.ts tests/strava-sync.test.ts",
+    "test": "npm run build && node --test tests/rendered-html.test.mjs tests/markdown-export.test.ts tests/metrics.test.ts tests/phase3.test.ts tests/strava-sync.test.ts",
     "lint": "eslint . --ignore-pattern dist --ignore-pattern .next",
     "db:generate": "drizzle-kit generate"
   },

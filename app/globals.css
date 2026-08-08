@@ -169,6 +169,8 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline: 3px s
 .secondary-button:hover { background: #c9f052; transform: translateY(-1px); }
 .ghost-button { background: transparent; border-color: var(--line); }
 .ghost-button:hover { background: #efede4; }
+.export-button { gap: 9px; white-space: nowrap; }
+.export-button span { color: var(--muted); font: 700 15px/1 var(--font-data); }
 
 .dashboard-stack, .import-page-stack { display: grid; gap: 18px; }
 .dashboard-grid { display: grid; grid-template-columns: minmax(0, 1.4fr) minmax(280px, 0.75fr); gap: 18px; }
@@ -616,6 +618,9 @@ blockquote { margin: 16px 0 0; padding: 14px 16px; border-left: 3px solid var(--
   .profile-gate-shell { padding: 20px 14px 32px; }
   .profile-gate-card { margin: 32px auto; padding: 26px 20px; }
   .profile-setup-form { grid-template-columns: 1fr; }
+  .top-actions { gap: 8px; }
+  .export-button { width: 42px; padding: 0; font-size: 0; }
+  .export-button span { font-size: 16px; }
   .top-actions .primary-button { width: 42px; padding: 0; font-size: 0; box-shadow: none; }
   .top-actions .primary-button span { font-size: 19px; }
   .recovery-number strong { font-size: 60px; }
