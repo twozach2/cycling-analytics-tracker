@@ -83,6 +83,7 @@ test("removes starter preview metadata and dependencies", async () => {
   assert.match(styles, /\.avoid-strip \{[^}]*background: var\(--warning-bg\);[^}]*color: var\(--warning-text\);/);
   assert.match(styles, /\.ride-tag \{[^}]*background: var\(--tag-neutral-bg\);[^}]*color: var\(--tag-text\);/);
   assert.match(styles, /\.ride-tag\.zone-2-benchmark \{ background: var\(--tag-benchmark-bg\); \}/);
+  assert.match(styles, /\.route-choice\.selected \.route-time-cue \{ background: var\(--lime\); color: var\(--tone-text\); \}/);
   assert.match(styles, /--ride-data-columns: 52px minmax\(190px, 1fr\) 112px 72px 66px 52px 18px/);
   assert.match(styles, /grid-template-columns: var\(--ride-data-columns\) 52px/);
   assert.match(styles, /\.forecast-stamp \{[^}]*width: 168px;[^}]*height: 168px;/);
