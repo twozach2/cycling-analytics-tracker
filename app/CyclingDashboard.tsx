@@ -16,6 +16,7 @@ import { recommendZwiftRoutes, ROUTE_ESTIMATE_WATTS_PER_KG, ZWIFT_ROUTE_COUNT, Z
 import type { ZwiftRotation } from "@/lib/zwift-world-rotation";
 
 type View = "dashboard" | "plan" | "rides" | "import" | "method";
+type ThemeId = "citrus" | "night-city" | "midnight" | "alpine";
 type DataMode = "loading" | "demo" | "saved" | "unavailable";
 type RideEnvironment = "virtual" | "indoor" | "outdoor";
 type WorkoutSubtype = "trainer_workout" | "race" | null;
@@ -230,6 +231,58 @@ const navItems: Array<{ id: View; label: string; glyph: string }> = [
   { id: "method", label: "Method", glyph: "05" },
 ];
 
+const themeOptions: Array<{
+  id: ThemeId;
+  name: string;
+  description: string;
+  swatches: [string, string, string, string];
+}> = [
+  {
+    id: "citrus",
+    name: "Citrus Paper",
+    description: "The original warm paper palette with a sharp lime signal.",
+    swatches: ["#f4f1e8", "#171a16", "#d7ff62", "#a9d9e7"],
+  },
+  {
+    id: "night-city",
+    name: "Night Circuit",
+    description: "Electric yellow, cyan, and hot pink over a deep blue-black cockpit.",
+    swatches: ["#080a16", "#f9f002", "#00f0ff", "#ff2a6d"],
+  },
+  {
+    id: "midnight",
+    name: "Midnight Volt",
+    description: "Low-glare navy with cool blue and acid-green training cues.",
+    swatches: ["#0b1220", "#dbeafe", "#7dd3fc", "#a3e635"],
+  },
+  {
+    id: "alpine",
+    name: "Alpine Day",
+    description: "Cool stone, glacier blue, and evergreen for daylight sessions.",
+    swatches: ["#edf3f0", "#16302a", "#86c5d8", "#d6ed8b"],
+  },
+];
+
+const UI_PREFERENCES_KEY = "cycling-analytics:ui-preferences";
+
+type UiPreferences = {
+  theme?: string;
+  view?: string;
+  selectedRideId?: string;
+  rideFilter?: string;
+  search?: string;
+};
+
+function readUiPreferences(): UiPreferences {
+  if (typeof window === "undefined") return {};
+  try {
+    return JSON.parse(window.localStorage.getItem(UI_PREFERENCES_KEY) ?? "{}") as UiPreferences;
+  } catch {
+    window.localStorage.removeItem(UI_PREFERENCES_KEY);
+    return {};
+  }
+}
+
 const miles = (meters: number | null) =>
   meters === null ? 0 : Math.round((meters / 1609.344) * 10) / 10;
 const feet = (meters: number | null) =>
@@ -347,17 +400,19 @@ async function fetchSavedRides() {
 }
 
 export default function CyclingDashboard() {
-  const [view, setView] = useState<View>("dashboard");
+  const [initialPreferences] = useState<UiPreferences>(readUiPreferences);
+  const [view, setView] = useState<View>(() => navItems.some((item) => item.id === initialPreferences.view) ? initialPreferences.view as View : "dashboard");
+  const [theme, setTheme] = useState<ThemeId>(() => themeOptions.some((option) => option.id === initialPreferences.theme) ? initialPreferences.theme as ThemeId : "citrus");
   const [rides, setRides] = useState(initialRides);
-  const [selectedRideId, setSelectedRideId] = useState(initialRides[0].id);
+  const [selectedRideId, setSelectedRideId] = useState(() => initialPreferences.selectedRideId ?? initialRides[0].id);
   const [dataMode, setDataMode] = useState<DataMode>("loading");
   const [currentFtp, setCurrentFtp] = useState<number | null>(null);
   const [currentWeightKg, setCurrentWeightKg] = useState<number | null>(null);
   const [profileStatus, setProfileStatus] = useState<"loading" | "ready" | "error">("loading");
   const [syncNote, setSyncNote] = useState("");
   const [rideTypeSavingId, setRideTypeSavingId] = useState<string | null>(null);
-  const [rideFilter, setRideFilter] = useState("All rides");
-  const [search, setSearch] = useState("");
+  const [rideFilter, setRideFilter] = useState(() => ["All rides", ...rideTypes].includes(initialPreferences.rideFilter ?? "") ? initialPreferences.rideFilter as string : "All rides");
+  const [search, setSearch] = useState(() => initialPreferences.search ?? "");
   const [recovery, setRecovery] = useState<SubjectiveRecovery>({
     sleepQuality: 4,
     legFreshness: "heavy",
@@ -380,13 +435,27 @@ export default function CyclingDashboard() {
   const fileInput = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
+    document.documentElement.dataset.theme = theme;
+  }, [theme]);
+
+  useEffect(() => {
+    window.localStorage.setItem(UI_PREFERENCES_KEY, JSON.stringify({
+      theme,
+      view,
+      selectedRideId,
+      rideFilter,
+      search,
+    }));
+  }, [theme, view, selectedRideId, rideFilter, search]);
+
+  useEffect(() => {
     let active = true;
     void fetchSavedRides()
       .then((savedRides) => {
         if (!active) return;
         if (savedRides.length) {
           setRides(savedRides);
-          setSelectedRideId(savedRides[0].id);
+          setSelectedRideId((current) => savedRides.some((ride) => ride.id === current) ? current : savedRides[0].id);
           setDataMode("saved");
         } else {
           setDataMode("demo");
@@ -960,7 +1029,7 @@ export default function CyclingDashboard() {
             />
           </div>
         )}
-        {view === "method" && <Methodology currentFtp={currentFtp} currentWeightKg={currentWeightKg} />}
+        {view === "method" && <Methodology currentFtp={currentFtp} currentWeightKg={currentWeightKg} theme={theme} setTheme={setTheme} />}
       </section>
     </main>
   );
@@ -1877,6 +1946,34 @@ function ReviewField({ label, value }: { label: string; value: string }) {
   return <label className="review-field"><span>{label}</span><input value={value} readOnly /></label>;
 }
 
-function Methodology({ currentFtp, currentWeightKg }: { currentFtp: number; currentWeightKg: number }) {
-  return <div className="method-layout"><section className="method-hero panel-dark"><span className="eyebrow light">Explainable by design</span><h2>No mystery score.</h2><p>Every recommendation is assembled from visible inputs, conservative rules, and versioned calculations. Pain always overrides the number.</p><div className="version-stamp"><span>Current ruleset</span><strong>v3.4</strong></div></section><section className="method-list panel"><div className="section-heading"><div><span className="eyebrow">Metric dictionary</span><h2>What the app calculates</h2></div></div>{METHOD_DEFINITIONS.map((method) => <article key={method.id} className="method-row"><span>{method.id}</span><div><strong>{method.title}</strong><code>{method.formula}</code><p>{method.note}</p></div></article>)}</section><section className="config-card panel"><div className="section-heading"><div><span className="eyebrow">Athlete configuration</span><h2>Current working values</h2></div></div><div className="config-grid"><Stat label="FTP" value={String(currentFtp)} unit="W" /><Stat label="Body weight" value={String(Math.round(currentWeightKg * 2.2046226218))} unit="lb" /><Stat label="FTP / weight" value={(currentFtp / currentWeightKg).toFixed(2)} unit="W/kg" /><Stat label="Zone 2 target" value={String(Math.round(currentFtp * 2 / 3))} unit="W" /></div><p className="chart-note"><i /> FTP and body weight can be updated from Plan Today. Every ride keeps its own FTP snapshot and source, so later FTP changes do not rewrite historical IF or load.</p></section></div>;
+function Methodology({ currentFtp, currentWeightKg, theme, setTheme }: {
+  currentFtp: number;
+  currentWeightKg: number;
+  theme: ThemeId;
+  setTheme: (theme: ThemeId) => void;
+}) {
+  return <div className="method-layout">
+    <section className="theme-card panel">
+      <div className="section-heading"><div><span className="eyebrow">Appearance</span><h2>Choose your ride room</h2><p>Four complete palettes, tuned for clarity in different light.</p></div></div>
+      <div className="theme-grid" role="radiogroup" aria-label="Color theme">
+        {themeOptions.map((option) => <button
+          key={option.id}
+          type="button"
+          className={`theme-option ${theme === option.id ? "selected" : ""}`}
+          aria-pressed={theme === option.id}
+          onClick={() => setTheme(option.id)}
+        >
+          <span className="theme-swatch" aria-hidden="true" style={{ backgroundColor: option.swatches[0] }}>
+            {option.swatches.slice(1).map((color) => <i key={color} style={{ backgroundColor: color }} />)}
+          </span>
+          <span className="theme-copy"><strong>{option.name}</strong><small>{option.description}</small></span>
+          <em>{theme === option.id ? "Active" : "Use theme"}</em>
+        </button>)}
+      </div>
+      <p className="chart-note"><i /> Theme, last tab, selected ride, and ride-log controls are remembered on this device.</p>
+    </section>
+    <section className="method-hero panel-dark"><span className="eyebrow light">Explainable by design</span><h2>No mystery score.</h2><p>Every recommendation is assembled from visible inputs, conservative rules, and versioned calculations. Pain always overrides the number.</p><div className="version-stamp"><span>Current ruleset</span><strong>v3.5</strong></div></section>
+    <section className="method-list panel"><div className="section-heading"><div><span className="eyebrow">Metric dictionary</span><h2>What the app calculates</h2></div></div>{METHOD_DEFINITIONS.map((method) => <article key={method.id} className="method-row"><span>{method.id}</span><div><strong>{method.title}</strong><code>{method.formula}</code><p>{method.note}</p></div></article>)}</section>
+    <section className="config-card panel"><div className="section-heading"><div><span className="eyebrow">Athlete configuration</span><h2>Current working values</h2></div></div><div className="config-grid"><Stat label="FTP" value={String(currentFtp)} unit="W" /><Stat label="Body weight" value={String(Math.round(currentWeightKg * 2.2046226218))} unit="lb" /><Stat label="FTP / weight" value={(currentFtp / currentWeightKg).toFixed(2)} unit="W/kg" /><Stat label="Zone 2 target" value={String(Math.round(currentFtp * 2 / 3))} unit="W" /></div><p className="chart-note"><i /> FTP and body weight can be updated from Plan Today. Every ride keeps its own FTP snapshot and source, so later FTP changes do not rewrite historical IF or load.</p></section>
+  </div>;
 }

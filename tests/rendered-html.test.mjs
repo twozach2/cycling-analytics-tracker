@@ -69,6 +69,15 @@ test("removes starter preview metadata and dependencies", async () => {
   assert.match(dashboard, /rolling 90-day peak/);
   assert.match(dashboard, /updates daily · local time/);
   assert.match(dashboard, /advances automatically at local midnight/);
+  assert.match(dashboard, /Night Circuit/);
+  assert.match(dashboard, /aria-label="Color theme"/);
+  assert.match(dashboard, /cycling-analytics:ui-preferences/);
+  assert.match(dashboard, /document\.documentElement\.dataset\.theme/);
+  assert.match(dashboard, /last tab, selected ride, and ride-log controls are remembered/i);
+  assert.match(styles, /html\[data-theme="night-city"\]/);
+  assert.match(styles, /--lime: #f9f002/);
+  assert.match(styles, /--sky: #00f0ff/);
+  assert.match(styles, /--coral: #ff2a6d/);
   assert.match(styles, /--ride-data-columns: 52px minmax\(190px, 1fr\) 112px 72px 66px 52px 18px/);
   assert.match(styles, /grid-template-columns: var\(--ride-data-columns\) 52px/);
   assert.match(styles, /\.forecast-stamp \{[^}]*width: 168px;[^}]*height: 168px;/);
