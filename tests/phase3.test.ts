@@ -76,7 +76,7 @@ test("pain makes workout guidance and the generated week cautious", () => {
 });
 
 test("Zwift route suite uses the requested time windows and FTP-based targets", () => {
-  const suite = recommendZwiftRoutes("tempo", 165);
+  const suite = recommendZwiftRoutes("tempo", 165, 275 / 2.2046226218);
   assert.deepEqual(suite.map((suggestion) => suggestion.commitment), [30, 60, 90]);
   assert.equal(new Set(suite.map((suggestion) => suggestion.route.id)).size, 3);
   assert.deepEqual(suite.map((suggestion) => suggestion.targetWatts), ["125–145 W", "125–145 W", "125–145 W"]);
@@ -95,10 +95,12 @@ test("Zwift route timing accounts for rider weight and sustainable W/kg", () => 
   assert.ok(estimate.maximumPowerWatts >= 149 && estimate.maximumPowerWatts <= 151);
   assert.ok(estimate.minimumMinutes > 180);
   assert.ok(estimate.maximumMinutes > estimate.minimumMinutes);
+  assert.throws(() => estimateZwiftRouteTime(laReine, Number.NaN, 80), /saved FTP/i);
+  assert.throws(() => estimateZwiftRouteTime(laReine, 200, Number.NaN), /saved body weight/i);
 });
 
 test("Zwift route suite can be limited to a supplied world pool", () => {
-  const suite = recommendZwiftRoutes("endurance", 200, ["Watopia", "Paris", "France"]);
+  const suite = recommendZwiftRoutes("endurance", 200, 80, ["Watopia", "Paris", "France"]);
   assert.ok(suite.every((suggestion) => ["Watopia", "Paris", "France"].includes(suggestion.route.world)));
   assert.ok(suite.every((suggestion) => suggestion.reason.includes("change of scenery")));
 });
@@ -108,7 +110,7 @@ test("shuffling avoids recent routes while exposing the full world catalog", () 
   const seenRouteIds = new Set<string>();
   const seenWorlds = new Set<string>();
   for (let index = 0; index < 12; index += 1) {
-    const deal = recommendZwiftRoutes("endurance", 200, undefined, index, recentRouteIds);
+    const deal = recommendZwiftRoutes("endurance", 200, 80, undefined, index, recentRouteIds);
     const routeIds = deal.map((suggestion) => suggestion.route.id);
     assert.ok(routeIds.every((routeId) => !recentRouteIds.includes(routeId)));
     assert.equal(new Set(deal.map((suggestion) => suggestion.route.world)).size, 3);
@@ -141,7 +143,7 @@ test("has a current-month fallback when the live calendar is unavailable", () =>
 });
 
 test("rest guardrail pauses every route choice", () => {
-  const suite = recommendZwiftRoutes("rest", 165);
+  const suite = recommendZwiftRoutes("rest", 165, 275 / 2.2046226218);
   assert.ok(suite.every((suggestion) => suggestion.disabled));
   assert.equal(suite.find((suggestion) => suggestion.recommended)?.commitment, 30);
 });

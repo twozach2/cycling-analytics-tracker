@@ -12,7 +12,7 @@ export async function GET(request: Request) {
   }
 
   const db = getDb();
-  await db.insert(riders).values({ id: rider.id, displayName: rider.name, defaultFtpWatts: 165 }).onConflictDoNothing();
+  await db.insert(riders).values({ id: rider.id, displayName: rider.name }).onConflictDoNothing();
   const state = crypto.randomUUID();
   await db.insert(oauthStates).values({
     state,

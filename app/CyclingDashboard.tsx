@@ -10,7 +10,7 @@ import {
   type SubjectiveRecovery,
 } from "@/lib/metrics";
 import { buildWeeklyPlan, projectFtpGoal, recommendWorkout } from "@/lib/phase3";
-import { DEFAULT_ROUTE_BODY_WEIGHT_KG, recommendZwiftRoutes, ROUTE_ESTIMATE_WATTS_PER_KG, ZWIFT_ROUTE_COUNT, ZWIFT_WORLDS } from "@/lib/zwift-routes";
+import { recommendZwiftRoutes, ROUTE_ESTIMATE_WATTS_PER_KG, ZWIFT_ROUTE_COUNT, ZWIFT_WORLDS } from "@/lib/zwift-routes";
 import type { ZwiftRotation } from "@/lib/zwift-world-rotation";
 
 type View = "dashboard" | "plan" | "rides" | "import" | "method";
@@ -322,7 +322,9 @@ export default function CyclingDashboard() {
   const [rides, setRides] = useState(initialRides);
   const [selectedRideId, setSelectedRideId] = useState(initialRides[0].id);
   const [dataMode, setDataMode] = useState<DataMode>("loading");
-  const [currentFtp, setCurrentFtp] = useState(165);
+  const [currentFtp, setCurrentFtp] = useState<number | null>(null);
+  const [currentWeightKg, setCurrentWeightKg] = useState<number | null>(null);
+  const [profileStatus, setProfileStatus] = useState<"loading" | "ready" | "error">("loading");
   const [syncNote, setSyncNote] = useState("");
   const [rideFilter, setRideFilter] = useState("All rides");
   const [search, setSearch] = useState("");
@@ -365,12 +367,18 @@ export default function CyclingDashboard() {
   }, []);
 
   useEffect(() => {
+    let active = true;
     void fetch("/api/phase3", { cache: "no-store" })
-      .then(async (response) => ({ response, payload: await response.json() as { currentFtpWatts?: number } }))
+      .then(async (response) => ({ response, payload: await response.json() as { currentFtpWatts?: number | null; weightKg?: number | null; error?: string } }))
       .then(({ response, payload }) => {
-        if (response.ok && payload.currentFtpWatts) setCurrentFtp(payload.currentFtpWatts);
+        if (!active) return;
+        if (!response.ok) throw new Error(payload.error ?? "Rider profile could not be loaded.");
+        setCurrentFtp(payload.currentFtpWatts ?? null);
+        setCurrentWeightKg(payload.weightKg ?? null);
+        setProfileStatus("ready");
       })
-      .catch(() => undefined);
+      .catch(() => { if (active) setProfileStatus("error"); });
+    return () => { active = false; };
   }, []);
 
   useEffect(() => {
@@ -520,7 +528,9 @@ export default function CyclingDashboard() {
   };
 
   const addDetectedRide = async () => {
-    if (!detected) return;
+    if (!detected || currentFtp === null || currentWeightKg === null) return;
+    const ftpWatts = currentFtp;
+    const weightKg = currentWeightKg;
     setImportError("");
     setIsSaving(true);
     const movingTimeSeconds = Math.round(detected.movingTimeSeconds ?? 0);
@@ -529,7 +539,7 @@ export default function CyclingDashboard() {
       averagePowerWatts: detected.averagePower,
       normalizedPowerWatts: detected.normalizedPower,
       averageHeartRateBpm: detected.averageHeartRate,
-      ftpWatts: currentFtp,
+      ftpWatts,
     });
     const date = detected.startedAt ? new Date(detected.startedAt) : new Date();
     const ride: Ride = {
@@ -604,7 +614,8 @@ export default function CyclingDashboard() {
             averagePowerWatts: detected.averagePower,
             maximumPowerWatts: detected.maximumPower,
             normalizedPowerWatts: detected.normalizedPower,
-            ftpAtRideWatts: currentFtp,
+            ftpAtRideWatts: ftpWatts,
+            weightAtRideKg: weightKg,
             sourceTrainingLoad: detected.sourceTrainingLoad,
             aerobicDecouplingPercent: detected.aerobicDecouplingPercent,
             variabilityIndex: detected.variabilityIndex,
@@ -659,6 +670,25 @@ export default function CyclingDashboard() {
     import: { eyebrow: "Files + connected sources", title: "Import" },
     method: { eyebrow: "Transparent calculations", title: "Method" },
   };
+
+  if (profileStatus === "loading") {
+    return <ProfileGate><span className="eyebrow">Rider setup</span><h1>Loading your profile…</h1><p>Your saved training baseline is being checked.</p></ProfileGate>;
+  }
+
+  if (profileStatus === "error") {
+    return <ProfileGate><span className="eyebrow">Rider setup</span><h1>Profile unavailable</h1><p>Your saved rider profile could not be loaded.</p><button className="primary-button" type="button" onClick={() => window.location.reload()}>Try again</button></ProfileGate>;
+  }
+
+  if (currentFtp === null || currentWeightKg === null) {
+    return <RiderSetup
+      initialFtp={currentFtp}
+      initialWeightKg={currentWeightKg}
+      onSaved={(ftpWatts, weightKg) => {
+        setCurrentFtp(ftpWatts);
+        setCurrentWeightKg(weightKg);
+      }}
+    />;
+  }
 
   return (
     <main className="app-shell">
@@ -720,6 +750,8 @@ export default function CyclingDashboard() {
           saveRecovery={saveRecovery}
           currentFtp={currentFtp}
           setCurrentFtp={setCurrentFtp}
+          currentWeightKg={currentWeightKg}
+          setCurrentWeightKg={setCurrentWeightKg}
         />}
         {view === "rides" && (
           <RideLog
@@ -760,6 +792,73 @@ export default function CyclingDashboard() {
         {view === "method" && <Methodology currentFtp={currentFtp} />}
       </section>
     </main>
+  );
+}
+
+function ProfileGate({ children }: { children: React.ReactNode }) {
+  return (
+    <main className="profile-gate-shell">
+      <header className="profile-gate-brand"><span className="brand-mark">CA</span><span className="brand-copy"><strong>Cycling</strong><span>Analytics</span></span></header>
+      <section className="profile-gate-card panel">{children}</section>
+    </main>
+  );
+}
+
+function RiderSetup({ initialFtp, initialWeightKg, onSaved }: {
+  initialFtp: number | null;
+  initialWeightKg: number | null;
+  onSaved: (ftpWatts: number, weightKg: number) => void;
+}) {
+  const [ftpValue, setFtpValue] = useState(initialFtp === null ? "" : String(initialFtp));
+  const [weightValue, setWeightValue] = useState(initialWeightKg === null ? "" : String(Math.round(initialWeightKg * 2.2046226218)));
+  const [saveState, setSaveState] = useState<"idle" | "saving" | "error">("idle");
+  const [message, setMessage] = useState("");
+
+  const saveProfile = async (event: React.FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    const ftpWatts = Number(ftpValue);
+    const weightPounds = Number(weightValue);
+    if (!Number.isFinite(ftpWatts) || ftpWatts < 50 || ftpWatts > 500) {
+      setSaveState("error");
+      setMessage("Enter an FTP between 50 and 500 watts.");
+      return;
+    }
+    if (!Number.isFinite(weightPounds) || weightPounds < 80 || weightPounds > 500) {
+      setSaveState("error");
+      setMessage("Enter a body weight between 80 and 500 pounds.");
+      return;
+    }
+    setSaveState("saving");
+    setMessage("");
+    try {
+      const response = await fetch("/api/phase3", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ action: "record_profile", ftpWatts, weightPounds }),
+      });
+      const payload = await response.json() as { ftpWatts?: number; weightKg?: number; error?: string };
+      if (!response.ok || payload.ftpWatts === undefined || payload.weightKg === undefined) {
+        throw new Error(payload.error ?? "Your rider profile could not be saved.");
+      }
+      onSaved(payload.ftpWatts, payload.weightKg);
+    } catch (error) {
+      setSaveState("error");
+      setMessage(error instanceof Error ? error.message : "Your rider profile could not be saved.");
+    }
+  };
+
+  return (
+    <ProfileGate>
+      <span className="eyebrow">Required rider setup</span>
+      <h1>Set your training baseline.</h1>
+      <p>FTP and body weight are required before the dashboard can calculate training load, power targets, or realistic Zwift route times. Nothing is prefilled with a generic rider.</p>
+      <form className="profile-setup-form" onSubmit={saveProfile}>
+        <label><span>Functional threshold power</span><span className="profile-input"><input type="number" min="50" max="500" required value={ftpValue} onChange={(event) => setFtpValue(event.target.value)} autoFocus={initialFtp === null} /><small>watts</small></span><em>Your current sustainable one-hour power estimate.</em></label>
+        <label><span>Body weight</span><span className="profile-input"><input type="number" min="80" max="500" step="1" required value={weightValue} onChange={(event) => setWeightValue(event.target.value)} autoFocus={initialFtp !== null && initialWeightKg === null} /><small>lb</small></span><em>Used with FTP for W/kg and climbing estimates.</em></label>
+        <button className="primary-button wide" type="submit" disabled={saveState === "saving"}>{saveState === "saving" ? "Saving…" : "Save and open dashboard"}</button>
+        <p className={`profile-setup-message ${saveState}`} role="status">{message}</p>
+      </form>
+    </ProfileGate>
   );
 }
 
@@ -1056,8 +1155,9 @@ function DistributionRow({ label, value, tone }: { label: string; value: number;
 }
 
 type PhaseThreeInsights = {
-  currentFtpWatts: number;
-  weightKg: number;
+  currentFtpWatts: number | null;
+  weightKg: number | null;
+  profileComplete: boolean;
   ftpHistory: Array<{ effectiveAt: string; ftpWatts: number; source: string }>;
   prediction: { minimumWatts: number | null; maximumWatts: number | null; midpointWatts: number | null; confidence: string; signals: string[] };
   goal: { id: string; targetFtpWatts: number; createdAt: string } | null;
@@ -1067,7 +1167,7 @@ type PhaseThreeInsights = {
   };
 };
 
-function PlanToday({ rides, recovery, setRecovery, recoverySaveState, saveRecovery, currentFtp, setCurrentFtp }: {
+function PlanToday({ rides, recovery, setRecovery, recoverySaveState, saveRecovery, currentFtp, setCurrentFtp, currentWeightKg, setCurrentWeightKg }: {
   rides: Ride[];
   recovery: SubjectiveRecovery;
   setRecovery: (value: SubjectiveRecovery) => void;
@@ -1075,13 +1175,15 @@ function PlanToday({ rides, recovery, setRecovery, recoverySaveState, saveRecove
   saveRecovery: () => Promise<void>;
   currentFtp: number;
   setCurrentFtp: (value: number) => void;
+  currentWeightKg: number;
+  setCurrentWeightKg: (value: number) => void;
 }) {
   const [insights, setInsights] = useState<PhaseThreeInsights | null>(null);
   const [goalTarget, setGoalTarget] = useState(200);
   const [ftpInput, setFtpInput] = useState(currentFtp);
   const [ftpSaveMessage, setFtpSaveMessage] = useState("");
   const [ftpSaveState, setFtpSaveState] = useState<"idle" | "working" | "success" | "error">("idle");
-  const [weightInputPounds, setWeightInputPounds] = useState(Math.round(DEFAULT_ROUTE_BODY_WEIGHT_KG * 2.2046226218));
+  const [weightInputPounds, setWeightInputPounds] = useState(Math.round(currentWeightKg * 2.2046226218));
   const [weightSaveMessage, setWeightSaveMessage] = useState("");
   const [weightSaveState, setWeightSaveState] = useState<"idle" | "working" | "success" | "error">("idle");
   const [actionState, setActionState] = useState<"idle" | "working" | "success" | "error">("idle");
@@ -1096,9 +1198,14 @@ function PlanToday({ rides, recovery, setRecovery, recoverySaveState, saveRecove
     const payload = await response.json() as PhaseThreeInsights & { error?: string };
     if (!response.ok) throw new Error(payload.error ?? "Training insights could not be loaded.");
     setInsights(payload);
-    setCurrentFtp(payload.currentFtpWatts);
-    setFtpInput(payload.currentFtpWatts);
-    setWeightInputPounds(Math.round(payload.weightKg * 2.2046226218));
+    if (payload.currentFtpWatts !== null) {
+      setCurrentFtp(payload.currentFtpWatts);
+      setFtpInput(payload.currentFtpWatts);
+    }
+    if (payload.weightKg !== null) {
+      setCurrentWeightKg(payload.weightKg);
+      setWeightInputPounds(Math.round(payload.weightKg * 2.2046226218));
+    }
     if (payload.goal) setGoalTarget(payload.goal.targetFtpWatts);
   };
 
@@ -1110,9 +1217,14 @@ function PlanToday({ rides, recovery, setRecovery, recoverySaveState, saveRecove
         if (!active) return;
         if (!response.ok) throw new Error(payload.error ?? "Training insights could not be loaded.");
         setInsights(payload);
-        setCurrentFtp(payload.currentFtpWatts);
-        setFtpInput(payload.currentFtpWatts);
-        setWeightInputPounds(Math.round(payload.weightKg * 2.2046226218));
+        if (payload.currentFtpWatts !== null) {
+          setCurrentFtp(payload.currentFtpWatts);
+          setFtpInput(payload.currentFtpWatts);
+        }
+        if (payload.weightKg !== null) {
+          setCurrentWeightKg(payload.weightKg);
+          setWeightInputPounds(Math.round(payload.weightKg * 2.2046226218));
+        }
         if (payload.goal) setGoalTarget(payload.goal.targetFtpWatts);
       })
       .catch(() => { if (active) setActionMessage("Saved insights are temporarily unavailable."); });
@@ -1243,11 +1355,10 @@ function PlanToday({ rides, recovery, setRecovery, recoverySaveState, saveRecove
   const planningInput = { readinessScore: readiness.score, kneePain: recovery.kneePain ?? 0, acuteChronicRatio: loadRatio, recentHardSessions: block(7, 0).rides ? rides.filter((ride) => (ride.type === "Tempo" || ride.type === "Threshold") && Date.parse(ride.date) > anchorMs - (7 * dayMs)).length : 0 };
   const workout = recommendWorkout(planningInput);
   const availableWorlds = worldRotation?.availableWorlds ?? ["Watopia"];
-  const currentWeightKg = insights?.weightKg ?? DEFAULT_ROUTE_BODY_WEIGHT_KG;
   const currentWeightPounds = Math.round(currentWeightKg * 2.2046226218);
   const routePowerMinimum = Math.round(currentWeightKg * ROUTE_ESTIMATE_WATTS_PER_KG.minimum);
   const routePowerMaximum = Math.round(Math.min(currentWeightKg * ROUTE_ESTIMATE_WATTS_PER_KG.maximum, currentFtp * 0.92));
-  const routeSuite = recommendZwiftRoutes(workout.mode, currentFtp, ZWIFT_WORLDS, routeShuffleIndex, recentRouteIds, currentWeightKg);
+  const routeSuite = recommendZwiftRoutes(workout.mode, currentFtp, currentWeightKg, ZWIFT_WORLDS, routeShuffleIndex, recentRouteIds);
   const selectedRoute = routeSuite.find((suggestion) => suggestion.route.id === selectedRouteId)
     ?? routeSuite.find((suggestion) => suggestion.recommended)
     ?? routeSuite[0];

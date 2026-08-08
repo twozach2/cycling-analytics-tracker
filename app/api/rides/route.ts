@@ -41,6 +41,7 @@ type RidePayload = {
   maximumPowerWatts?: number | null;
   normalizedPowerWatts?: number | null;
   ftpAtRideWatts?: number | null;
+  weightAtRideKg?: number | null;
   sourceTrainingLoad?: number | null;
   rideType?: "Zone 2" | "Zone 2 benchmark" | "Recovery" | "Tempo" | "Threshold" | "Free ride";
   routeName?: string | null;
@@ -121,10 +122,14 @@ export async function POST(request: Request) {
     normalizedPowerWatts: payload.normalizedPowerWatts,
     normalizedPowerSource: payload.normalizedPowerWatts == null ? "unavailable" : "recorded",
     ftpAtRideWatts: payload.ftpAtRideWatts,
+    weightAtRideKg: payload.weightAtRideKg,
   });
   await db.insert(rideMetrics).values({
     rideId: id,
     powerHeartRateRatio: finalMetrics.powerHeartRateRatio,
+    powerToWeightRatio: payload.averagePowerWatts && payload.weightAtRideKg
+      ? payload.averagePowerWatts / payload.weightAtRideKg
+      : null,
     intensityFactor: finalMetrics.intensityFactor,
     intensityIsEstimated: finalMetrics.intensityIsEstimated,
     trainingLoad: finalMetrics.trainingLoad,

@@ -55,7 +55,6 @@ export type ZwiftRouteEstimate = {
   maximumPowerWatts: number;
 };
 
-export const DEFAULT_ROUTE_BODY_WEIGHT_KG = 124.7;
 export const ROUTE_ESTIMATE_WATTS_PER_KG = { minimum: 1, maximum: 1.2 } as const;
 
 export const ROUTE_TIME_WINDOWS: Record<RouteCommitment, RouteTimeWindow> = {
@@ -238,21 +237,19 @@ function speedForRoute(
 
 export function estimateZwiftRouteTime(
   routeValue: ZwiftRoute,
-  ftpWatts = 165,
-  bodyWeightKg = DEFAULT_ROUTE_BODY_WEIGHT_KG,
+  ftpWatts: number,
+  bodyWeightKg: number,
 ): ZwiftRouteEstimate {
-  const safeFtp = Number.isFinite(ftpWatts) && ftpWatts > 0 ? ftpWatts : 165;
-  const safeBodyWeight = Number.isFinite(bodyWeightKg) && bodyWeightKg > 0
-    ? bodyWeightKg
-    : DEFAULT_ROUTE_BODY_WEIGHT_KG;
-  const preferredMinimumPower = safeBodyWeight * ROUTE_ESTIMATE_WATTS_PER_KG.minimum;
-  const preferredMaximumPower = safeBodyWeight * ROUTE_ESTIMATE_WATTS_PER_KG.maximum;
-  const sustainableCeiling = safeFtp * 0.92;
+  if (!Number.isFinite(ftpWatts) || ftpWatts <= 0) throw new Error("A saved FTP is required for route estimates.");
+  if (!Number.isFinite(bodyWeightKg) || bodyWeightKg <= 0) throw new Error("A saved body weight is required for route estimates.");
+  const preferredMinimumPower = bodyWeightKg * ROUTE_ESTIMATE_WATTS_PER_KG.minimum;
+  const preferredMaximumPower = bodyWeightKg * ROUTE_ESTIMATE_WATTS_PER_KG.maximum;
+  const sustainableCeiling = ftpWatts * 0.92;
   const maximumPowerWatts = Math.max(40, Math.min(preferredMaximumPower, sustainableCeiling));
   const minimumPowerWatts = Math.max(35, Math.min(preferredMinimumPower, maximumPowerWatts * 0.9));
   const distanceMeters = Math.max(1, routeValue.distanceMiles * 1609.344);
   const elevationMeters = Math.max(0, routeValue.elevationFeet * 0.3048);
-  const systemWeightKg = safeBodyWeight + 10;
+  const systemWeightKg = bodyWeightKg + 10;
   const slowSpeed = speedForRoute(minimumPowerWatts, systemWeightKg, distanceMeters, elevationMeters);
   const fastSpeed = speedForRoute(maximumPowerWatts, systemWeightKg, distanceMeters, elevationMeters);
   const maximumMinutes = Math.ceil((distanceMeters / slowSpeed) / 60);
@@ -269,8 +266,8 @@ export function estimateZwiftRouteTime(
 
 export function estimateZwiftRouteMinutes(
   routeValue: ZwiftRoute,
-  ftpWatts = 165,
-  bodyWeightKg = DEFAULT_ROUTE_BODY_WEIGHT_KG,
+  ftpWatts: number,
+  bodyWeightKg: number,
 ): number {
   return estimateZwiftRouteTime(routeValue, ftpWatts, bodyWeightKg).midpointMinutes;
 }
@@ -307,15 +304,13 @@ function rankRoute(
 export function recommendZwiftRoutes(
   mode: WorkoutMode,
   ftpWatts: number,
+  bodyWeightKg: number,
   worldPool: readonly string[] = ZWIFT_WORLDS,
   shuffleIndex = 0,
   recentRouteIds: readonly string[] = [],
-  bodyWeightKg = DEFAULT_ROUTE_BODY_WEIGHT_KG,
 ): ZwiftRouteSuggestion[] {
-  const safeFtp = Number.isFinite(ftpWatts) && ftpWatts > 0 ? ftpWatts : 165;
-  const safeBodyWeight = Number.isFinite(bodyWeightKg) && bodyWeightKg > 0
-    ? bodyWeightKg
-    : DEFAULT_ROUTE_BODY_WEIGHT_KG;
+  if (!Number.isFinite(ftpWatts) || ftpWatts <= 0) throw new Error("A saved FTP is required for route recommendations.");
+  if (!Number.isFinite(bodyWeightKg) || bodyWeightKg <= 0) throw new Error("A saved body weight is required for route recommendations.");
   const watts = intensity[mode];
   const recommendedCommitment: RouteCommitment = mode === "recovery" || mode === "rest" ? 30 : 60;
   const allowedWorlds = new Set(worldPool.filter(isZwiftWorld));
@@ -332,7 +327,7 @@ export function recommendZwiftRoutes(
   return commitments.map((commitment) => {
     const window = ROUTE_TIME_WINDOWS[commitment];
     const inWindow = routeList.filter((routeValue) => {
-      const estimate = estimateZwiftRouteMinutes(routeValue, safeFtp, safeBodyWeight);
+      const estimate = estimateZwiftRouteMinutes(routeValue, ftpWatts, bodyWeightKg);
       return allowedWorlds.has(routeValue.world)
         && estimate >= window.minimumMinutes
         && estimate <= window.maximumMinutes;
@@ -348,10 +343,10 @@ export function recommendZwiftRoutes(
     const selectedRoute = [...candidatePool]
       .filter((routeValue) => !selectedRouteIds.has(routeValue.id))
       .sort((a, b) => (
-        rankRoute(a, mode, commitment, shuffleIndex, recentWorldCounts, safeFtp, safeBodyWeight)
-          - rankRoute(b, mode, commitment, shuffleIndex, recentWorldCounts, safeFtp, safeBodyWeight)
+        rankRoute(a, mode, commitment, shuffleIndex, recentWorldCounts, ftpWatts, bodyWeightKg)
+          - rankRoute(b, mode, commitment, shuffleIndex, recentWorldCounts, ftpWatts, bodyWeightKg)
       ))[0];
-    const routeEstimate = estimateZwiftRouteTime(selectedRoute, safeFtp, safeBodyWeight);
+    const routeEstimate = estimateZwiftRouteTime(selectedRoute, ftpWatts, bodyWeightKg);
     const estimatedMinutes = routeEstimate.midpointMinutes;
     selectedRouteIds.add(selectedRoute.id);
     selectedWorlds.add(selectedRoute.world);
@@ -363,7 +358,7 @@ export function recommendZwiftRoutes(
       estimatedMinimumMinutes: routeEstimate.minimumMinutes,
       estimatedMaximumMinutes: routeEstimate.maximumMinutes,
       timeWindow: window,
-      targetWatts: `${Math.round(safeFtp * watts.low)}–${Math.round(safeFtp * watts.high)} W`,
+      targetWatts: `${Math.round(ftpWatts * watts.low)}–${Math.round(ftpWatts * watts.high)} W`,
       heartRateCue: watts.heartRateCue,
       reason: `${selectedRoute.world} brings a change of scenery. ${modeReason[mode][selectedRoute.profile]}`,
       timingCue: `Estimated ${routeEstimate.minimumMinutes}–${routeEstimate.maximumMinutes} min at ${ROUTE_ESTIMATE_WATTS_PER_KG.minimum.toFixed(1)}–${ROUTE_ESTIMATE_WATTS_PER_KG.maximum.toFixed(1)} W/kg · matched to the ${window.minimumMinutes}–${window.maximumMinutes} min route window.`,

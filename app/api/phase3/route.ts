@@ -4,7 +4,6 @@ import { getDb } from "../../../db";
 import { externalConnections, ftpHistory, powerDuration, riderGoals, riders, rides } from "../../../db/schema";
 import { currentRider } from "../../../lib/current-rider";
 import { predictFtp } from "../../../lib/phase3";
-import { DEFAULT_ROUTE_BODY_WEIGHT_KG } from "../../../lib/zwift-routes";
 
 const runtime = () => env as unknown as Record<string, string | undefined>;
 
@@ -24,14 +23,18 @@ export async function GET(request: Request) {
       .innerJoin(rides, eq(powerDuration.rideId, rides.id))
       .where(eq(rides.riderId, rider.id)),
   ]);
-  const currentFtpWatts = profile?.defaultFtpWatts ?? ftpRows[0]?.ftpWatts ?? 165;
-  const prediction = predictFtp(bests, currentFtpWatts);
+  const currentFtpWatts = profile?.defaultFtpWatts ?? ftpRows[0]?.ftpWatts ?? null;
+  const weightKg = profile?.defaultWeightKg ?? null;
+  const prediction = currentFtpWatts === null
+    ? { minimumWatts: null, maximumWatts: null, midpointWatts: null, confidence: "none", signals: ["Enter an FTP to enable power-based predictions."] }
+    : predictFtp(bests, currentFtpWatts);
   const strava = connections.find((connection) => connection.provider === "strava");
   const config = runtime();
 
   return Response.json({
     currentFtpWatts,
-    weightKg: profile?.defaultWeightKg ?? DEFAULT_ROUTE_BODY_WEIGHT_KG,
+    weightKg,
+    profileComplete: currentFtpWatts !== null && weightKg !== null,
     ftpHistory: ftpRows.map((row) => ({ effectiveAt: row.effectiveAt, ftpWatts: row.ftpWatts, source: row.source })),
     prediction,
     goal: goal ? { id: goal.id, targetFtpWatts: goal.targetFtpWatts, createdAt: goal.createdAt } : null,
@@ -53,14 +56,35 @@ export async function GET(request: Request) {
 type PhaseThreeAction =
   | { action: "set_goal"; targetFtpWatts: number }
   | { action: "record_ftp"; ftpWatts: number }
-  | { action: "record_weight"; weightPounds: number };
+  | { action: "record_weight"; weightPounds: number }
+  | { action: "record_profile"; ftpWatts: number; weightPounds: number };
 
 export async function POST(request: Request) {
   const rider = await currentRider(request);
   if (!rider) return Response.json({ error: "Sign in to update athlete goals." }, { status: 401 });
   const payload = await request.json() as PhaseThreeAction;
   const db = getDb();
-  await db.insert(riders).values({ id: rider.id, displayName: rider.name, defaultFtpWatts: 165 }).onConflictDoNothing();
+  await db.insert(riders).values({ id: rider.id, displayName: rider.name }).onConflictDoNothing();
+
+  if (payload.action === "record_profile") {
+    const ftpWatts = Math.round(Number(payload.ftpWatts));
+    const weightPounds = Number(payload.weightPounds);
+    if (!Number.isFinite(ftpWatts) || ftpWatts < 50 || ftpWatts > 500) {
+      return Response.json({ error: "FTP must be between 50 and 500 watts." }, { status: 400 });
+    }
+    if (!Number.isFinite(weightPounds) || weightPounds < 80 || weightPounds > 500) {
+      return Response.json({ error: "Weight must be between 80 and 500 pounds." }, { status: 400 });
+    }
+    const weightKg = Math.round((weightPounds / 2.2046226218) * 10) / 10;
+    const [existing] = await db.select({ ftpWatts: riders.defaultFtpWatts }).from(riders).where(eq(riders.id, rider.id)).limit(1);
+    await db.update(riders).set({ defaultFtpWatts: ftpWatts, defaultWeightKg: weightKg }).where(eq(riders.id, rider.id));
+    if (existing?.ftpWatts !== ftpWatts) {
+      const effectiveAt = new Date().toISOString();
+      await db.insert(ftpHistory).values({ id: crypto.randomUUID(), riderId: rider.id, effectiveAt, ftpWatts, source: "rider setup", notes: "Saved with required rider profile." });
+      await db.update(riderGoals).set({ status: "achieved", achievedAt: effectiveAt }).where(and(eq(riderGoals.riderId, rider.id), eq(riderGoals.status, "active"), lte(riderGoals.targetFtpWatts, ftpWatts)));
+    }
+    return Response.json({ ftpWatts, weightKg, weightPounds: Math.round(weightPounds), profileComplete: true }, { status: 201 });
+  }
 
   if (payload.action === "set_goal") {
     const targetFtpWatts = Math.round(payload.targetFtpWatts);

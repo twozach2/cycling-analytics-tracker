@@ -102,9 +102,10 @@ export async function POST(request: Request) {
   const db = getDb();
   const [[connection], [profile]] = await Promise.all([
     db.select().from(externalConnections).where(and(eq(externalConnections.riderId, rider.id), eq(externalConnections.provider, "strava"))).limit(1),
-    db.select({ ftp: riders.defaultFtpWatts }).from(riders).where(eq(riders.id, rider.id)).limit(1),
+    db.select({ ftp: riders.defaultFtpWatts, weightKg: riders.defaultWeightKg }).from(riders).where(eq(riders.id, rider.id)).limit(1),
   ]);
   if (!connection) return Response.json({ error: "Connect Strava before syncing rides." }, { status: 409 });
+  if (!profile?.ftp || !profile.weightKg) return Response.json({ error: "Complete rider setup with your FTP and weight before syncing rides." }, { status: 409 });
 
   let accessToken: string;
   try {
@@ -138,7 +139,7 @@ export async function POST(request: Request) {
     if (pageActivities.length === 0) break;
   }
 
-  const ftp = profile?.ftp ?? 165;
+  const ftp = profile.ftp;
   const fileStore = (env as unknown as { RIDE_FILES: R2Bucket }).RIDE_FILES;
   const streamCandidates: Array<{ activity: StravaActivity; rideId: string }> = [];
   const storedStreamCandidates: Array<{ activity: StravaActivity; rideId: string; r2Key: string }> = [];
@@ -186,6 +187,7 @@ export async function POST(request: Request) {
       totalWorkKj: finite(activity.kilojoules),
       calories: finite(activity.calories) === null ? null : Math.round(activity.calories!),
       ftpAtRideWatts: ftp,
+      weightAtRideKg: profile.weightKg,
       notes: "Synced from Strava. Original provider values are retained separately from calculated metrics.",
       updatedAt: syncStartedAt.toISOString(),
     };
@@ -195,6 +197,7 @@ export async function POST(request: Request) {
       await db.update(rides).set(rideSummary).where(eq(rides.id, rideId));
       await db.update(rideMetrics).set({
         powerHeartRateRatio: derived.powerHeartRateRatio,
+        powerToWeightRatio: averagePower === null ? null : averagePower / profile.weightKg,
         intensityFactor: derived.intensityFactor,
         intensityIsEstimated: derived.intensityIsEstimated,
         trainingLoad: derived.trainingLoad,
@@ -209,6 +212,7 @@ export async function POST(request: Request) {
       await db.insert(rideMetrics).values({
         rideId,
         powerHeartRateRatio: derived.powerHeartRateRatio,
+        powerToWeightRatio: averagePower === null ? null : averagePower / profile.weightKg,
         intensityFactor: derived.intensityFactor,
         intensityIsEstimated: derived.intensityIsEstimated,
         trainingLoad: derived.trainingLoad,

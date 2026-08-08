@@ -16,7 +16,7 @@ async function render() {
   );
 }
 
-test("server-renders the cycling analytics dashboard", async () => {
+test("server-renders the rider-profile loading gate", async () => {
   const response = await render();
   assert.equal(response.status, 200);
   assert.match(response.headers.get("content-type") ?? "", /^text\/html\b/i);
@@ -24,14 +24,8 @@ test("server-renders the cycling analytics dashboard", async () => {
   const html = await response.text();
   assert.match(html, /<title>Dashboard \| Cycling Analytics<\/title>/i);
   assert.match(html, /Ride with the trend/);
-  assert.match(html, /Dashboard/);
-  assert.match(html, /Plan today/);
-  assert.match(html, /Ride log/);
-  assert.match(html, /Watts \/ heartbeat/);
-  assert.match(html, /Power-to-heart-rate trend/);
-  assert.match(html, /Workload and response/);
-  assert.match(html, /zero-based scales/);
-  assert.match(html, /Import ride/);
+  assert.match(html, /Loading your profile/);
+  assert.match(html, /saved training baseline is being checked/i);
   assert.doesNotMatch(html, /Phase 2|Phase 3/);
   assert.doesNotMatch(html, /codex-preview|react-loading-skeleton|Your site is taking shape/i);
 });
@@ -58,6 +52,8 @@ test("removes starter preview metadata and dependencies", async () => {
   assert.match(dashboard, /Recent routes stay out of the next six deals/);
   assert.match(dashboard, /Personal route model/);
   assert.match(dashboard, /Body weight \(lb\)/);
+  assert.match(dashboard, /Required rider setup/);
+  assert.match(dashboard, /Save and open dashboard/);
   assert.match(dashboard, /World calendar/);
   assert.match(dashboard, /official Zwift map/i);
   assert.match(dashboard, /\/zwift-routes\//);
