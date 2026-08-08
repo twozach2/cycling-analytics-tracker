@@ -655,11 +655,12 @@ blockquote { margin: 16px 0 0; padding: 14px 16px; border-left: 3px solid var(--
 .week-grid article { display: flex; min-height: 135px; flex-direction: column; padding: 13px; border: 1px solid var(--line); border-radius: 7px; background: var(--surface-muted); }
 .week-grid article.today { border-color: var(--ink); background: var(--lime); color: var(--tone-text); }
 .week-date { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
-.week-date span { color: var(--muted); font: 700 8px/1 var(--font-data); text-transform: uppercase; }
+.week-date span { color: var(--ink-soft); font: 700 8px/1 var(--font-data); text-transform: uppercase; }
 .week-date em { color: var(--muted); font: 650 7px/1 var(--font-data); font-style: normal; white-space: nowrap; }
-.week-grid article.today .week-date span, .week-grid article.today .week-date em { color: var(--ink); }
+.week-grid article.today .week-date span, .week-grid article.today .week-date em { color: var(--tone-text); }
 .week-grid strong { margin-top: 22px; font-size: 10px; line-height: 1.3; }
 .week-grid small { margin-top: auto; padding-top: 12px; color: var(--muted); font-size: 8px; line-height: 1.35; }
+.week-grid article.today small { color: var(--tone-text); opacity: .72; }
 
 .import-layout { display: grid; grid-template-columns: minmax(250px, .65fr) minmax(500px, 1.35fr); gap: 18px; }
 .import-intro { padding: 38px 30px 30px 4px; }
