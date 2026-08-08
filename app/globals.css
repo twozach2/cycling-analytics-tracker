@@ -315,6 +315,7 @@ blockquote { margin: 16px 0 0; padding: 14px 16px; border-left: 3px solid var(--
 .power-row strong { grid-column: 3; grid-row: 1; font: 600 9px/1 var(--font-data); text-align: right; white-space: nowrap; }
 .power-row small { grid-column: 3; grid-row: 2; text-align: right; }
 
+.recent-rides, .ride-log-panel { --ride-data-columns: 52px minmax(190px, 1fr) 112px 72px 66px 52px 18px; }
 .ride-list { display: flex; flex-direction: column; }
 .ride-detail-actions { display: flex; align-items: center; justify-content: flex-end; gap: 8px; flex-wrap: wrap; }
 .environment-tag, .workout-tag { width: fit-content; padding: 6px 8px; border-radius: 4px; background: #dceaf0; color: var(--ink); font: 650 8px/1 var(--font-data); white-space: nowrap; text-transform: uppercase; }
@@ -326,7 +327,8 @@ blockquote { margin: 16px 0 0; padding: 14px 16px; border-left: 3px solid var(--
 .ride-export-button { min-height: 36px; padding: 0 11px; gap: 7px; font-size: 9px; }
 .ride-row-shell { display: grid; grid-template-columns: minmax(0, 1fr) 52px; align-items: stretch; column-gap: 12px; border-top: 1px solid var(--line); transition: background 150ms ease; }
 .ride-row-shell:hover { background: #f0eee6; }
-.ride-row { display: grid; grid-template-columns: 52px minmax(200px, 1fr) 78px 58px 58px 48px 18px; align-items: center; gap: 12px; width: 100%; min-width: 0; min-height: 66px; padding: 9px 0; border: 0; background: transparent; text-align: left; cursor: pointer; }
+.ride-row { display: grid; grid-template-columns: var(--ride-data-columns); align-items: center; gap: 12px; width: 100%; min-width: 0; min-height: 66px; padding: 9px 0; border: 0; background: transparent; text-align: left; cursor: pointer; }
+.ride-row .ride-tag { max-width: 100%; overflow: hidden; text-overflow: ellipsis; }
 .ride-row-export { display: flex; align-items: center; justify-content: center; flex-direction: column; gap: 3px; min-width: 0; padding: 0; border: 0; border-left: 1px solid var(--line); background: transparent; color: var(--muted); font: 650 7px/1 var(--font-data); cursor: pointer; text-transform: uppercase; }
 .ride-row-export strong { color: var(--ink); font-size: 12px; font-weight: 500; }
 .ride-row-export:hover { background: var(--lime); color: var(--ink); }
@@ -350,7 +352,8 @@ blockquote { margin: 16px 0 0; padding: 14px 16px; border-left: 3px solid var(--
 .filter-buttons { display: flex; gap: 5px; flex-wrap: wrap; }
 .filter-buttons button { padding: 8px 10px; border: 1px solid var(--line); border-radius: 999px; background: transparent; color: var(--muted); font: 600 8px/1 var(--font-data); cursor: pointer; }
 .filter-buttons button.selected { border-color: var(--ink); background: var(--ink); color: var(--lime); }
-.table-header { display: grid; grid-template-columns: 52px minmax(200px, 1fr) 78px 58px 58px 48px 18px 52px; gap: 12px; padding-bottom: 9px; color: var(--muted); font: 600 7px/1 var(--font-data); text-transform: uppercase; letter-spacing: .08em; }
+.table-header { display: grid; grid-template-columns: var(--ride-data-columns) 52px; gap: 12px; padding-bottom: 9px; color: var(--muted); font: 600 7px/1 var(--font-data); text-transform: uppercase; letter-spacing: .08em; }
+.table-header span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .table-header span:last-child { text-align: center; }
 .empty-state { display: flex; min-height: 180px; flex-direction: column; align-items: center; justify-content: center; color: var(--muted); }
 .empty-state strong { color: var(--ink); font-size: 14px; }

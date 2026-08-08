@@ -31,11 +31,12 @@ test("server-renders the rider-profile loading gate", async () => {
 });
 
 test("removes starter preview metadata and dependencies", async () => {
-  const [page, layout, packageJson, dashboard] = await Promise.all([
+  const [page, layout, packageJson, dashboard, styles] = await Promise.all([
     readFile(new URL("../app/page.tsx", import.meta.url), "utf8"),
     readFile(new URL("../app/layout.tsx", import.meta.url), "utf8"),
     readFile(new URL("../package.json", import.meta.url), "utf8"),
     readFile(new URL("../app/CyclingDashboard.tsx", import.meta.url), "utf8"),
+    readFile(new URL("../app/globals.css", import.meta.url), "utf8"),
   ]);
 
   assert.match(page, /<CyclingDashboard \/>/);
@@ -62,6 +63,8 @@ test("removes starter preview metadata and dependencies", async () => {
   assert.match(dashboard, /Not suitable/);
   assert.match(dashboard, /Ride type for/);
   assert.match(dashboard, /method: "PATCH"/);
+  assert.match(styles, /--ride-data-columns: 52px minmax\(190px, 1fr\) 112px 72px 66px 52px 18px/);
+  assert.match(styles, /grid-template-columns: var\(--ride-data-columns\) 52px/);
   assert.match(dashboard, /buildCyclingMarkdown/);
   assert.match(dashboard, /World calendar/);
   assert.match(dashboard, /official Zwift map/i);
