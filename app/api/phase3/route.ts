@@ -4,6 +4,7 @@ import { getDb } from "../../../db";
 import { externalConnections, ftpHistory, powerDuration, riderGoals, riders, rides } from "../../../db/schema";
 import { currentRider } from "../../../lib/current-rider";
 import { predictFtp } from "../../../lib/phase3";
+import { DEFAULT_ROUTE_BODY_WEIGHT_KG } from "../../../lib/zwift-routes";
 
 const runtime = () => env as unknown as Record<string, string | undefined>;
 
@@ -30,6 +31,7 @@ export async function GET(request: Request) {
 
   return Response.json({
     currentFtpWatts,
+    weightKg: profile?.defaultWeightKg ?? DEFAULT_ROUTE_BODY_WEIGHT_KG,
     ftpHistory: ftpRows.map((row) => ({ effectiveAt: row.effectiveAt, ftpWatts: row.ftpWatts, source: row.source })),
     prediction,
     goal: goal ? { id: goal.id, targetFtpWatts: goal.targetFtpWatts, createdAt: goal.createdAt } : null,
@@ -50,7 +52,8 @@ export async function GET(request: Request) {
 
 type PhaseThreeAction =
   | { action: "set_goal"; targetFtpWatts: number }
-  | { action: "record_ftp"; ftpWatts: number };
+  | { action: "record_ftp"; ftpWatts: number }
+  | { action: "record_weight"; weightPounds: number };
 
 export async function POST(request: Request) {
   const rider = await currentRider(request);
@@ -84,6 +87,16 @@ export async function POST(request: Request) {
     await db.insert(ftpHistory).values({ id: crypto.randomUUID(), riderId: rider.id, effectiveAt, ftpWatts, source: "manual confirmation", notes: "Confirmed from Plan Today." });
     await db.update(riderGoals).set({ status: "achieved", achievedAt: effectiveAt }).where(and(eq(riderGoals.riderId, rider.id), eq(riderGoals.status, "active"), lte(riderGoals.targetFtpWatts, ftpWatts)));
     return Response.json({ ftpWatts, effectiveAt, unchanged: false }, { status: 201 });
+  }
+
+  if (payload.action === "record_weight") {
+    const weightPounds = Number(payload.weightPounds);
+    if (!Number.isFinite(weightPounds) || weightPounds < 80 || weightPounds > 500) {
+      return Response.json({ error: "Weight must be between 80 and 500 pounds." }, { status: 400 });
+    }
+    const weightKg = Math.round((weightPounds / 2.2046226218) * 10) / 10;
+    await db.update(riders).set({ defaultWeightKg: weightKg }).where(eq(riders.id, rider.id));
+    return Response.json({ weightKg, weightPounds: Math.round(weightPounds) }, { status: 201 });
   }
 
   return Response.json({ error: "Unsupported training update." }, { status: 400 });

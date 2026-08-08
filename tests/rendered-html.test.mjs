@@ -56,6 +56,8 @@ test("removes starter preview metadata and dependencies", async () => {
   assert.match(dashboard, /Shuffle routes/);
   assert.match(dashboard, /workout access/);
   assert.match(dashboard, /Recent routes stay out of the next six deals/);
+  assert.match(dashboard, /Personal route model/);
+  assert.match(dashboard, /Body weight \(lb\)/);
   assert.match(dashboard, /World calendar/);
   assert.match(dashboard, /official Zwift map/i);
   assert.match(dashboard, /\/zwift-routes\//);

@@ -10,7 +10,7 @@ import {
   type SubjectiveRecovery,
 } from "@/lib/metrics";
 import { buildWeeklyPlan, projectFtpGoal, recommendWorkout } from "@/lib/phase3";
-import { recommendZwiftRoutes, ZWIFT_ROUTE_COUNT, ZWIFT_WORLDS } from "@/lib/zwift-routes";
+import { DEFAULT_ROUTE_BODY_WEIGHT_KG, recommendZwiftRoutes, ROUTE_ESTIMATE_WATTS_PER_KG, ZWIFT_ROUTE_COUNT, ZWIFT_WORLDS } from "@/lib/zwift-routes";
 import type { ZwiftRotation } from "@/lib/zwift-world-rotation";
 
 type View = "dashboard" | "plan" | "rides" | "import" | "method";
@@ -1057,6 +1057,7 @@ function DistributionRow({ label, value, tone }: { label: string; value: number;
 
 type PhaseThreeInsights = {
   currentFtpWatts: number;
+  weightKg: number;
   ftpHistory: Array<{ effectiveAt: string; ftpWatts: number; source: string }>;
   prediction: { minimumWatts: number | null; maximumWatts: number | null; midpointWatts: number | null; confidence: string; signals: string[] };
   goal: { id: string; targetFtpWatts: number; createdAt: string } | null;
@@ -1080,6 +1081,9 @@ function PlanToday({ rides, recovery, setRecovery, recoverySaveState, saveRecove
   const [ftpInput, setFtpInput] = useState(currentFtp);
   const [ftpSaveMessage, setFtpSaveMessage] = useState("");
   const [ftpSaveState, setFtpSaveState] = useState<"idle" | "working" | "success" | "error">("idle");
+  const [weightInputPounds, setWeightInputPounds] = useState(Math.round(DEFAULT_ROUTE_BODY_WEIGHT_KG * 2.2046226218));
+  const [weightSaveMessage, setWeightSaveMessage] = useState("");
+  const [weightSaveState, setWeightSaveState] = useState<"idle" | "working" | "success" | "error">("idle");
   const [actionState, setActionState] = useState<"idle" | "working" | "success" | "error">("idle");
   const [actionMessage, setActionMessage] = useState("");
   const [selectedRouteId, setSelectedRouteId] = useState<string | null>(null);
@@ -1094,6 +1098,7 @@ function PlanToday({ rides, recovery, setRecovery, recoverySaveState, saveRecove
     setInsights(payload);
     setCurrentFtp(payload.currentFtpWatts);
     setFtpInput(payload.currentFtpWatts);
+    setWeightInputPounds(Math.round(payload.weightKg * 2.2046226218));
     if (payload.goal) setGoalTarget(payload.goal.targetFtpWatts);
   };
 
@@ -1107,6 +1112,7 @@ function PlanToday({ rides, recovery, setRecovery, recoverySaveState, saveRecove
         setInsights(payload);
         setCurrentFtp(payload.currentFtpWatts);
         setFtpInput(payload.currentFtpWatts);
+        setWeightInputPounds(Math.round(payload.weightKg * 2.2046226218));
         if (payload.goal) setGoalTarget(payload.goal.targetFtpWatts);
       })
       .catch(() => { if (active) setActionMessage("Saved insights are temporarily unavailable."); });
@@ -1179,6 +1185,32 @@ function PlanToday({ rides, recovery, setRecovery, recoverySaveState, saveRecove
     }
   };
 
+  const saveWeight = async () => {
+    const weightPounds = Math.round(weightInputPounds);
+    if (!Number.isFinite(weightPounds) || weightPounds < 80 || weightPounds > 500) {
+      setWeightSaveState("error");
+      setWeightSaveMessage("Enter a body weight between 80 and 500 pounds.");
+      return;
+    }
+    setWeightSaveState("working");
+    setWeightSaveMessage("Saving body weight…");
+    try {
+      const response = await fetch("/api/phase3", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ action: "record_weight", weightPounds }),
+      });
+      const payload = await response.json() as { weightPounds?: number; error?: string };
+      if (!response.ok) throw new Error(payload.error ?? "Body weight could not be saved.");
+      await loadInsights();
+      setWeightSaveState("success");
+      setWeightSaveMessage(`Saved. Route estimates now use ${payload.weightPounds ?? weightPounds} lb.`);
+    } catch (error) {
+      setWeightSaveState("error");
+      setWeightSaveMessage(error instanceof Error ? error.message : "Body weight could not be saved.");
+    }
+  };
+
   const dayMs = 24 * 60 * 60 * 1000;
   const timestamps = rides.map((ride) => Date.parse(ride.date)).filter(Number.isFinite);
   const anchorMs = timestamps.length ? Math.max(...timestamps) : Date.parse("2026-08-07");
@@ -1211,7 +1243,11 @@ function PlanToday({ rides, recovery, setRecovery, recoverySaveState, saveRecove
   const planningInput = { readinessScore: readiness.score, kneePain: recovery.kneePain ?? 0, acuteChronicRatio: loadRatio, recentHardSessions: block(7, 0).rides ? rides.filter((ride) => (ride.type === "Tempo" || ride.type === "Threshold") && Date.parse(ride.date) > anchorMs - (7 * dayMs)).length : 0 };
   const workout = recommendWorkout(planningInput);
   const availableWorlds = worldRotation?.availableWorlds ?? ["Watopia"];
-  const routeSuite = recommendZwiftRoutes(workout.mode, currentFtp, ZWIFT_WORLDS, routeShuffleIndex, recentRouteIds);
+  const currentWeightKg = insights?.weightKg ?? DEFAULT_ROUTE_BODY_WEIGHT_KG;
+  const currentWeightPounds = Math.round(currentWeightKg * 2.2046226218);
+  const routePowerMinimum = Math.round(currentWeightKg * ROUTE_ESTIMATE_WATTS_PER_KG.minimum);
+  const routePowerMaximum = Math.round(Math.min(currentWeightKg * ROUTE_ESTIMATE_WATTS_PER_KG.maximum, currentFtp * 0.92));
+  const routeSuite = recommendZwiftRoutes(workout.mode, currentFtp, ZWIFT_WORLDS, routeShuffleIndex, recentRouteIds, currentWeightKg);
   const selectedRoute = routeSuite.find((suggestion) => suggestion.route.id === selectedRouteId)
     ?? routeSuite.find((suggestion) => suggestion.recommended)
     ?? routeSuite[0];
@@ -1240,12 +1276,12 @@ function PlanToday({ rides, recovery, setRecovery, recoverySaveState, saveRecove
 
       <section className="route-suite panel full-width">
         <div className="section-heading route-suite-heading">
-          <div><span className="eyebrow">Zwift route match</span><h2>Choose the time—and scenery—you want</h2><p>All 10 workout-accessible worlds are in the deck. Route windows: 30 min ±10, 60 min ±15, and 90 min ±15. Estimates use distance and climbing—not a promised finish time.</p></div>
+          <div><span className="eyebrow">Zwift route match</span><h2>Choose the time—and scenery—you want</h2><p>All 10 workout-accessible worlds are in the deck. Route windows: 30 min ±10, 60 min ±15, and 90 min ±15. Personal estimates use your weight, sustainable power, distance, and climbing.</p></div>
           <span className={`small-badge ${workout.mode === "rest" ? "paused" : ""}`}>{workout.mode === "rest" ? "paused by rest guardrail" : "30 · 60 · 90 min"}</span>
         </div>
 
         <div className="route-deck" aria-live="polite">
-          <span className="route-deck-copy"><small>Any-world mode</small><strong>{ZWIFT_WORLDS.length} workout-accessible worlds · {ZWIFT_ROUTE_COUNT} curated routes</strong><em>In rotation now: {availableWorlds.join(" · ")}. Other suggestions are reachable through a workout. Recent routes stay out of the next six deals.</em></span>
+          <span className="route-deck-copy"><small>Any-world mode · Personal route model</small><strong>{currentWeightPounds} lb · {ROUTE_ESTIMATE_WATTS_PER_KG.minimum.toFixed(1)}–{ROUTE_ESTIMATE_WATTS_PER_KG.maximum.toFixed(1)} W/kg · about {routePowerMinimum}–{routePowerMaximum} W average</strong><em>{ZWIFT_WORLDS.length} workout-accessible worlds · {ZWIFT_ROUTE_COUNT} curated routes. In rotation now: {availableWorlds.join(" · ")}. Recent routes stay out of the next six deals.</em></span>
           <button type="button" className="route-shuffle" onClick={() => {
             const visibleRouteIds = routeSuite.map((suggestion) => suggestion.route.id);
             setRecentRouteIds((current) => [...new Set([...visibleRouteIds, ...current])].slice(0, 18));
@@ -1270,7 +1306,7 @@ function PlanToday({ rides, recovery, setRecovery, recoverySaveState, saveRecove
                 onClick={() => setSelectedRouteId(suggestion.route.id)}
               >
                 <span className="route-choice-head">
-                  <span><small>{suggestion.commitment} min target · ~{suggestion.estimatedMinutes} min route</small><strong>{suggestion.route.name}</strong></span>
+                  <span><small>{suggestion.commitment} min target · est. {suggestion.estimatedMinimumMinutes}–{suggestion.estimatedMaximumMinutes} min</small><strong>{suggestion.route.name}</strong></span>
                   <em>{suggestion.recommended ? "Best fit" : isSelected ? "Selected" : "Option"}</em>
                 </span>
 
@@ -1297,7 +1333,7 @@ function PlanToday({ rides, recovery, setRecovery, recoverySaveState, saveRecove
         </div>
 
         <div className="route-suite-footer">
-          <span>{workout.mode === "rest" ? "Rest remains today's recommendation." : <><strong>Selected:</strong> {selectedRoute.route.name} · ~{selectedRoute.estimatedMinutes} min · {selectedRoute.targetWatts}</>}</span>
+          <span>{workout.mode === "rest" ? "Rest remains today's recommendation." : <><strong>Selected:</strong> {selectedRoute.route.name} · {selectedRoute.estimatedMinimumMinutes}–{selectedRoute.estimatedMaximumMinutes} min · {selectedRoute.targetWatts}</>}</span>
           <span className="route-source-links"><a href="https://support.zwift.com/zwift-worlds-and-cycling-routes-rk3PMBUht" target="_blank" rel="noreferrer">Official route details ↗</a><a href={worldRotation?.sourceUrl ?? "https://zwiftinsider.com/schedule/"} target="_blank" rel="noreferrer">World calendar ↗</a></span>
         </div>
       </section>
@@ -1314,6 +1350,8 @@ function PlanToday({ rides, recovery, setRecovery, recoverySaveState, saveRecove
         <div className="signal-list">{(prediction?.signals ?? ["Import a ride with 20–60 minutes of recorded power."]).map((signal) => <span key={signal}>· {signal}</span>)}</div>
         <div className="confirm-ftp"><label><span>Working FTP</span><input type="number" min="50" max="500" value={ftpInput} onChange={(event) => { setFtpInput(Number(event.target.value)); setFtpSaveMessage(""); setFtpSaveState("idle"); }} /></label>{prediction?.midpointWatts && <button className="text-button" onClick={() => { setFtpInput(prediction.midpointWatts!); setFtpSaveMessage(""); setFtpSaveState("idle"); }}>Use midpoint</button>}<button className="primary-button" onClick={() => void saveFtp()} disabled={actionState === "working"}>{ftpSaveState === "working" ? "Saving…" : "Save FTP"}</button></div>
         <p className={`ftp-save-status ${ftpSaveState}`} aria-live="polite">{ftpSaveMessage || `Current saved FTP: ${currentFtp} W.`}</p>
+        <div className="confirm-ftp"><label><span>Body weight (lb)</span><input type="number" min="80" max="500" value={weightInputPounds} onChange={(event) => { setWeightInputPounds(Number(event.target.value)); setWeightSaveMessage(""); setWeightSaveState("idle"); }} /></label><button className="primary-button" onClick={() => void saveWeight()} disabled={weightSaveState === "working"}>{weightSaveState === "working" ? "Saving…" : "Save weight"}</button></div>
+        <p className={`ftp-save-status ${weightSaveState}`} aria-live="polite">{weightSaveMessage || `Current route-estimate weight: ${currentWeightPounds} lb.`}</p>
         <p className="chart-note"><i /> Predictions are advisory ranges. Your working FTP changes only after you confirm it.</p>
       </section>
 

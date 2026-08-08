@@ -3,7 +3,7 @@ import { access } from "node:fs/promises";
 import test from "node:test";
 import { derivePowerDuration, deriveStreamMetrics, type ActivitySample } from "../lib/activity-parser.ts";
 import { buildWeeklyPlan, predictFtp, projectFtpGoal, recommendWorkout } from "../lib/phase3.ts";
-import { recommendZwiftRoutes, ROUTE_TIME_WINDOWS, ZWIFT_ROUTE_CATALOG, ZWIFT_ROUTE_COUNT, ZWIFT_WORLDS } from "../lib/zwift-routes.ts";
+import { estimateZwiftRouteTime, recommendZwiftRoutes, ROUTE_TIME_WINDOWS, ZWIFT_ROUTE_CATALOG, ZWIFT_ROUTE_COUNT, ZWIFT_WORLDS } from "../lib/zwift-routes.ts";
 import { fallbackGuestWorlds, parseGuestWorldsFromSchedule } from "../lib/zwift-world-rotation.ts";
 
 test("derives rolling power evidence from timestamped samples", () => {
@@ -76,16 +76,25 @@ test("pain makes workout guidance and the generated week cautious", () => {
 });
 
 test("Zwift route suite uses the requested time windows and FTP-based targets", () => {
-  const suite = recommendZwiftRoutes("tempo", 200);
+  const suite = recommendZwiftRoutes("tempo", 165);
   assert.deepEqual(suite.map((suggestion) => suggestion.commitment), [30, 60, 90]);
   assert.equal(new Set(suite.map((suggestion) => suggestion.route.id)).size, 3);
-  assert.deepEqual(suite.map((suggestion) => suggestion.targetWatts), ["152–176 W", "152–176 W", "152–176 W"]);
+  assert.deepEqual(suite.map((suggestion) => suggestion.targetWatts), ["125–145 W", "125–145 W", "125–145 W"]);
   assert.equal(suite.find((suggestion) => suggestion.recommended)?.commitment, 60);
   assert.equal(ZWIFT_ROUTE_COUNT, 75);
   assert.ok(suite.every((suggestion) => (
     suggestion.estimatedMinutes >= ROUTE_TIME_WINDOWS[suggestion.commitment].minimumMinutes
       && suggestion.estimatedMinutes <= ROUTE_TIME_WINDOWS[suggestion.commitment].maximumMinutes
   )));
+});
+
+test("Zwift route timing accounts for rider weight and sustainable W/kg", () => {
+  const laReine = ZWIFT_ROUTE_CATALOG.find((route) => route.id === "france-la-reine")!;
+  const estimate = estimateZwiftRouteTime(laReine, 165, 275 / 2.2046226218);
+  assert.ok(estimate.minimumPowerWatts >= 124 && estimate.minimumPowerWatts <= 126);
+  assert.ok(estimate.maximumPowerWatts >= 149 && estimate.maximumPowerWatts <= 151);
+  assert.ok(estimate.minimumMinutes > 180);
+  assert.ok(estimate.maximumMinutes > estimate.minimumMinutes);
 });
 
 test("Zwift route suite can be limited to a supplied world pool", () => {

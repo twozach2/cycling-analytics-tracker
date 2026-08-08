@@ -36,6 +36,8 @@ export type ZwiftRouteSuggestion = {
   commitment: RouteCommitment;
   route: ZwiftRoute;
   estimatedMinutes: number;
+  estimatedMinimumMinutes: number;
+  estimatedMaximumMinutes: number;
   timeWindow: RouteTimeWindow;
   targetWatts: string;
   heartRateCue: string;
@@ -44,6 +46,17 @@ export type ZwiftRouteSuggestion = {
   recommended: boolean;
   disabled: boolean;
 };
+
+export type ZwiftRouteEstimate = {
+  minimumMinutes: number;
+  maximumMinutes: number;
+  midpointMinutes: number;
+  minimumPowerWatts: number;
+  maximumPowerWatts: number;
+};
+
+export const DEFAULT_ROUTE_BODY_WEIGHT_KG = 124.7;
+export const ROUTE_ESTIMATE_WATTS_PER_KG = { minimum: 1, maximum: 1.2 } as const;
 
 export const ROUTE_TIME_WINDOWS: Record<RouteCommitment, RouteTimeWindow> = {
   30: { minimumMinutes: 20, maximumMinutes: 40 },
@@ -195,10 +208,71 @@ function isZwiftWorld(value: string): value is ZwiftWorld {
   return (ZWIFT_WORLDS as readonly string[]).includes(value);
 }
 
-export function estimateZwiftRouteMinutes(routeValue: ZwiftRoute): number {
-  const flatMinutes = (routeValue.distanceMiles / 17) * 60;
-  const climbingMinutes = routeValue.elevationFeet / 125;
-  return Math.ceil(flatMinutes + climbingMinutes);
+function speedForRoute(
+  powerWatts: number,
+  systemWeightKg: number,
+  distanceMeters: number,
+  elevationMeters: number,
+): number {
+  const gravity = 9.80665;
+  const rollingResistance = 0.004;
+  const airDensity = 1.225;
+  const dragArea = 0.42;
+  const drivetrainEfficiency = 0.97;
+  const effectiveGrade = elevationMeters / distanceMeters;
+  const wheelPower = powerWatts * drivetrainEfficiency;
+  const resistanceForce = systemWeightKg * gravity * (rollingResistance + effectiveGrade);
+  const aerodynamicFactor = 0.5 * airDensity * dragArea;
+  let lowSpeed = 0.25;
+  let highSpeed = 20;
+
+  for (let iteration = 0; iteration < 60; iteration += 1) {
+    const speed = (lowSpeed + highSpeed) / 2;
+    const requiredPower = (resistanceForce * speed) + (aerodynamicFactor * speed ** 3);
+    if (requiredPower > wheelPower) highSpeed = speed;
+    else lowSpeed = speed;
+  }
+
+  return (lowSpeed + highSpeed) / 2;
+}
+
+export function estimateZwiftRouteTime(
+  routeValue: ZwiftRoute,
+  ftpWatts = 165,
+  bodyWeightKg = DEFAULT_ROUTE_BODY_WEIGHT_KG,
+): ZwiftRouteEstimate {
+  const safeFtp = Number.isFinite(ftpWatts) && ftpWatts > 0 ? ftpWatts : 165;
+  const safeBodyWeight = Number.isFinite(bodyWeightKg) && bodyWeightKg > 0
+    ? bodyWeightKg
+    : DEFAULT_ROUTE_BODY_WEIGHT_KG;
+  const preferredMinimumPower = safeBodyWeight * ROUTE_ESTIMATE_WATTS_PER_KG.minimum;
+  const preferredMaximumPower = safeBodyWeight * ROUTE_ESTIMATE_WATTS_PER_KG.maximum;
+  const sustainableCeiling = safeFtp * 0.92;
+  const maximumPowerWatts = Math.max(40, Math.min(preferredMaximumPower, sustainableCeiling));
+  const minimumPowerWatts = Math.max(35, Math.min(preferredMinimumPower, maximumPowerWatts * 0.9));
+  const distanceMeters = Math.max(1, routeValue.distanceMiles * 1609.344);
+  const elevationMeters = Math.max(0, routeValue.elevationFeet * 0.3048);
+  const systemWeightKg = safeBodyWeight + 10;
+  const slowSpeed = speedForRoute(minimumPowerWatts, systemWeightKg, distanceMeters, elevationMeters);
+  const fastSpeed = speedForRoute(maximumPowerWatts, systemWeightKg, distanceMeters, elevationMeters);
+  const maximumMinutes = Math.ceil((distanceMeters / slowSpeed) / 60);
+  const minimumMinutes = Math.ceil((distanceMeters / fastSpeed) / 60);
+
+  return {
+    minimumMinutes,
+    maximumMinutes,
+    midpointMinutes: Math.round((minimumMinutes + maximumMinutes) / 2),
+    minimumPowerWatts: Math.round(minimumPowerWatts),
+    maximumPowerWatts: Math.round(maximumPowerWatts),
+  };
+}
+
+export function estimateZwiftRouteMinutes(
+  routeValue: ZwiftRoute,
+  ftpWatts = 165,
+  bodyWeightKg = DEFAULT_ROUTE_BODY_WEIGHT_KG,
+): number {
+  return estimateZwiftRouteTime(routeValue, ftpWatts, bodyWeightKg).midpointMinutes;
 }
 
 function seededUnit(value: string): number {
@@ -216,9 +290,11 @@ function rankRoute(
   commitment: RouteCommitment,
   shuffleIndex: number,
   recentWorldCounts: ReadonlyMap<ZwiftWorld, number>,
+  ftpWatts: number,
+  bodyWeightKg: number,
 ): number {
   const window = ROUTE_TIME_WINDOWS[commitment];
-  const estimate = estimateZwiftRouteMinutes(routeValue);
+  const estimate = estimateZwiftRouteMinutes(routeValue, ftpWatts, bodyWeightKg);
   const center = (window.minimumMinutes + window.maximumMinutes) / 2;
   const distancePenalty = Math.abs(estimate - center) / (window.maximumMinutes - window.minimumMinutes);
   const recentWorldPenalty = Math.min(3, recentWorldCounts.get(routeValue.world) ?? 0) * 0.24;
@@ -234,8 +310,12 @@ export function recommendZwiftRoutes(
   worldPool: readonly string[] = ZWIFT_WORLDS,
   shuffleIndex = 0,
   recentRouteIds: readonly string[] = [],
+  bodyWeightKg = DEFAULT_ROUTE_BODY_WEIGHT_KG,
 ): ZwiftRouteSuggestion[] {
   const safeFtp = Number.isFinite(ftpWatts) && ftpWatts > 0 ? ftpWatts : 165;
+  const safeBodyWeight = Number.isFinite(bodyWeightKg) && bodyWeightKg > 0
+    ? bodyWeightKg
+    : DEFAULT_ROUTE_BODY_WEIGHT_KG;
   const watts = intensity[mode];
   const recommendedCommitment: RouteCommitment = mode === "recovery" || mode === "rest" ? 30 : 60;
   const allowedWorlds = new Set(worldPool.filter(isZwiftWorld));
@@ -252,7 +332,7 @@ export function recommendZwiftRoutes(
   return commitments.map((commitment) => {
     const window = ROUTE_TIME_WINDOWS[commitment];
     const inWindow = routeList.filter((routeValue) => {
-      const estimate = estimateZwiftRouteMinutes(routeValue);
+      const estimate = estimateZwiftRouteMinutes(routeValue, safeFtp, safeBodyWeight);
       return allowedWorlds.has(routeValue.world)
         && estimate >= window.minimumMinutes
         && estimate <= window.maximumMinutes;
@@ -268,10 +348,11 @@ export function recommendZwiftRoutes(
     const selectedRoute = [...candidatePool]
       .filter((routeValue) => !selectedRouteIds.has(routeValue.id))
       .sort((a, b) => (
-        rankRoute(a, mode, commitment, shuffleIndex, recentWorldCounts)
-          - rankRoute(b, mode, commitment, shuffleIndex, recentWorldCounts)
+        rankRoute(a, mode, commitment, shuffleIndex, recentWorldCounts, safeFtp, safeBodyWeight)
+          - rankRoute(b, mode, commitment, shuffleIndex, recentWorldCounts, safeFtp, safeBodyWeight)
       ))[0];
-    const estimatedMinutes = estimateZwiftRouteMinutes(selectedRoute);
+    const routeEstimate = estimateZwiftRouteTime(selectedRoute, safeFtp, safeBodyWeight);
+    const estimatedMinutes = routeEstimate.midpointMinutes;
     selectedRouteIds.add(selectedRoute.id);
     selectedWorlds.add(selectedRoute.world);
 
@@ -279,11 +360,13 @@ export function recommendZwiftRoutes(
       commitment,
       route: selectedRoute,
       estimatedMinutes,
+      estimatedMinimumMinutes: routeEstimate.minimumMinutes,
+      estimatedMaximumMinutes: routeEstimate.maximumMinutes,
       timeWindow: window,
       targetWatts: `${Math.round(safeFtp * watts.low)}–${Math.round(safeFtp * watts.high)} W`,
       heartRateCue: watts.heartRateCue,
       reason: `${selectedRoute.world} brings a change of scenery. ${modeReason[mode][selectedRoute.profile]}`,
-      timingCue: `Estimated ${estimatedMinutes} min · fits the ${window.minimumMinutes}–${window.maximumMinutes} min route window.`,
+      timingCue: `Estimated ${routeEstimate.minimumMinutes}–${routeEstimate.maximumMinutes} min at ${ROUTE_ESTIMATE_WATTS_PER_KG.minimum.toFixed(1)}–${ROUTE_ESTIMATE_WATTS_PER_KG.maximum.toFixed(1)} W/kg · matched to the ${window.minimumMinutes}–${window.maximumMinutes} min route window.`,
       recommended: commitment === recommendedCommitment,
       disabled: mode === "rest",
     };
