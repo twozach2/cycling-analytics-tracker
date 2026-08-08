@@ -1,0 +1,1 @@
+ALTER TABLE `rides` ADD `ride_type_source` text DEFAULT 'legacy' NOT NULL;

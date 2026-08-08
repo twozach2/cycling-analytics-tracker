@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { classifyStravaActivity, ftpSnapshotForRide, isCyclingActivity, parseReadBudget, sixMonthsBefore, syncAfterEpoch } from "../lib/strava-sync.ts";
+import { classifyStravaActivity, classifyStravaRideType, ftpSnapshotForRide, isCyclingActivity, parseReadBudget, sixMonthsBefore, syncAfterEpoch } from "../lib/strava-sync.ts";
 
 test("six-month imports use a calendar-aware cutoff", () => {
   assert.equal(sixMonthsBefore(new Date("2026-08-31T12:30:00Z")).toISOString(), "2026-02-28T12:30:00.000Z");
@@ -31,6 +31,15 @@ test("Strava virtual and trainer rides are classified as indoor", () => {
     workoutSubtype: "trainer_workout",
   });
   assert.equal(classifyStravaActivity({ sport_type: "Ride" }).environment, "outdoor");
+});
+
+test("Strava rides receive useful training types instead of a fixed Free ride label", () => {
+  assert.equal(classifyStravaRideType({ name: "Morning Zone 2", workoutSubtype: null, intensityFactor: 0.84 }), "Zone 2");
+  assert.equal(classifyStravaRideType({ name: "Friday aerobic benchmark", workoutSubtype: null, intensityFactor: 0.68 }), "Zone 2 benchmark");
+  assert.equal(classifyStravaRideType({ name: "Triple Flat Loops", workoutSubtype: null, intensityFactor: 0.71 }), "Zone 2");
+  assert.equal(classifyStravaRideType({ name: "R.G.V.", workoutSubtype: null, intensityFactor: 0.82 }), "Tempo");
+  assert.equal(classifyStravaRideType({ name: "FTP intervals", workoutSubtype: "trainer_workout", intensityFactor: 0.86 }), "Threshold");
+  assert.equal(classifyStravaRideType({ name: "Coffee ride", workoutSubtype: null, intensityFactor: null }), "Free ride");
 });
 
 test("FTP snapshots use dated history and never fall forward to today's FTP", () => {

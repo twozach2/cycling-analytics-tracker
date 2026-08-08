@@ -5,7 +5,7 @@ import { activityStreams, externalConnections, ftpHistory, powerDuration as powe
 import { currentRider } from "../../../../../lib/current-rider";
 import { derivePowerDuration, deriveStreamMetrics, type ActivitySample } from "../../../../../lib/activity-parser";
 import { deriveRideMetrics, evaluateDecouplingEligibility } from "../../../../../lib/metrics";
-import { classifyStravaActivity, ftpSnapshotForRide, isCyclingActivity, parseReadBudget, syncAfterEpoch, type StravaSyncMode } from "../../../../../lib/strava-sync";
+import { classifyStravaActivity, classifyStravaRideType, ftpSnapshotForRide, isCyclingActivity, parseReadBudget, syncAfterEpoch, type StravaSyncMode } from "../../../../../lib/strava-sync";
 
 type StravaActivity = {
   id: number;
@@ -151,7 +151,7 @@ export async function POST(request: Request) {
 
   for (const activity of [...activitiesById.values()].filter(isCyclingActivity)) {
     const externalId = String(activity.id);
-    const [existing] = await db.select({ id: rides.id, ftpAtRideWatts: rides.ftpAtRideWatts, ftpSnapshotSource: rides.ftpSnapshotSource }).from(rides)
+    const [existing] = await db.select({ id: rides.id, ftpAtRideWatts: rides.ftpAtRideWatts, ftpSnapshotSource: rides.ftpSnapshotSource, rideType: rides.rideType, rideTypeSource: rides.rideTypeSource }).from(rides)
       .where(and(eq(rides.riderId, rider.id), eq(rides.externalId, externalId)))
       .limit(1);
     const normalizedPower = finite(activity.weighted_average_watts);
@@ -174,12 +174,19 @@ export async function POST(request: Request) {
       averageHeartRateBpm: finite(activity.average_heartrate),
       ftpWatts: ftpSnapshot.ftpWatts,
     });
+    const automaticRideType = classifyStravaRideType({
+      name: activity.name,
+      workoutSubtype: classification.workoutSubtype,
+      intensityFactor: derived.intensityFactor,
+    });
+    const preserveManualType = existing?.rideTypeSource === "manual";
     const rideSummary = {
       source: "strava_export" as const,
       name: activity.name || "Strava ride",
       startedAt: activity.start_date,
       timezone: activity.timezone,
-      rideType: "Free ride",
+      rideType: preserveManualType ? existing.rideType : automaticRideType,
+      rideTypeSource: preserveManualType ? "manual" : "automatic",
       indoor: classification.indoor,
       environment: classification.environment,
       workoutSubtype: classification.workoutSubtype,

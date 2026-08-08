@@ -3,7 +3,9 @@ import { getChatGPTUser } from "../../chatgpt-auth";
 import { getDb } from "../../../db";
 import { ftpHistory, powerDuration, rideMetrics, riders, rides, sourceFiles } from "../../../db/schema";
 import { deriveRideMetrics, evaluateDecouplingEligibility, recommendRecovery } from "../../../lib/metrics";
-import { ftpSnapshotForRide, type ActivityEnvironment, type WorkoutSubtype } from "../../../lib/strava-sync";
+import { ftpSnapshotForRide, type ActivityEnvironment, type RideTrainingType, type WorkoutSubtype } from "../../../lib/strava-sync";
+
+const allowedRideTypes = new Set<RideTrainingType>(["Zone 2", "Zone 2 benchmark", "Recovery", "Tempo", "Threshold", "Free ride"]);
 
 async function riderIdFor(request: Request) {
   const user = await getChatGPTUser();
@@ -45,7 +47,7 @@ type RidePayload = {
   ftpAtRideWatts?: number | null;
   weightAtRideKg?: number | null;
   sourceTrainingLoad?: number | null;
-  rideType?: "Zone 2" | "Zone 2 benchmark" | "Recovery" | "Tempo" | "Threshold" | "Free ride";
+  rideType?: RideTrainingType;
   routeName?: string | null;
   aerobicDecouplingPercent?: number | null;
   variabilityIndex?: number | null;
@@ -114,7 +116,6 @@ export async function POST(request: Request) {
   }
 
   const id = crypto.randomUUID();
-  const allowedRideTypes = new Set(["Zone 2", "Zone 2 benchmark", "Recovery", "Tempo", "Threshold", "Free ride"]);
   const rideType = payload.rideType && allowedRideTypes.has(payload.rideType) ? payload.rideType : "Free ride";
   const environment: ActivityEnvironment = ["virtual", "indoor", "outdoor"].includes(payload.environment ?? "") ? payload.environment! : "outdoor";
   const workoutSubtype: WorkoutSubtype = payload.workoutSubtype === "trainer_workout" || payload.workoutSubtype === "race" ? payload.workoutSubtype : null;
@@ -136,6 +137,7 @@ export async function POST(request: Request) {
     name,
     startedAt,
     rideType,
+    rideTypeSource: "manual",
     indoor: environment !== "outdoor",
     environment,
     workoutSubtype,
@@ -186,4 +188,33 @@ export async function POST(request: Request) {
   if (durationRows.length) await db.insert(powerDuration).values(durationRows).onConflictDoNothing();
 
   return Response.json({ rideId: id, metrics: finalMetrics, recovery, duplicate: false }, { status: 201 });
+}
+
+export async function PATCH(request: Request) {
+  const riderId = await riderIdFor(request);
+  if (!riderId) return Response.json({ error: "Sign in to update rides." }, { status: 401 });
+
+  let payload: { rideId?: string; rideType?: RideTrainingType };
+  try {
+    payload = await request.json() as { rideId?: string; rideType?: RideTrainingType };
+  } catch {
+    return Response.json({ error: "Choose a valid ride type." }, { status: 400 });
+  }
+  const rideId = payload.rideId?.trim();
+  if (!rideId || !payload.rideType || !allowedRideTypes.has(payload.rideType)) {
+    return Response.json({ error: "Ride and ride type are required." }, { status: 400 });
+  }
+
+  const db = getDb();
+  const [ownedRide] = await db.select({ id: rides.id }).from(rides)
+    .where(and(eq(rides.id, rideId), eq(rides.riderId, riderId)))
+    .limit(1);
+  if (!ownedRide) return Response.json({ error: "Ride not found." }, { status: 404 });
+
+  await db.update(rides).set({
+    rideType: payload.rideType,
+    rideTypeSource: "manual",
+    updatedAt: new Date().toISOString(),
+  }).where(eq(rides.id, rideId));
+  return Response.json({ rideId, rideType: payload.rideType, source: "manual" });
 }

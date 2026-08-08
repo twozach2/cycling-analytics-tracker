@@ -60,6 +60,8 @@ test("removes starter preview metadata and dependencies", async () => {
   assert.match(dashboard, /Virtual \/ Indoor/);
   assert.match(dashboard, /FTP snapshot/);
   assert.match(dashboard, /Not suitable/);
+  assert.match(dashboard, /Ride type for/);
+  assert.match(dashboard, /method: "PATCH"/);
   assert.match(dashboard, /buildCyclingMarkdown/);
   assert.match(dashboard, /World calendar/);
   assert.match(dashboard, /official Zwift map/i);

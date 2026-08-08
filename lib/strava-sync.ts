@@ -19,6 +19,7 @@ export function isCyclingActivity(activity: { sport_type?: string; type?: string
 
 export type ActivityEnvironment = "virtual" | "indoor" | "outdoor";
 export type WorkoutSubtype = "trainer_workout" | "race" | null;
+export type RideTrainingType = "Zone 2" | "Zone 2 benchmark" | "Recovery" | "Tempo" | "Threshold" | "Free ride";
 
 export function classifyStravaActivity(activity: {
   sport_type?: string;
@@ -34,6 +35,24 @@ export function classifyStravaActivity(activity: {
   const trainerWorkout = activity.workout_type === 11 || /\b(erg|workout|intervals?|ramp test)\b/i.test(workoutName);
   const workoutSubtype = trainerWorkout ? "trainer_workout" : activity.workout_type === 10 ? "race" : null;
   return { environment: virtual ? "virtual" : indoor ? "indoor" : "outdoor", indoor, workoutSubtype };
+}
+
+export function classifyStravaRideType(input: {
+  name?: string;
+  workoutSubtype: WorkoutSubtype;
+  intensityFactor: number | null;
+}): RideTrainingType {
+  const name = input.name ?? "";
+  if (/\b(zone ?2|z2|aerobic)\b.*\bbenchmark\b|\bbenchmark\b.*\b(zone ?2|z2|aerobic)\b/i.test(name)) return "Zone 2 benchmark";
+  if (/\b(recovery|recover|easy spin|rest day)\b/i.test(name)) return "Recovery";
+  if (/\b(zone ?2|z2|endurance|aerobic|base ride)\b/i.test(name)) return "Zone 2";
+  if (/\b(tempo|sweet ?spot)\b/i.test(name)) return "Tempo";
+  if (/\b(threshold|ftp|vo2|max intervals?|race)\b/i.test(name) || input.workoutSubtype === "race") return "Threshold";
+  if (input.intensityFactor === null || !Number.isFinite(input.intensityFactor)) return "Free ride";
+  if (input.intensityFactor < 0.55) return "Recovery";
+  if (input.intensityFactor < 0.76) return "Zone 2";
+  if (input.intensityFactor < 0.9) return "Tempo";
+  return "Threshold";
 }
 
 export type FtpHistoryEntry = { effectiveAt: string; ftpWatts: number };

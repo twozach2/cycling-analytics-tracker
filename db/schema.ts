@@ -53,6 +53,7 @@ export const rides = sqliteTable(
     startedAt: text("started_at").notNull(),
     timezone: text("timezone"),
     rideType: text("ride_type").notNull().default("unknown"),
+    rideTypeSource: text("ride_type_source").notNull().default("legacy"),
     indoor: integer("indoor", { mode: "boolean" }).notNull().default(false),
     environment: text("environment", { enum: ["virtual", "indoor", "outdoor"] }).notNull().default("outdoor"),
     workoutSubtype: text("workout_subtype", { enum: ["trainer_workout", "race"] }),

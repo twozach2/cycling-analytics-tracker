@@ -353,6 +353,7 @@ export default function CyclingDashboard() {
   const [currentWeightKg, setCurrentWeightKg] = useState<number | null>(null);
   const [profileStatus, setProfileStatus] = useState<"loading" | "ready" | "error">("loading");
   const [syncNote, setSyncNote] = useState("");
+  const [rideTypeSavingId, setRideTypeSavingId] = useState<string | null>(null);
   const [rideFilter, setRideFilter] = useState("All rides");
   const [search, setSearch] = useState("");
   const [recovery, setRecovery] = useState<SubjectiveRecovery>({
@@ -477,6 +478,31 @@ export default function CyclingDashboard() {
   const openRide = (ride: Ride) => {
     setSelectedRideId(ride.id);
     setView("dashboard");
+  };
+
+  const changeRideType = async (ride: Ride, nextType: Ride["type"]) => {
+    if (ride.type === nextType) return;
+    if (dataMode !== "saved") {
+      setRides((current) => current.map((entry) => entry.id === ride.id ? { ...entry, type: nextType } : entry));
+      setSyncNote("Demo ride type changed · Not saved");
+      return;
+    }
+    setRideTypeSavingId(ride.id);
+    try {
+      const response = await fetch("/api/rides", {
+        method: "PATCH",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ rideId: ride.id, rideType: nextType }),
+      });
+      const payload = await response.json() as { error?: string };
+      if (!response.ok) throw new Error(payload.error ?? "Ride type could not be saved.");
+      setRides((current) => current.map((entry) => entry.id === ride.id ? { ...entry, type: nextType } : entry));
+      setSyncNote(`${ride.name} · ${nextType} saved`);
+    } catch (error) {
+      setSyncNote(error instanceof Error ? error.message : "Ride type could not be saved.");
+    } finally {
+      setRideTypeSavingId(null);
+    }
   };
 
   const handleFiles = async (files: FileList | File[]) => {
@@ -816,7 +842,7 @@ export default function CyclingDashboard() {
         )}
 
         {view === "dashboard" && <div className="dashboard-stack">
-          <Overview selectedRide={selectedRide} rides={rides} openRide={openRide} exportRide={exportRideMarkdown} setView={setView} isDemo={dataMode !== "saved"} currentFtp={currentFtp} />
+          <Overview selectedRide={selectedRide} rides={rides} openRide={openRide} exportRide={exportRideMarkdown} changeRideType={changeRideType} rideTypeSaving={rideTypeSavingId === selectedRide.id} setView={setView} isDemo={dataMode !== "saved"} currentFtp={currentFtp} />
           <details className="performance-drawer">
             <summary><span><strong>Performance details</strong><small>Route comparisons, benchmarks, cadence, and workload</small></span><i>+</i></summary>
             <PerformanceDetails rides={rides} currentFtp={currentFtp} />
@@ -947,11 +973,13 @@ function RiderSetup({ initialFtp, initialWeightKg, onSaved }: {
   );
 }
 
-function Overview({ selectedRide, rides, openRide, exportRide, setView, isDemo, currentFtp }: {
+function Overview({ selectedRide, rides, openRide, exportRide, changeRideType, rideTypeSaving, setView, isDemo, currentFtp }: {
   selectedRide: Ride;
   rides: Ride[];
   openRide: (ride: Ride) => void;
   exportRide: (ride: Ride) => void;
+  changeRideType: (ride: Ride, nextType: Ride["type"]) => Promise<void>;
+  rideTypeSaving: boolean;
   setView: (view: View) => void;
   isDemo: boolean;
   currentFtp: number;
@@ -1049,7 +1077,7 @@ function Overview({ selectedRide, rides, openRide, exportRide, setView, isDemo, 
       </section>
 
       <section className="ride-detail panel span-two">
-        <div className="section-heading"><div><span className="eyebrow">Selected ride · {selectedRide.dateLabel}</span><h2>{selectedRide.name}</h2><p>{selectedRide.route}</p></div><div className="ride-detail-actions"><span className="environment-tag">{environmentLabel(selectedRide.environment, selectedRide.indoor)}</span>{workoutSubtypeLabel(selectedRide.workoutSubtype) && <span className="workout-tag">{workoutSubtypeLabel(selectedRide.workoutSubtype)}</span>}<span className={`ride-tag ${selectedRide.type.toLowerCase().replace(" ", "-")}`}>{selectedRide.type}</span><button className="ghost-button ride-export-button" type="button" onClick={() => exportRide(selectedRide)}>Export this ride <span aria-hidden="true">↓</span></button></div></div>
+        <div className="section-heading"><div><span className="eyebrow">Selected ride · {selectedRide.dateLabel}</span><h2>{selectedRide.name}</h2><p>{selectedRide.route}</p></div><div className="ride-detail-actions"><span className="environment-tag">{environmentLabel(selectedRide.environment, selectedRide.indoor)}</span>{workoutSubtypeLabel(selectedRide.workoutSubtype) && <span className="workout-tag">{workoutSubtypeLabel(selectedRide.workoutSubtype)}</span>}<label className="ride-type-control"><span>{rideTypeSaving ? "Saving…" : "Ride type"}</span><select value={selectedRide.type} onChange={(event) => void changeRideType(selectedRide, event.target.value as Ride["type"])} disabled={rideTypeSaving} aria-label={`Ride type for ${selectedRide.name}`}>{rideTypes.map((type) => <option key={type}>{type}</option>)}</select></label><button className="ghost-button ride-export-button" type="button" onClick={() => exportRide(selectedRide)}>Export this ride <span aria-hidden="true">↓</span></button></div></div>
         <div className="ride-stats">
           <Stat label="Distance" value={selectedRide.distanceMiles.toFixed(1)} unit="mi" />
           <Stat label="Moving time" value={formatDuration(selectedRide.movingTimeSeconds)} />
