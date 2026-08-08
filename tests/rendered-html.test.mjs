@@ -69,6 +69,8 @@ test("removes starter preview metadata and dependencies", async () => {
   assert.match(dashboard, /rolling 90-day peak/);
   assert.match(styles, /--ride-data-columns: 52px minmax\(190px, 1fr\) 112px 72px 66px 52px 18px/);
   assert.match(styles, /grid-template-columns: var\(--ride-data-columns\) 52px/);
+  assert.match(styles, /\.forecast-stamp \{[^}]*width: 168px;[^}]*height: 168px;/);
+  assert.match(styles, /\.forecast-stamp span, \.forecast-stamp small \{[^}]*max-width: 116px;/);
   assert.match(dashboard, /buildCyclingMarkdown/);
   assert.match(dashboard, /World calendar/);
   assert.match(dashboard, /official Zwift map/i);

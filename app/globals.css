@@ -407,9 +407,10 @@ blockquote { margin: 16px 0 0; padding: 14px 16px; border-left: 3px solid var(--
 .phase-three-hero { grid-column: 1 / -1; display: flex; align-items: flex-end; justify-content: space-between; min-height: 270px; padding: 36px; }
 .phase-three-hero h2 { margin: 9px 0 0; color: var(--lime); font-size: clamp(40px, 5vw, 70px); line-height: .94; letter-spacing: -.065em; font-weight: 560; }
 .plan-hero-detail { max-width: 620px; margin: 18px 0 0; color: #c9cec5; font-size: 12px; line-height: 1.6; }
-.forecast-stamp { display: flex; width: 150px; height: 150px; flex: 0 0 auto; flex-direction: column; align-items: center; justify-content: center; border: 1px solid rgba(215,255,98,.35); border-radius: 50%; }
-.forecast-stamp span, .forecast-stamp small { color: #aeb5aa; font: 8px/1.35 var(--font-data); text-align: center; text-transform: uppercase; }
-.forecast-stamp strong { color: var(--lime); font-size: 58px; line-height: 1; letter-spacing: -.07em; }
+.forecast-stamp { display: flex; width: 168px; height: 168px; box-sizing: border-box; flex: 0 0 auto; flex-direction: column; align-items: center; justify-content: center; gap: 4px; padding: 22px; border: 1px solid rgba(215,255,98,.35); border-radius: 50%; text-align: center; }
+.forecast-stamp span, .forecast-stamp small { display: block; max-width: 116px; color: #aeb5aa; font: 8px/1.35 var(--font-data); overflow-wrap: normal; text-align: center; text-transform: uppercase; white-space: normal; }
+.forecast-stamp small { min-height: 22px; font-size: 7px; }
+.forecast-stamp strong { color: var(--lime); font-size: 56px; line-height: .95; letter-spacing: -.07em; }
 .phase-action-message { grid-column: 1 / -1; padding: 12px 15px; border: 1px solid #bfd0a5; border-radius: 7px; background: #edf6e2; color: #405b2d; font-size: 10px; }
 .phase-action-message.error { border-color: #e3a08d; background: #fff0e9; color: #7d3021; }
 .phase-action-message.working { border-color: #b7cbd2; background: #eaf3f5; color: #35515c; }
