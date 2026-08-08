@@ -63,6 +63,10 @@ test("removes starter preview metadata and dependencies", async () => {
   assert.match(dashboard, /Not suitable/);
   assert.match(dashboard, /Ride type for/);
   assert.match(dashboard, /method: "PATCH"/);
+  assert.match(dashboard, /Strava auto-sync on/);
+  assert.match(dashboard, /every 15 minutes while open/);
+  assert.match(dashboard, /Estimated cycling VO₂ max/);
+  assert.match(dashboard, /rolling 90-day peak/);
   assert.match(styles, /--ride-data-columns: 52px minmax\(190px, 1fr\) 112px 72px 66px 52px 18px/);
   assert.match(styles, /grid-template-columns: var\(--ride-data-columns\) 52px/);
   assert.match(dashboard, /buildCyclingMarkdown/);

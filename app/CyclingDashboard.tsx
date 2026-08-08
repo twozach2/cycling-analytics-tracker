@@ -10,6 +10,7 @@ import {
   type SubjectiveRecovery,
 } from "@/lib/metrics";
 import { buildWeeklyPlan, projectFtpGoal, recommendWorkout } from "@/lib/phase3";
+import { AUTOMATIC_SYNC_INTERVAL_MS } from "@/lib/strava-sync";
 import { buildCyclingMarkdown, cyclingMarkdownFilename, cyclingRideMarkdownFilename, METHOD_DEFINITIONS } from "@/lib/markdown-export";
 import { recommendZwiftRoutes, ROUTE_ESTIMATE_WATTS_PER_KG, ZWIFT_ROUTE_COUNT, ZWIFT_WORLDS } from "@/lib/zwift-routes";
 import type { ZwiftRotation } from "@/lib/zwift-world-rotation";
@@ -410,6 +411,64 @@ export default function CyclingDashboard() {
       .catch(() => { if (active) setProfileStatus("error"); });
     return () => { active = false; };
   }, []);
+
+  useEffect(() => {
+    if (profileStatus !== "ready") return;
+    let active = true;
+    let inFlight = false;
+    const storageKey = "cycling-analytics:last-auto-strava-sync";
+
+    const runAutomaticSync = async () => {
+      if (!active || inFlight || document.visibilityState === "hidden") return;
+      const previousAttempt = Number(window.localStorage.getItem(storageKey));
+      if (Number.isFinite(previousAttempt) && Date.now() - previousAttempt < AUTOMATIC_SYNC_INTERVAL_MS) return;
+      inFlight = true;
+      try {
+        const insightResponse = await fetch("/api/phase3", { cache: "no-store" });
+        const insightPayload = await insightResponse.json() as { integrations?: { strava?: { connected?: boolean } } };
+        if (!insightResponse.ok || !insightPayload.integrations?.strava?.connected) return;
+
+        const latestAttempt = Number(window.localStorage.getItem(storageKey));
+        if (Number.isFinite(latestAttempt) && Date.now() - latestAttempt < AUTOMATIC_SYNC_INTERVAL_MS) return;
+        window.localStorage.setItem(storageKey, String(Date.now()));
+
+        const response = await fetch("/api/integrations/strava/sync", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ mode: "new", automatic: true }),
+        });
+        const payload = await response.json() as { imported?: number; throttled?: boolean; error?: string };
+        if (!response.ok) throw new Error(payload.error ?? "Automatic Strava sync failed.");
+        if (!active) return;
+        if (!payload.throttled) {
+          const savedRides = await fetchSavedRides();
+          if (!active) return;
+          if (savedRides.length) {
+            setRides(savedRides);
+            setSelectedRideId((current) => savedRides.some((ride) => ride.id === current) ? current : savedRides[0].id);
+            setDataMode("saved");
+          }
+        }
+        setSyncNote(payload.imported
+          ? `Strava auto-sync · ${payload.imported} new ${payload.imported === 1 ? "ride" : "rides"}`
+          : "Strava auto-sync on · Up to date");
+      } catch {
+        if (active) setSyncNote("Strava auto-sync will retry");
+      } finally {
+        inFlight = false;
+      }
+    };
+
+    const visibilityHandler = () => { if (document.visibilityState === "visible") void runAutomaticSync(); };
+    void runAutomaticSync();
+    const interval = window.setInterval(() => void runAutomaticSync(), AUTOMATIC_SYNC_INTERVAL_MS);
+    document.addEventListener("visibilitychange", visibilityHandler);
+    return () => {
+      active = false;
+      window.clearInterval(interval);
+      document.removeEventListener("visibilitychange", visibilityHandler);
+    };
+  }, [profileStatus]);
 
   useEffect(() => {
     const url = new URL(window.location.href);
@@ -1276,6 +1335,17 @@ type PhaseThreeInsights = {
   profileComplete: boolean;
   ftpHistory: Array<{ effectiveAt: string; ftpWatts: number; source: string }>;
   prediction: { minimumWatts: number | null; maximumWatts: number | null; midpointWatts: number | null; confidence: string; signals: string[] };
+  vo2Estimate: {
+    estimateMlKgMin: number | null;
+    fiveMinutePowerWatts: number | null;
+    wattsPerKg: number | null;
+    changeMlKgMin: number | null;
+    changePercent: number | null;
+    status: "insufficient" | "provisional" | "trend_ready";
+    effortCount: number;
+    measuredAt: string | null;
+    points: Array<{ startedAt: string; estimateMlKgMin: number }>;
+  };
   goal: { id: string; targetFtpWatts: number; createdAt: string } | null;
   integrations: {
     strava: { configured: boolean; connected: boolean; displayName: string | null; lastSyncedAt: string | null };
@@ -1482,6 +1552,8 @@ function PlanToday({ rides, recovery, setRecovery, recoverySaveState, saveRecove
   const prediction = insights?.prediction;
   const projectedFromFtp = prediction?.midpointWatts ?? currentFtp;
   const projection = projectFtpGoal(projectedFromFtp, goalTarget, new Date(anchorMs).toISOString());
+  const vo2 = insights?.vo2Estimate;
+  const vo2Status = vo2?.status === "trend_ready" ? "trend ready" : vo2?.status === "provisional" ? "provisional" : "needs 5 min power";
   const change = (current: number, previous: number, suffix = "") => previous ? `${current >= previous ? "+" : ""}${(current - previous).toFixed(1)}${suffix}` : "—";
   const projectionDate = (date: string | null) => date ? new Date(`${date}T12:00:00Z`).toLocaleDateString("en-US", { month: "short", year: "numeric", timeZone: "UTC" }) : "—";
 
@@ -1580,6 +1652,17 @@ function PlanToday({ rides, recovery, setRecovery, recoverySaveState, saveRecove
         <div className="confirm-ftp"><label><span>Body weight (lb)</span><input type="number" min="80" max="500" value={weightInputPounds} onChange={(event) => { setWeightInputPounds(Number(event.target.value)); setWeightSaveMessage(""); setWeightSaveState("idle"); }} /></label><button className="primary-button" onClick={() => void saveWeight()} disabled={weightSaveState === "working"}>{weightSaveState === "working" ? "Saving…" : "Save weight"}</button></div>
         <p className={`ftp-save-status ${weightSaveState}`} aria-live="polite">{weightSaveMessage || `Current route-estimate weight: ${currentWeightPounds} lb.`}</p>
         <p className="chart-note"><i /> Predictions are advisory ranges. Your working FTP changes only after you confirm it.</p>
+      </section>
+
+      <section className="vo2-card panel">
+        <div className="section-heading"><div><span className="eyebrow">Aerobic capacity proxy</span><h2>{vo2?.estimateMlKgMin !== null && vo2?.estimateMlKgMin !== undefined ? vo2.estimateMlKgMin.toFixed(1) : "More evidence needed"}</h2></div><span className="small-badge">{vo2Status}</span></div>
+        {vo2?.estimateMlKgMin !== null && vo2?.estimateMlKgMin !== undefined ? <>
+          <div className="vo2-summary"><div><span>Estimated cycling VO₂ max</span><strong>{vo2.estimateMlKgMin.toFixed(1)}</strong><small>mL/kg/min · rolling 90-day peak</small></div><div><span>Five-minute power</span><strong>{vo2.fiveMinutePowerWatts ?? "—"}</strong><small>W · {vo2.wattsPerKg?.toFixed(2) ?? "—"} W/kg</small></div><div><span>vs prior 90 days</span><strong>{vo2.changePercent === null ? "—" : `${vo2.changePercent >= 0 ? "+" : ""}${vo2.changePercent.toFixed(1)}%`}</strong><small>{vo2.effortCount} recorded efforts in current window</small></div></div>
+          <div className="vo2-trend" role="img" aria-label="Rolling 90-day estimated cycling VO2 max trend on a zero-based scale">
+            {vo2.points.map((point, index) => <span key={`${point.startedAt}-${index}`}><i style={{ height: `${Math.max(4, Math.min(100, (point.estimateMlKgMin / 70) * 100))}%` }} /><small>{new Date(point.startedAt).toLocaleDateString("en-US", { month: "short", day: "numeric" })}</small></span>)}
+          </div>
+        </> : <div className="analysis-empty"><strong>No five-minute power evidence yet.</strong><span>Import a powered ride with at least five continuous minutes of detailed data.</span></div>}
+        <p className="chart-note"><i /> Formula: 16.6 + 8.87 × five-minute W/kg. Use the trend—not the absolute number. It assumes the five-minute effort was maximal and is not a lab measurement.</p>
       </section>
 
       <section className="goal-card panel">
@@ -1686,7 +1769,7 @@ function ConnectedSources({ refreshRides }: { refreshRides: () => Promise<void> 
           <div>
             <strong>Strava</strong>
             <span>{insights?.integrations.strava.connected ? `Connected${insights.integrations.strava.displayName ? ` · ${insights.integrations.strava.displayName}` : ""}` : insights?.integrations.strava.configured ? "Ready to connect with read-only activity access" : "App registration credentials are still needed"}</span>
-            {insights?.integrations.strava.connected && <small>Six-month history and new-ride sync use Strava IDs to prevent duplicates.</small>}
+            {insights?.integrations.strava.connected && <small>Automatic sync runs when the app opens or returns to focus, then every 15 minutes while open. Strava IDs prevent duplicates.</small>}
             {insights?.integrations.strava.lastSyncedAt && <small>Last sync {new Date(insights.integrations.strava.lastSyncedAt).toLocaleString()}</small>}
           </div>
           <div className="connection-actions">
@@ -1781,5 +1864,5 @@ function ReviewField({ label, value }: { label: string; value: string }) {
 }
 
 function Methodology({ currentFtp, currentWeightKg }: { currentFtp: number; currentWeightKg: number }) {
-  return <div className="method-layout"><section className="method-hero panel-dark"><span className="eyebrow light">Explainable by design</span><h2>No mystery score.</h2><p>Every recommendation is assembled from visible inputs, conservative rules, and versioned calculations. Pain always overrides the number.</p><div className="version-stamp"><span>Current ruleset</span><strong>v3.3</strong></div></section><section className="method-list panel"><div className="section-heading"><div><span className="eyebrow">Metric dictionary</span><h2>What the app calculates</h2></div></div>{METHOD_DEFINITIONS.map((method) => <article key={method.id} className="method-row"><span>{method.id}</span><div><strong>{method.title}</strong><code>{method.formula}</code><p>{method.note}</p></div></article>)}</section><section className="config-card panel"><div className="section-heading"><div><span className="eyebrow">Athlete configuration</span><h2>Current working values</h2></div></div><div className="config-grid"><Stat label="FTP" value={String(currentFtp)} unit="W" /><Stat label="Body weight" value={String(Math.round(currentWeightKg * 2.2046226218))} unit="lb" /><Stat label="FTP / weight" value={(currentFtp / currentWeightKg).toFixed(2)} unit="W/kg" /><Stat label="Zone 2 target" value={String(Math.round(currentFtp * 2 / 3))} unit="W" /></div><p className="chart-note"><i /> FTP and body weight can be updated from Plan Today. Every ride keeps its own FTP snapshot and source, so later FTP changes do not rewrite historical IF or load.</p></section></div>;
+  return <div className="method-layout"><section className="method-hero panel-dark"><span className="eyebrow light">Explainable by design</span><h2>No mystery score.</h2><p>Every recommendation is assembled from visible inputs, conservative rules, and versioned calculations. Pain always overrides the number.</p><div className="version-stamp"><span>Current ruleset</span><strong>v3.4</strong></div></section><section className="method-list panel"><div className="section-heading"><div><span className="eyebrow">Metric dictionary</span><h2>What the app calculates</h2></div></div>{METHOD_DEFINITIONS.map((method) => <article key={method.id} className="method-row"><span>{method.id}</span><div><strong>{method.title}</strong><code>{method.formula}</code><p>{method.note}</p></div></article>)}</section><section className="config-card panel"><div className="section-heading"><div><span className="eyebrow">Athlete configuration</span><h2>Current working values</h2></div></div><div className="config-grid"><Stat label="FTP" value={String(currentFtp)} unit="W" /><Stat label="Body weight" value={String(Math.round(currentWeightKg * 2.2046226218))} unit="lb" /><Stat label="FTP / weight" value={(currentFtp / currentWeightKg).toFixed(2)} unit="W/kg" /><Stat label="Zone 2 target" value={String(Math.round(currentFtp * 2 / 3))} unit="W" /></div><p className="chart-note"><i /> FTP and body weight can be updated from Plan Today. Every ride keeps its own FTP snapshot and source, so later FTP changes do not rewrite historical IF or load.</p></section></div>;
 }

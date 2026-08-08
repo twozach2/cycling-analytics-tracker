@@ -5,7 +5,7 @@ import { activityStreams, externalConnections, ftpHistory, powerDuration as powe
 import { currentRider } from "../../../../../lib/current-rider";
 import { derivePowerDuration, deriveStreamMetrics, type ActivitySample } from "../../../../../lib/activity-parser";
 import { deriveRideMetrics, evaluateDecouplingEligibility } from "../../../../../lib/metrics";
-import { classifyStravaActivity, classifyStravaRideType, ftpSnapshotForRide, isCyclingActivity, parseReadBudget, syncAfterEpoch, type StravaSyncMode } from "../../../../../lib/strava-sync";
+import { classifyStravaActivity, classifyStravaRideType, ftpSnapshotForRide, isCyclingActivity, parseReadBudget, shouldRunAutomaticSync, syncAfterEpoch, type StravaSyncMode } from "../../../../../lib/strava-sync";
 
 type StravaActivity = {
   id: number;
@@ -35,7 +35,7 @@ type StravaActivity = {
 type Stream = { data?: number[] };
 type StreamSet = Record<string, Stream | undefined>;
 type TokenResponse = { access_token?: string; refresh_token?: string; expires_at?: number; message?: string };
-type SyncPayload = { mode?: StravaSyncMode };
+type SyncPayload = { mode?: StravaSyncMode; automatic?: boolean };
 
 const ACTIVITIES_PER_PAGE = 200;
 const MAX_ACTIVITY_PAGES = 10;
@@ -109,6 +109,29 @@ export async function POST(request: Request) {
   if (!connection) return Response.json({ error: "Connect Strava before syncing rides." }, { status: 409 });
   if (!profile?.ftp || !profile.weightKg) return Response.json({ error: "Complete rider setup with your FTP and weight before syncing rides." }, { status: 409 });
 
+  const automatic = mode === "new" && payload.automatic === true;
+  const syncStartedAt = new Date();
+  if (automatic && !shouldRunAutomaticSync(connection.lastSyncedAt, syncStartedAt)) {
+    return Response.json({
+      mode,
+      automatic,
+      throttled: true,
+      imported: 0,
+      updated: 0,
+      skipped: 0,
+      activitiesScanned: 0,
+      streamsImported: 0,
+      streamsReprocessed: 0,
+      streamFailures: 0,
+      streamDeferred: 0,
+      lastSyncedAt: connection.lastSyncedAt,
+    });
+  }
+  if (automatic) {
+    const claimedAt = syncStartedAt.toISOString();
+    await db.update(externalConnections).set({ lastSyncedAt: claimedAt, updatedAt: claimedAt }).where(eq(externalConnections.id, connection.id));
+  }
+
   let accessToken: string;
   try {
     accessToken = await refreshAccessToken(connection);
@@ -117,7 +140,6 @@ export async function POST(request: Request) {
   }
 
   const authorization = { Authorization: `Bearer ${accessToken}` };
-  const syncStartedAt = new Date();
   const afterEpoch = syncAfterEpoch(mode, syncStartedAt, connection.lastSyncedAt);
   const activitiesById = new Map<number, StravaActivity>();
   let activitiesScanned = 0;
@@ -377,6 +399,8 @@ export async function POST(request: Request) {
   await db.update(externalConnections).set({ lastSyncedAt, updatedAt: lastSyncedAt }).where(eq(externalConnections.id, connection.id));
   return Response.json({
     mode,
+    automatic,
+    throttled: false,
     imported,
     updated,
     skipped,

@@ -3,7 +3,7 @@ import { env } from "cloudflare:workers";
 import { getDb } from "../../../db";
 import { externalConnections, ftpHistory, powerDuration, riderGoals, riders, rides } from "../../../db/schema";
 import { currentRider } from "../../../lib/current-rider";
-import { predictFtp } from "../../../lib/phase3";
+import { buildCyclingVo2Trend, predictFtp } from "../../../lib/phase3";
 
 const runtime = () => env as unknown as Record<string, string | undefined>;
 
@@ -11,7 +11,7 @@ export async function GET(request: Request) {
   const rider = await currentRider(request);
   if (!rider) return Response.json({ error: "Sign in to view training insights." }, { status: 401 });
   const db = getDb();
-  const [[profile], ftpRows, [goal], connections, bests] = await Promise.all([
+  const [[profile], ftpRows, [goal], connections, bests, fiveMinuteEfforts] = await Promise.all([
     db.select().from(riders).where(eq(riders.id, rider.id)).limit(1),
     db.select().from(ftpHistory).where(eq(ftpHistory.riderId, rider.id)).orderBy(desc(ftpHistory.effectiveAt)).limit(24),
     db.select().from(riderGoals).where(and(eq(riderGoals.riderId, rider.id), eq(riderGoals.status, "active"))).orderBy(desc(riderGoals.createdAt)).limit(1),
@@ -22,6 +22,14 @@ export async function GET(request: Request) {
       .from(powerDuration)
       .innerJoin(rides, eq(powerDuration.rideId, rides.id))
       .where(eq(rides.riderId, rider.id)),
+    db.select({
+      startedAt: rides.startedAt,
+      fiveMinutePowerWatts: powerDuration.bestPowerWatts,
+      weightKg: rides.weightAtRideKg,
+    })
+      .from(powerDuration)
+      .innerJoin(rides, eq(powerDuration.rideId, rides.id))
+      .where(and(eq(rides.riderId, rider.id), eq(powerDuration.durationSeconds, 300))),
   ]);
   const currentFtpWatts = profile?.defaultFtpWatts ?? ftpRows[0]?.ftpWatts ?? null;
   const weightKg = profile?.defaultWeightKg ?? null;
@@ -30,6 +38,11 @@ export async function GET(request: Request) {
     : predictFtp(bests, currentFtpWatts);
   const strava = connections.find((connection) => connection.provider === "strava");
   const config = runtime();
+  const vo2Estimate = buildCyclingVo2Trend(fiveMinuteEfforts.map((effort) => ({
+    startedAt: effort.startedAt,
+    fiveMinutePowerWatts: effort.fiveMinutePowerWatts,
+    weightKg: effort.weightKg ?? weightKg ?? 0,
+  })), currentFtpWatts);
 
   return Response.json({
     currentFtpWatts,
@@ -37,6 +50,7 @@ export async function GET(request: Request) {
     profileComplete: currentFtpWatts !== null && weightKg !== null,
     ftpHistory: ftpRows.map((row) => ({ effectiveAt: row.effectiveAt, ftpWatts: row.ftpWatts, source: row.source })),
     prediction,
+    vo2Estimate,
     goal: goal ? { id: goal.id, targetFtpWatts: goal.targetFtpWatts, createdAt: goal.createdAt } : null,
     integrations: {
       strava: {

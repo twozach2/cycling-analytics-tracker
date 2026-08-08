@@ -5,9 +5,10 @@ A private, full-stack cycling dashboard for importing Strava and activity-file d
 ## Highlights
 
 - Required rider setup for FTP and body weight—no generic athlete defaults
-- Strava OAuth with six-month backfill, incremental sync, and duplicate protection
+- Strava OAuth with six-month backfill, automatic 15-minute in-app refresh, incremental sync, and duplicate protection
 - FIT, TCX, and GPX uploads with original-file retention
 - Power, heart-rate, cadence, workload, FTP, and aerobic-durability analysis
+- Rolling 90-day estimated cycling VO₂-max trend from recorded five-minute power and ride-specific weight
 - Virtual/indoor/outdoor classification with trainer-workout subtypes and environment-matched comparisons
 - Automatic Strava ride-type suggestions with persistent manual overrides
 - Per-ride FTP snapshots plus conservative decoupling eligibility checks

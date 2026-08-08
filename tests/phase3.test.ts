@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { access } from "node:fs/promises";
 import test from "node:test";
 import { derivePowerDuration, deriveStreamMetrics, type ActivitySample } from "../lib/activity-parser.ts";
-import { buildWeeklyPlan, predictFtp, projectFtpGoal, recommendWorkout } from "../lib/phase3.ts";
+import { buildCyclingVo2Trend, buildWeeklyPlan, estimateCyclingVo2Max, predictFtp, projectFtpGoal, recommendWorkout } from "../lib/phase3.ts";
 import { estimateZwiftRouteTime, recommendZwiftRoutes, ROUTE_TIME_WINDOWS, ZWIFT_ROUTE_CATALOG, ZWIFT_ROUTE_COUNT, ZWIFT_WORLDS } from "../lib/zwift-routes.ts";
 import { fallbackGuestWorlds, parseGuestWorldsFromSchedule } from "../lib/zwift-world-rotation.ts";
 
@@ -59,6 +59,24 @@ test("FTP prediction returns a range and evidence rather than false precision", 
   assert.equal(prediction.confidence, "high");
   assert.ok(prediction.minimumWatts! < prediction.maximumWatts!);
   assert.ok(prediction.signals.some((signal) => signal.includes("20m best")));
+});
+
+test("estimates cycling VO2 max from five-minute relative power", () => {
+  assert.equal(estimateCyclingVo2Max(250, 80), 44.3);
+  assert.equal(estimateCyclingVo2Max(0, 80), null);
+});
+
+test("tracks VO2 improvement using comparable rolling 90-day peaks", () => {
+  const trend = buildCyclingVo2Trend([
+    { startedAt: "2026-01-01T12:00:00Z", fiveMinutePowerWatts: 190, weightKg: 100 },
+    { startedAt: "2026-02-01T12:00:00Z", fiveMinutePowerWatts: 195, weightKg: 100 },
+    { startedAt: "2026-04-15T12:00:00Z", fiveMinutePowerWatts: 215, weightKg: 98 },
+    { startedAt: "2026-05-15T12:00:00Z", fiveMinutePowerWatts: 220, weightKg: 98 },
+  ], 180);
+  assert.equal(trend.status, "trend_ready");
+  assert.equal(trend.estimateMlKgMin, 36.5);
+  assert.ok(trend.changePercent! > 0);
+  assert.equal(trend.points.length, 4);
 });
 
 test("goal projection presents three scenarios", () => {

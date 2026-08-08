@@ -1,5 +1,90 @@
 export type PowerBest = { durationSeconds: number; bestPowerWatts: number };
 
+export type CyclingVo2Effort = {
+  startedAt: string;
+  fiveMinutePowerWatts: number;
+  weightKg: number;
+};
+
+export type CyclingVo2Trend = {
+  estimateMlKgMin: number | null;
+  fiveMinutePowerWatts: number | null;
+  wattsPerKg: number | null;
+  changeMlKgMin: number | null;
+  changePercent: number | null;
+  status: "insufficient" | "provisional" | "trend_ready";
+  effortCount: number;
+  measuredAt: string | null;
+  points: Array<{ startedAt: string; estimateMlKgMin: number }>;
+};
+
+const VO2_WINDOW_MS = 90 * 24 * 60 * 60 * 1000;
+
+export function estimateCyclingVo2Max(fiveMinutePowerWatts: number, weightKg: number) {
+  if (!Number.isFinite(fiveMinutePowerWatts) || fiveMinutePowerWatts <= 0 || !Number.isFinite(weightKg) || weightKg <= 0) return null;
+  return Math.round((16.6 + (8.87 * (fiveMinutePowerWatts / weightKg))) * 10) / 10;
+}
+
+export function buildCyclingVo2Trend(efforts: CyclingVo2Effort[], currentFtpWatts: number | null): CyclingVo2Trend {
+  const valid = efforts
+    .map((effort) => ({
+      ...effort,
+      timestamp: Date.parse(effort.startedAt),
+      estimateMlKgMin: estimateCyclingVo2Max(effort.fiveMinutePowerWatts, effort.weightKg),
+    }))
+    .filter((effort): effort is typeof effort & { estimateMlKgMin: number } => (
+      Number.isFinite(effort.timestamp) && effort.estimateMlKgMin !== null
+    ))
+    .sort((a, b) => a.timestamp - b.timestamp);
+
+  if (!valid.length) {
+    return {
+      estimateMlKgMin: null,
+      fiveMinutePowerWatts: null,
+      wattsPerKg: null,
+      changeMlKgMin: null,
+      changePercent: null,
+      status: "insufficient",
+      effortCount: 0,
+      measuredAt: null,
+      points: [],
+    };
+  }
+
+  const anchorMs = valid.at(-1)!.timestamp;
+  const currentWindow = valid.filter((effort) => effort.timestamp > anchorMs - VO2_WINDOW_MS);
+  const priorWindow = valid.filter((effort) => effort.timestamp <= anchorMs - VO2_WINDOW_MS && effort.timestamp > anchorMs - (2 * VO2_WINDOW_MS));
+  const best = (items: typeof valid) => items.reduce((leader, effort) => (
+    !leader || effort.estimateMlKgMin > leader.estimateMlKgMin ? effort : leader
+  ), null as (typeof valid)[number] | null);
+  const currentBest = best(currentWindow)!;
+  const priorBest = best(priorWindow);
+  const points = valid.map((effort) => {
+    const rollingBest = best(valid.filter((candidate) => candidate.timestamp <= effort.timestamp && candidate.timestamp > effort.timestamp - VO2_WINDOW_MS))!;
+    return { startedAt: effort.startedAt, estimateMlKgMin: rollingBest.estimateMlKgMin };
+  }).slice(-10);
+  const changeMlKgMin = priorBest === null
+    ? null
+    : Math.round((currentBest.estimateMlKgMin - priorBest.estimateMlKgMin) * 10) / 10;
+  const changePercent = priorBest === null
+    ? null
+    : Math.round(((currentBest.estimateMlKgMin - priorBest.estimateMlKgMin) / priorBest.estimateMlKgMin) * 1000) / 10;
+  const isStrongFiveMinuteEffort = currentFtpWatts !== null && currentFtpWatts > 0
+    && currentBest.fiveMinutePowerWatts >= currentFtpWatts * 1.1;
+
+  return {
+    estimateMlKgMin: currentBest.estimateMlKgMin,
+    fiveMinutePowerWatts: Math.round(currentBest.fiveMinutePowerWatts),
+    wattsPerKg: Math.round((currentBest.fiveMinutePowerWatts / currentBest.weightKg) * 100) / 100,
+    changeMlKgMin,
+    changePercent,
+    status: currentWindow.length >= 2 && isStrongFiveMinuteEffort ? "trend_ready" : "provisional",
+    effortCount: currentWindow.length,
+    measuredAt: currentBest.startedAt,
+    points,
+  };
+}
+
 export type FtpPrediction = {
   minimumWatts: number | null;
   maximumWatts: number | null;

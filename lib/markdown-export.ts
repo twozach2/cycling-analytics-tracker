@@ -55,6 +55,7 @@ export const METHOD_DEFINITIONS: readonly MethodDefinition[] = [
   { id: "07", title: "FTP prediction", formula: "20–60 min best power × duration factor", note: "A conservative range from recorded efforts, with confidence tied to available evidence." },
   { id: "08", title: "Goal scenarios", formula: "watts remaining ÷ monthly scenario", note: "Multiple clearly labeled estimates; never a promised achievement date." },
   { id: "09", title: "Zwift route time", formula: "rider power vs gravity + rolling resistance + aerodynamic drag", note: "A planning range from rider weight, sustainable W/kg, route distance, and total climbing; drafting and exact gradient profiles can change the result." },
+  { id: "10", title: "Estimated cycling VO₂ max", formula: "16.6 + 8.87 × five-minute W/kg", note: "A rolling 90-day power-based trend proxy. It assumes the five-minute effort was maximal and is not a laboratory measurement or diagnosis." },
 ];
 
 type MarkdownExportConfig = {

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { classifyStravaActivity, classifyStravaRideType, ftpSnapshotForRide, isCyclingActivity, parseReadBudget, sixMonthsBefore, syncAfterEpoch } from "../lib/strava-sync.ts";
+import { classifyStravaActivity, classifyStravaRideType, ftpSnapshotForRide, isCyclingActivity, parseReadBudget, shouldRunAutomaticSync, sixMonthsBefore, syncAfterEpoch } from "../lib/strava-sync.ts";
 
 test("six-month imports use a calendar-aware cutoff", () => {
   assert.equal(sixMonthsBefore(new Date("2026-08-31T12:30:00Z")).toISOString(), "2026-02-28T12:30:00.000Z");
@@ -10,6 +10,13 @@ test("six-month imports use a calendar-aware cutoff", () => {
 test("new-ride sync overlaps the previous week so deduplication can catch late uploads", () => {
   const after = syncAfterEpoch("new", new Date("2026-08-07T12:00:00Z"), "2026-08-07T10:00:00Z");
   assert.equal(new Date(after * 1000).toISOString(), "2026-07-31T10:00:00.000Z");
+});
+
+test("automatic sync waits 15 minutes between Strava checks", () => {
+  const now = new Date("2026-08-08T12:30:00Z");
+  assert.equal(shouldRunAutomaticSync(null, now), true);
+  assert.equal(shouldRunAutomaticSync("2026-08-08T12:20:00Z", now), false);
+  assert.equal(shouldRunAutomaticSync("2026-08-08T12:15:00Z", now), true);
 });
 
 test("the cycling filter includes Strava ride variants", () => {

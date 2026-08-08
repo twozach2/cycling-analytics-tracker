@@ -1,6 +1,13 @@
 export type StravaSyncMode = "new" | "six_months";
 
 const RECENT_OVERLAP_DAYS = 7;
+export const AUTOMATIC_SYNC_INTERVAL_MS = 15 * 60 * 1000;
+
+export function shouldRunAutomaticSync(lastSyncedAt: string | null, now = new Date()) {
+  if (!lastSyncedAt) return true;
+  const lastSyncMs = Date.parse(lastSyncedAt);
+  return !Number.isFinite(lastSyncMs) || now.getTime() - lastSyncMs >= AUTOMATIC_SYNC_INTERVAL_MS;
+}
 
 const cyclingTypes = new Set([
   "ride",
