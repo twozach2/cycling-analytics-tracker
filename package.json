@@ -2,6 +2,14 @@
   "name": "cycling-analytics",
   "version": "0.1.0",
   "private": true,
+  "description": "Private local-first cycling analytics, training guidance, and ride planning.",
+  "author": "Zach Tolen",
+  "desktopName": "cycling-analytics.desktop",
+  "homepage": "https://github.com/twozach2/cycling-analytics-tracker",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/twozach2/cycling-analytics-tracker.git"
+  },
   "main": "dist-electron/main.js",
   "engines": {
     "node": ">=22.13.0"
@@ -10,9 +18,15 @@
     "dev": "concurrently -k -n api,web -c cyan,green \"tsx watch server/index.ts\" \"vite\"",
     "build": "vite build && tsc --noEmit",
     "build:electron": "vite build --config electron/vite.config.mjs",
+    "build:desktop": "npm run build && npm run build:electron",
     "dev:electron": "npm run build && npm run build:electron && electron .",
+    "dist": "npm run build:desktop && electron-builder --publish never",
+    "dist:win": "npm run build:desktop && electron-builder --win nsis --publish never",
+    "dist:mac": "npm run build:desktop && electron-builder --mac --publish never",
+    "dist:mac:unsigned": "npm run build:desktop && electron-builder --mac --publish never -c.mac.identity=null -c.mac.hardenedRuntime=false -c.mac.notarize=false",
+    "dist:linux": "npm run build:desktop && electron-builder --linux AppImage deb --publish never",
     "start": "tsx server/index.ts",
-    "test": "npm run build && node --import tsx --test tests/markdown-export.test.ts tests/metrics.test.ts tests/phase3.test.ts tests/strava-sync.test.ts tests/secret-store.test.ts tests/safe-storage-secret-store.test.ts tests/strava-settings.test.ts tests/electron-security.test.ts tests/electron-oauth.test.ts tests/local-server.test.ts tests/rendered-html.test.mjs",
+    "test": "npm run build && node --import tsx --test tests/markdown-export.test.ts tests/metrics.test.ts tests/phase3.test.ts tests/strava-sync.test.ts tests/secret-store.test.ts tests/safe-storage-secret-store.test.ts tests/strava-settings.test.ts tests/electron-security.test.ts tests/electron-oauth.test.ts tests/distribution.test.ts tests/local-server.test.ts tests/rendered-html.test.mjs",
     "lint": "eslint . --ignore-pattern dist",
     "db:generate": "drizzle-kit generate"
   },

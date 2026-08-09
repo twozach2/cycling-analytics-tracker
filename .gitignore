@@ -38,6 +38,7 @@ yarn-error.log*
 
 /dist/
 /dist-electron/
+/dist-installers/
 /.wrangler/
 /outputs/
 /work/

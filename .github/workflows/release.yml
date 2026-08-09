@@ -1,0 +1,104 @@
+name: Desktop installers
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - "v*.*.*"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: desktop-release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  test:
+    name: Test distribution source
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run lint
+      - run: npm test
+
+  windows:
+    name: Windows NSIS installer
+    needs: test
+    runs-on: windows-latest
+    env:
+      WIN_CSC_LINK: ${{ secrets.WIN_CSC_LINK }}
+      WIN_CSC_KEY_PASSWORD: ${{ secrets.WIN_CSC_KEY_PASSWORD }}
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run dist:win
+      - uses: actions/upload-artifact@v6
+        with:
+          name: Cycling-Analytics-Windows
+          path: dist-installers/*.exe
+          if-no-files-found: error
+          retention-days: 14
+
+  macos:
+    name: macOS DMG and ZIP
+    needs: test
+    runs-on: macos-latest
+    env:
+      MAC_SIGNING_AVAILABLE: ${{ secrets.MAC_CSC_LINK != '' && secrets.MAC_CSC_KEY_PASSWORD != '' && secrets.APPLE_ID != '' && secrets.APPLE_APP_SPECIFIC_PASSWORD != '' && secrets.APPLE_TEAM_ID != '' }}
+      CSC_LINK: ${{ secrets.MAC_CSC_LINK }}
+      CSC_KEY_PASSWORD: ${{ secrets.MAC_CSC_KEY_PASSWORD }}
+      APPLE_ID: ${{ secrets.APPLE_ID }}
+      APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+      APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - name: Build signed and notarized packages
+        if: env.MAC_SIGNING_AVAILABLE == 'true'
+        run: npm run dist:mac
+      - name: Build unsigned preview packages
+        if: env.MAC_SIGNING_AVAILABLE != 'true'
+        run: npm run dist:mac:unsigned
+      - uses: actions/upload-artifact@v6
+        with:
+          name: Cycling-Analytics-macOS
+          path: |
+            dist-installers/*.dmg
+            dist-installers/*-mac-*.zip
+          if-no-files-found: error
+          retention-days: 14
+
+  linux:
+    name: Linux AppImage and DEB
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run dist:linux
+      - uses: actions/upload-artifact@v6
+        with:
+          name: Cycling-Analytics-Linux
+          path: |
+            dist-installers/*.AppImage
+            dist-installers/*.deb
+          if-no-files-found: error
+          retention-days: 14
