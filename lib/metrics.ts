@@ -73,13 +73,15 @@ export function calculateReadiness(input: {
   const sleepScore = clamp((((input.subjective.sleepQuality ?? 3) - 1) / 4) * 100);
   const legScore = legScores[input.subjective.legFreshness ?? "normal"];
   const painScore = clamp(100 - ((input.subjective.kneePain ?? 0) * 20));
+  const sorenessScore = clamp(100 - ((input.subjective.soreness ?? 0) * 10));
   const motivationScore = clamp((((input.subjective.motivation ?? 3) - 1) / 4) * 100);
   let score = Math.round(
     (hoursScore * 0.25) +
     (loadScore * 0.20) +
     (sleepScore * 0.20) +
     (legScore * 0.15) +
-    (painScore * 0.15) +
+    (painScore * 0.10) +
+    (sorenessScore * 0.05) +
     (motivationScore * 0.05),
   );
   if ((input.subjective.kneePain ?? 0) >= 3) score = Math.min(score, 39);
@@ -89,6 +91,13 @@ export function calculateReadiness(input: {
   if (score >= 55) return { score, label: "Moderate fatigue", tone: "yellow" };
   if (score >= 40) return { score, label: "Easy ride preferred", tone: "orange" };
   return { score, label: "Rest / recovery recommended", tone: "red" };
+}
+
+export function elapsedHoursSince(activityStartedAt: string | null, referenceTimeMs = Date.now(), fallbackHours = 72) {
+  if (!activityStartedAt) return fallbackHours;
+  const activityTimeMs = Date.parse(activityStartedAt);
+  if (!Number.isFinite(activityTimeMs) || !Number.isFinite(referenceTimeMs)) return fallbackHours;
+  return Math.max(0, (referenceTimeMs - activityTimeMs) / (60 * 60 * 1000));
 }
 
 export function deriveRideMetrics(input: RideMetricInput): DerivedRideMetrics {

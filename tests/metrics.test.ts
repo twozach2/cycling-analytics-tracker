@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { calculateReadiness, deriveRideMetrics, evaluateDecouplingEligibility, recommendRecovery } from "../lib/metrics.ts";
+import { calculateReadiness, deriveRideMetrics, elapsedHoursSince, evaluateDecouplingEligibility, recommendRecovery } from "../lib/metrics.ts";
 
 test("uses normalized power for intensity and load when available", () => {
   const metrics = deriveRideMetrics({
@@ -71,8 +71,15 @@ test("readiness combines objective load and the recovery questionnaire", () => {
     subjective: { sleepQuality: 5, legFreshness: "fresh", kneePain: 0, motivation: 5 },
   });
 
-  assert.ok(readiness.score >= 85);
+  assert.equal(readiness.score, 100);
   assert.equal(readiness.label, "Ready for hard work");
+});
+
+test("readiness recovery time advances against the current clock instead of the latest ride", () => {
+  const hardRide = "2026-08-07T12:00:00.000Z";
+  assert.equal(elapsedHoursSince(hardRide, Date.parse("2026-08-09T12:00:00.000Z")), 48);
+  assert.equal(elapsedHoursSince(hardRide, Date.parse("2026-08-07T06:00:00.000Z")), 0);
+  assert.equal(elapsedHoursSince(null, Date.parse("2026-08-09T12:00:00.000Z")), 72);
 });
 
 test("pain caps readiness even when every other signal is strong", () => {

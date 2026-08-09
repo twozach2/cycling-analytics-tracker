@@ -19,6 +19,6 @@
       "@/*": ["./*"]
     }
   },
-  "include": ["app/**/*.ts", "app/**/*.tsx", "db/**/*.ts", "lib/**/*.ts", "server/**/*.ts", "src/**/*.tsx", "tests/**/*.ts", "vite.config.ts", "drizzle.config.ts"],
-  "exclude": ["node_modules", "dist", ".next", ".vinext", "build", "worker"]
+  "include": ["app/**/*.ts", "app/**/*.tsx", "db/**/*.ts", "electron/**/*.ts", "lib/**/*.ts", "server/**/*.ts", "src/**/*.tsx", "tests/**/*.ts", "vite.config.ts", "drizzle.config.ts"],
+  "exclude": ["node_modules", "dist", "dist-electron", ".next", ".vinext", "build", "worker"]
 }

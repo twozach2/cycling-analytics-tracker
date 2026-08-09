@@ -1,8 +1,9 @@
-import { ChangeEvent, DragEvent, useEffect, useRef, useState } from "react";
+import { ChangeEvent, DragEvent, useCallback, useEffect, useRef, useState } from "react";
 import { parseActivityFile, type DetectedActivity } from "@/lib/activity-parser";
 import {
   calculateReadiness,
   deriveRideMetrics,
+  elapsedHoursSince,
   formatDuration,
   type SubjectiveRecovery,
 } from "@/lib/metrics";
@@ -419,11 +420,11 @@ export default function CyclingDashboard() {
   const [rideFilter, setRideFilter] = useState(() => ["All rides", ...rideTypes].includes(initialPreferences.rideFilter ?? "") ? initialPreferences.rideFilter as string : "All rides");
   const [search, setSearch] = useState(() => initialPreferences.search ?? "");
   const [recovery, setRecovery] = useState<SubjectiveRecovery>({
-    sleepQuality: 4,
-    legFreshness: "heavy",
+    sleepQuality: 3,
+    legFreshness: "normal",
     kneePain: 0,
-    soreness: 3,
-    motivation: 4,
+    soreness: 0,
+    motivation: 3,
   });
   const [recoverySaveState, setRecoverySaveState] = useState<"idle" | "saving" | "saved" | "error">("idle");
   const [detected, setDetected] = useState<DetectedActivity | null>(null);
@@ -1318,7 +1319,7 @@ function RecoveryCheckIn({ recovery, setRecovery, recoverySaveState, saveRecover
       <div className="range-row"><span><strong>Motivation</strong><small>{recovery.motivation}/5</small></span><input aria-label="Motivation" type="range" min="1" max="5" value={recovery.motivation} onChange={(event) => setRecovery({ ...recovery, motivation: Number(event.target.value) })} /></div>
       <div className="range-row"><span><strong>Soreness</strong><small>{recovery.soreness}/10</small></span><input aria-label="General soreness" type="range" min="0" max="10" value={recovery.soreness} onChange={(event) => setRecovery({ ...recovery, soreness: Number(event.target.value) })} /></div>
       <div className="range-row"><span><strong>Knee pain</strong><small>{recovery.kneePain}/10</small></span><input aria-label="Knee pain" type="range" min="0" max="10" value={recovery.kneePain} onChange={(event) => setRecovery({ ...recovery, kneePain: Number(event.target.value) })} /></div>
-      <div className="readiness-summary"><div><strong>{readiness.label}</strong><span>{recoverySaveState === "saved" ? "Private check-in saved" : recoverySaveState === "error" ? "Save failed · try again" : "Pain overrides the score"}</span></div><button className="text-button" onClick={() => void saveRecovery()} disabled={recoverySaveState === "saving"}>{recoverySaveState === "saving" ? "Saving…" : "Save check-in"}</button></div>
+      <div className="readiness-summary"><div><strong>{readiness.label}</strong><span>{recoverySaveState === "saved" ? "Private check-in saved" : recoverySaveState === "error" ? "Save failed · try again" : "0–100 · updates with current time and check-in"}</span></div><button className="text-button" onClick={() => void saveRecovery()} disabled={recoverySaveState === "saving"}>{recoverySaveState === "saving" ? "Saving…" : "Save check-in"}</button></div>
     </section>
   );
 }
@@ -1491,7 +1492,7 @@ type PhaseThreeInsights = {
 type StravaSettings = {
   configured: boolean;
   clientId: string | null;
-  storage: "owner-only-file";
+  storage: "owner-only-file" | "operating-system-encrypted";
 };
 
 function PlanToday({ rides, recovery, setRecovery, recoverySaveState, saveRecovery, currentFtp, setCurrentFtp, currentWeightKg, setCurrentWeightKg }: {
@@ -1688,7 +1689,7 @@ function PlanToday({ rides, recovery, setRecovery, recoverySaveState, saveRecove
   const loadRatio = chronicLoad > 0 ? acuteLoad / chronicLoad : null;
   const latestHardRide = rides.filter((ride) => ride.type === "Tempo" || ride.type === "Threshold").sort((a, b) => Date.parse(b.date) - Date.parse(a.date))[0];
   const readiness = calculateReadiness({
-    hoursSinceLastHardRide: latestHardRide ? Math.max(0, (anchorMs - Date.parse(latestHardRide.date)) / (60 * 60 * 1000)) : 72,
+    hoursSinceLastHardRide: elapsedHoursSince(latestHardRide?.date ?? null),
     acuteChronicRatio: loadRatio,
     subjective: recovery,
   });
@@ -1844,20 +1845,20 @@ function ConnectedSources({ refreshRides, showSettings }: { refreshRides: () => 
   const [actionState, setActionState] = useState<"idle" | "working" | "success" | "error">("idle");
   const [actionMessage, setActionMessage] = useState("");
 
-  const loadInsights = async () => {
+  const loadInsights = useCallback(async () => {
     const response = await fetch("/api/phase3", { cache: "no-store" });
     const payload = await response.json() as PhaseThreeInsights & { error?: string };
     if (!response.ok) throw new Error(payload.error ?? "Connected sources could not be loaded.");
     setInsights(payload);
-  };
+  }, []);
 
-  const loadSettings = async () => {
+  const loadSettings = useCallback(async () => {
     const response = await fetch("/api/settings/strava", { cache: "no-store" });
     const payload = await response.json() as StravaSettings & { error?: string };
     if (!response.ok) throw new Error(payload.error ?? "Strava settings could not be loaded.");
     setSettings(payload);
     setClientId(payload.clientId ?? "");
-  };
+  }, []);
 
   useEffect(() => {
     let active = true;
@@ -1891,6 +1892,15 @@ function ConnectedSources({ refreshRides, showSettings }: { refreshRides: () => 
     const timer = window.setTimeout(() => setSettingsOpen(true), 0);
     return () => window.clearTimeout(timer);
   }, [showSettings]);
+
+  useEffect(() => {
+    const refreshAfterExternalAuthorization = () => {
+      void Promise.all([loadInsights(), loadSettings()])
+        .catch(() => setActionMessage("Strava connection status could not be refreshed."));
+    };
+    window.addEventListener("focus", refreshAfterExternalAuthorization);
+    return () => window.removeEventListener("focus", refreshAfterExternalAuthorization);
+  }, [loadInsights, loadSettings]);
 
   const saveStravaSettings = async (event: React.FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -2019,7 +2029,9 @@ function ConnectedSources({ refreshRides, showSettings }: { refreshRides: () => 
           <span className="eyebrow">Local Strava application</span>
           <h3>{settings?.configured ? "Update API credentials" : "Connect your own Strava API application"}</h3>
           <p>Create an application at <a href="https://www.strava.com/settings/api" target="_blank" rel="noreferrer">strava.com/settings/api</a>. Set the Authorization Callback Domain to <code>127.0.0.1</code>. The local callback is <code>http://127.0.0.1:8722/api/integrations/strava/callback</code>.</p>
-          <small>Phase 2 stores these values in an owner-only local file, never in SQLite. Phase 3 will encrypt them with your operating system&apos;s credential protection.</small>
+          <small>{settings?.storage === "operating-system-encrypted"
+            ? "The desktop app encrypts these values with your operating system's credential protection. They are never stored in SQLite."
+            : "These values stay in an owner-only local file and are never stored in SQLite. The desktop app upgrades them to operating-system encryption."}</small>
         </div>
         <label><span>Client ID</span><input type="text" autoComplete="off" required value={clientId} onChange={(event) => setClientId(event.target.value)} /></label>
         <label><span>Client secret</span><input type="password" autoComplete="new-password" required value={clientSecret} onChange={(event) => setClientSecret(event.target.value)} placeholder={settings?.configured ? "Enter again to replace" : "Paste client secret"} /></label>

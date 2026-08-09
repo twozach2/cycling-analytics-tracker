@@ -13,17 +13,24 @@ type StravaTokenResponse = {
   message?: string;
 };
 
+function resultRedirect(request: Request, status: string) {
+  const pathname = process.env.CYCLING_STANDALONE === "electron"
+    ? `/oauth/strava/complete?status=${encodeURIComponent(status)}`
+    : `/?integration=${encodeURIComponent(status)}`;
+  return Response.redirect(new URL(pathname, request.url), 302);
+}
+
 export async function GET(request: Request) {
   const rider = await currentRider(request);
   if (!rider) return Response.json({ error: "Sign in before connecting Strava." }, { status: 401 });
   const url = new URL(request.url);
-  if (url.searchParams.get("error")) return Response.redirect(new URL("/?integration=strava-denied", request.url), 302);
+  if (url.searchParams.get("error")) return resultRedirect(request, "strava-denied");
   const code = url.searchParams.get("code");
   const state = url.searchParams.get("state");
   const grantedScopes = url.searchParams.get("scope") ?? "";
-  if (!code || !state) return Response.redirect(new URL("/?integration=strava-invalid", request.url), 302);
+  if (!code || !state) return resultRedirect(request, "strava-invalid");
   if (!grantedScopes.split(/[,\s]+/).some((scope) => scope === "activity:read" || scope === "activity:read_all")) {
-    return Response.redirect(new URL("/?integration=strava-scope", request.url), 302);
+    return resultRedirect(request, "strava-scope");
   }
 
   const db = getDb();
@@ -32,7 +39,7 @@ export async function GET(request: Request) {
     .limit(1);
   await db.delete(oauthStates).where(eq(oauthStates.state, state));
   if (!storedState || storedState.expiresAt < Math.floor(Date.now() / 1000)) {
-    return Response.redirect(new URL("/?integration=strava-expired", request.url), 302);
+    return resultRedirect(request, "strava-expired");
   }
 
   const secretStore = getSecretStore();
@@ -41,7 +48,7 @@ export async function GET(request: Request) {
     secretStore.get(STRAVA_SECRETS.clientSecret),
   ]);
   if (!clientId || !clientSecret) {
-    return Response.redirect(new URL("/?integration=strava-setup", request.url), 302);
+    return resultRedirect(request, "strava-setup");
   }
   const tokenResponse = await fetch("https://www.strava.com/oauth/token", {
     method: "POST",
@@ -55,7 +62,7 @@ export async function GET(request: Request) {
   });
   const token = await tokenResponse.json() as StravaTokenResponse;
   if (!tokenResponse.ok || !token.access_token || !token.refresh_token || !token.expires_at) {
-    return Response.redirect(new URL("/?integration=strava-failed", request.url), 302);
+    return resultRedirect(request, "strava-failed");
   }
   await Promise.all([
     secretStore.set(STRAVA_SECRETS.accessToken, token.access_token),
@@ -82,5 +89,5 @@ export async function GET(request: Request) {
       updatedAt: now,
     },
   });
-  return Response.redirect(new URL("/?integration=strava-connected", request.url), 302);
+  return resultRedirect(request, "strava-connected");
 }

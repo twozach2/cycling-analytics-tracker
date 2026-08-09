@@ -14,7 +14,7 @@ export async function GET(request: Request) {
   return Response.json({
     configured: Boolean(clientId && clientSecret),
     clientId,
-    storage: "owner-only-file",
+    storage: process.env.CYCLING_STANDALONE === "electron" ? "operating-system-encrypted" : "owner-only-file",
   });
 }
 
@@ -34,7 +34,11 @@ export async function PUT(request: Request) {
     store.set(STRAVA_SECRETS.clientId, clientId),
     store.set(STRAVA_SECRETS.clientSecret, clientSecret),
   ]);
-  return Response.json({ configured: true, clientId, storage: "owner-only-file" });
+  return Response.json({
+    configured: true,
+    clientId,
+    storage: process.env.CYCLING_STANDALONE === "electron" ? "operating-system-encrypted" : "owner-only-file",
+  });
 }
 
 export async function DELETE(request: Request) {

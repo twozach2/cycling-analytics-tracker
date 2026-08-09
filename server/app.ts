@@ -13,6 +13,7 @@ import * as recoveryRoute from "../app/api/recovery/route";
 import * as ridesRoute from "../app/api/rides/route";
 import * as zwiftWorldsRoute from "../app/api/zwift/worlds/route";
 import * as stravaSettingsRoute from "./routes/strava-settings";
+import * as oauthCompleteRoute from "./routes/oauth-complete";
 
 const projectRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const webRoot = process.env.CYCLING_WEB_DIR?.trim()
@@ -45,6 +46,7 @@ export function createApp() {
   app.get("/api/settings/strava", handle(stravaSettingsRoute.GET));
   app.put("/api/settings/strava", handle(stravaSettingsRoute.PUT));
   app.delete("/api/settings/strava", handle(stravaSettingsRoute.DELETE));
+  app.get("/oauth/strava/complete", handle(oauthCompleteRoute.GET));
 
   app.use("*", serveStatic({ root: webRoot }));
   app.get("*", async (context) => {
