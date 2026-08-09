@@ -7,6 +7,8 @@ import {
   calculateReadiness,
   deriveRideMetrics,
   formatDuration,
+  type BodyCondition,
+  type PainLocation,
   type SubjectiveRecovery,
 } from "@/lib/metrics";
 import { buildWeeklyPlan, projectFtpGoal, recommendWorkout } from "@/lib/phase3";
@@ -155,7 +157,7 @@ const initialRides: Ride[] = [
     powerHeartRateRatio: 0.707,
     decoupling: null,
     variabilityIndex: 1.04,
-    note: "Easy legs-only spin. No knee pain.",
+    note: "Easy legs-only spin. No pain concerns reported.",
   },
   {
     id: "ride-jul-26",
@@ -423,8 +425,9 @@ export default function CyclingDashboard() {
   const [recovery, setRecovery] = useState<SubjectiveRecovery>({
     sleepQuality: 4,
     legFreshness: "heavy",
-    kneePain: 0,
-    soreness: 3,
+    bodyCondition: "mild_soreness",
+    painLocation: "unspecified",
+    painSeverity: 0,
     motivation: 4,
   });
   const [recoverySaveState, setRecoverySaveState] = useState<"idle" | "saving" | "saved" | "error">("idle");
@@ -594,15 +597,28 @@ export default function CyclingDashboard() {
   useEffect(() => {
     let active = true;
     void fetch("/api/recovery", { cache: "no-store" })
-      .then(async (response) => ({ response, payload: await response.json() as { recovery?: { sleepQuality?: number; legFreshness?: SubjectiveRecovery["legFreshness"]; motivation?: number; generalSoreness?: number; kneePain?: number } | null } }))
+      .then(async (response) => ({ response, payload: await response.json() as { recovery?: { sleepQuality?: number; legFreshness?: SubjectiveRecovery["legFreshness"]; motivation?: number; bodyCondition?: BodyCondition | null; painLocation?: PainLocation | null; painSeverity?: number | null; generalSoreness?: number; kneePain?: number } | null } }))
       .then(({ response, payload }) => {
         if (!active || !response.ok || !payload.recovery) return;
+        const legacyBodyCondition: BodyCondition = (payload.recovery.kneePain ?? 0) > 0
+          ? "pain_concern"
+          : (payload.recovery.generalSoreness ?? 0) >= 6
+            ? "significant_soreness"
+            : (payload.recovery.generalSoreness ?? 0) > 0
+              ? "mild_soreness"
+              : "normal";
+        const bodyCondition = payload.recovery.bodyCondition ?? legacyBodyCondition;
         setRecovery({
           sleepQuality: payload.recovery.sleepQuality ?? 3,
           legFreshness: payload.recovery.legFreshness ?? "normal",
           motivation: payload.recovery.motivation ?? 3,
-          soreness: payload.recovery.generalSoreness ?? 0,
-          kneePain: payload.recovery.kneePain ?? 0,
+          bodyCondition,
+          painLocation: bodyCondition === "pain_concern"
+            ? payload.recovery.painLocation ?? ((payload.recovery.kneePain ?? 0) > 0 ? "knee" : "unspecified")
+            : "unspecified",
+          painSeverity: bodyCondition === "pain_concern"
+            ? payload.recovery.painSeverity ?? payload.recovery.kneePain ?? 1
+            : 0,
         });
         setRecoverySaveState("saved");
       })
@@ -1288,17 +1304,68 @@ function RecoveryCheckIn({ recovery, setRecovery, recoverySaveState, saveRecover
   saveRecovery: () => Promise<void>;
   readiness: ReturnType<typeof calculateReadiness>;
 }) {
+  const bodyCondition = recovery.bodyCondition ?? "normal";
+  const painSeverity = bodyCondition === "pain_concern" ? recovery.painSeverity ?? 1 : 0;
+  const conditions: Array<{ value: BodyCondition; label: string; detail: string }> = [
+    { value: "normal", label: "Normal", detail: "No meaningful soreness" },
+    { value: "mild_soreness", label: "Mild", detail: "Sore or stiff, but moving well" },
+    { value: "significant_soreness", label: "Significant", detail: "Soreness may limit training" },
+    { value: "pain_concern", label: "Pain concern", detail: "Localized or injury-like pain" },
+  ];
+  const locations: Array<{ value: PainLocation; label: string }> = [
+    { value: "unspecified", label: "Not specified" },
+    { value: "knee", label: "Knee" },
+    { value: "back", label: "Back" },
+    { value: "neck_shoulders", label: "Neck / shoulders" },
+    { value: "hands_wrists", label: "Hands / wrists" },
+    { value: "hips", label: "Hips" },
+    { value: "saddle_contact", label: "Saddle / contact point" },
+    { value: "other", label: "Other" },
+  ];
   return (
     <section className="checkin-card panel">
-      <div className="section-heading compact"><div><span className="eyebrow">Morning check-in</span><h2>How are the legs?</h2></div><span className={`readiness-score tone-${readiness.tone}`}>{readiness.score}</span></div>
+      <div className="section-heading compact"><div><span className="eyebrow">Morning check-in</span><h2>How are you feeling?</h2></div><span className={`readiness-score tone-${readiness.tone}`}>{readiness.score}</span></div>
+      <span className="checkin-label">Leg freshness</span>
       <div className="segmented-control" role="group" aria-label="Leg freshness">
         {(["fresh", "normal", "heavy", "dead"] as const).map((value) => <button key={value} className={recovery.legFreshness === value ? "selected" : ""} onClick={() => setRecovery({ ...recovery, legFreshness: value })}>{value}</button>)}
       </div>
       <div className="range-row"><span><strong>Sleep</strong><small>{recovery.sleepQuality}/5</small></span><input aria-label="Sleep quality" type="range" min="1" max="5" value={recovery.sleepQuality} onChange={(event) => setRecovery({ ...recovery, sleepQuality: Number(event.target.value) })} /></div>
       <div className="range-row"><span><strong>Motivation</strong><small>{recovery.motivation}/5</small></span><input aria-label="Motivation" type="range" min="1" max="5" value={recovery.motivation} onChange={(event) => setRecovery({ ...recovery, motivation: Number(event.target.value) })} /></div>
-      <div className="range-row"><span><strong>Soreness</strong><small>{recovery.soreness}/10</small></span><input aria-label="General soreness" type="range" min="0" max="10" value={recovery.soreness} onChange={(event) => setRecovery({ ...recovery, soreness: Number(event.target.value) })} /></div>
-      <div className="range-row"><span><strong>Knee pain</strong><small>{recovery.kneePain}/10</small></span><input aria-label="Knee pain" type="range" min="0" max="10" value={recovery.kneePain} onChange={(event) => setRecovery({ ...recovery, kneePain: Number(event.target.value) })} /></div>
-      <div className="readiness-summary"><div><strong>{readiness.label}</strong><span>{recoverySaveState === "saved" ? "Private check-in saved" : recoverySaveState === "error" ? "Save failed · try again" : "Pain overrides the score"}</span></div><button className="text-button" onClick={() => void saveRecovery()} disabled={recoverySaveState === "saving"}>{recoverySaveState === "saving" ? "Saving…" : "Save check-in"}</button></div>
+      <fieldset className="body-condition-fieldset">
+        <legend>Body condition today</legend>
+        <div className="body-condition-control">
+          {conditions.map((condition) => (
+            <button
+              key={condition.value}
+              type="button"
+              className={bodyCondition === condition.value ? "selected" : ""}
+              aria-pressed={bodyCondition === condition.value}
+              onClick={() => setRecovery({
+                ...recovery,
+                bodyCondition: condition.value,
+                painLocation: condition.value === "pain_concern" ? recovery.painLocation ?? "unspecified" : "unspecified",
+                painSeverity: condition.value === "pain_concern" ? Math.max(1, recovery.painSeverity ?? 0) : 0,
+              })}
+            >
+              <strong>{condition.label}</strong>
+              <small>{condition.detail}</small>
+            </button>
+          ))}
+        </div>
+      </fieldset>
+      {bodyCondition === "pain_concern" && (
+        <div className="pain-details">
+          <label>
+            <span>Where is the concern?</span>
+            <select aria-label="Pain or injury concern location" value={recovery.painLocation ?? "unspecified"} onChange={(event) => setRecovery({ ...recovery, painLocation: event.target.value as PainLocation })}>
+              {locations.map((location) => <option key={location.value} value={location.value}>{location.label}</option>)}
+            </select>
+          </label>
+          <div className="range-row compact"><span><strong>Severity</strong><small>{painSeverity}/10</small></span><input aria-label="Pain or injury concern severity" type="range" min="1" max="10" value={painSeverity} onChange={(event) => setRecovery({ ...recovery, painSeverity: Number(event.target.value) })} /></div>
+          <p className={`pain-guidance ${painSeverity >= 7 ? "urgent" : ""}`}>{painSeverity >= 7 ? "Do not train through severe, sharp, or worsening pain. Consider appropriate medical guidance." : painSeverity >= 5 ? "The plan will recommend rest and pain-free movement only." : painSeverity >= 3 ? "The plan will remove intensity and keep any riding easy and pain-free." : "A mild concern is noted without automatically stopping training."}</p>
+        </div>
+      )}
+      <div className="readiness-summary"><div><strong>{readiness.label}</strong><span>{recoverySaveState === "saved" ? "Private check-in saved" : recoverySaveState === "error" ? "Save failed · try again" : "0–100 · updates with current time and check-in"}</span></div><button className="text-button" onClick={() => void saveRecovery()} disabled={recoverySaveState === "saving"}>{recoverySaveState === "saving" ? "Saving…" : "Save check-in"}</button></div>
     </section>
   );
 }
@@ -1666,7 +1733,7 @@ function PlanToday({ rides, recovery, setRecovery, recoverySaveState, saveRecove
     acuteChronicRatio: loadRatio,
     subjective: recovery,
   });
-  const planningInput = { readinessScore: readiness.score, kneePain: recovery.kneePain ?? 0, acuteChronicRatio: loadRatio, recentHardSessions: block(7, 0).rides ? rides.filter((ride) => (ride.type === "Tempo" || ride.type === "Threshold") && Date.parse(ride.date) > anchorMs - (7 * dayMs)).length : 0 };
+  const planningInput = { readinessScore: readiness.score, painConcernSeverity: recovery.bodyCondition === "pain_concern" ? recovery.painSeverity ?? 1 : 0, acuteChronicRatio: loadRatio, recentHardSessions: block(7, 0).rides ? rides.filter((ride) => (ride.type === "Tempo" || ride.type === "Threshold") && Date.parse(ride.date) > anchorMs - (7 * dayMs)).length : 0 };
   const workout = recommendWorkout(planningInput);
   const availableWorlds = worldRotation?.availableWorlds ?? ["Watopia"];
   const currentWeightPounds = Math.round(currentWeightKg * 2.2046226218);

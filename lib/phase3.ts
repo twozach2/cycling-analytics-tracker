@@ -159,7 +159,7 @@ export function projectFtpGoal(currentFtpWatts: number, targetFtpWatts: number, 
 
 export type PlanningInput = {
   readinessScore: number;
-  kneePain: number;
+  painConcernSeverity: number;
   acuteChronicRatio: number | null;
   recentHardSessions: number;
 };
@@ -174,8 +174,14 @@ export type WorkoutRecommendation = {
 };
 
 export function recommendWorkout(input: PlanningInput): WorkoutRecommendation {
-  if (input.kneePain >= 3) {
-    return { mode: "rest", primary: "Rest or pain-free recovery spin", detail: "No intensity while knee symptoms are elevated.", avoid: "Intervals and forceful low-cadence work" };
+  if (input.painConcernSeverity >= 7) {
+    return { mode: "rest", primary: "Rest and address the pain concern", detail: "Do not train through severe, sharp, or worsening pain.", avoid: "Riding until symptoms are appropriately assessed" };
+  }
+  if (input.painConcernSeverity >= 5) {
+    return { mode: "rest", primary: "Rest or pain-free movement", detail: "Skip cycling load today and reassess the concern before training.", avoid: "Intervals and riding through pain" };
+  }
+  if (input.painConcernSeverity >= 3) {
+    return { mode: "recovery", primary: "Easy, pain-free recovery spin · 20–30 min", detail: "Keep resistance light and stop if symptoms increase.", avoid: "Intervals and forceful low-cadence work" };
   }
   if (input.readinessScore < 40 || (input.acuteChronicRatio ?? 0) > 1.5) {
     return { mode: "rest", primary: "Complete rest", detail: "Let fatigue settle, then reassess the morning check-in.", avoid: "Adding load to rescue the week" };
@@ -187,7 +193,7 @@ export function recommendWorkout(input: PlanningInput): WorkoutRecommendation {
 }
 
 export function buildWeeklyPlan(input: PlanningInput, startDateIso = new Date().toISOString().slice(0, 10)) {
-  const cautious = input.kneePain >= 3 || input.readinessScore < 55 || (input.acuteChronicRatio ?? 0) > 1.5;
+  const cautious = input.painConcernSeverity >= 3 || input.readinessScore < 55 || (input.acuteChronicRatio ?? 0) > 1.5;
   const schedule = cautious ? [
     { day: "Mon", session: "Rest + mobility", purpose: "Absorb recent load" },
     { day: "Tue", session: "Easy spin · 35 min", purpose: "Pain-free movement only" },
