@@ -31,16 +31,18 @@ test("server-renders the rider-profile loading gate", async () => {
 });
 
 test("removes starter preview metadata and dependencies", async () => {
-  const [page, layout, packageJson, dashboard, styles] = await Promise.all([
+  const [page, layout, packageJson, dashboard, styles, manifest] = await Promise.all([
     readFile(new URL("../app/page.tsx", import.meta.url), "utf8"),
     readFile(new URL("../app/layout.tsx", import.meta.url), "utf8"),
     readFile(new URL("../package.json", import.meta.url), "utf8"),
     readFile(new URL("../app/CyclingDashboard.tsx", import.meta.url), "utf8"),
     readFile(new URL("../app/globals.css", import.meta.url), "utf8"),
+    readFile(new URL("../public/manifest.webmanifest", import.meta.url), "utf8"),
   ]);
 
   assert.match(page, /<CyclingDashboard \/>/);
   assert.match(layout, /Cycling Analytics/);
+  assert.match(layout, /manifest: "\/manifest\.webmanifest"/);
   assert.doesNotMatch(page, /codex-preview|_sites-preview|SkeletonPreview/);
   assert.doesNotMatch(packageJson, /react-loading-skeleton/);
   assert.match(dashboard, /label: "Plan today"/);
@@ -69,6 +71,9 @@ test("removes starter preview metadata and dependencies", async () => {
   assert.match(dashboard, /rolling 90-day peak/);
   assert.match(dashboard, /updates daily · local time/);
   assert.match(dashboard, /advances automatically at local midnight/);
+  assert.match(dashboard, /beforeinstallprompt/);
+  assert.match(dashboard, /Install Cycling Analytics from Edge or Chrome/);
+  assert.match(dashboard, /Running as an app/);
   assert.match(dashboard, /Night Circuit/);
   assert.match(dashboard, /aria-label="Color theme"/);
   assert.match(dashboard, /cycling-analytics:ui-preferences/);
@@ -86,6 +91,10 @@ test("removes starter preview metadata and dependencies", async () => {
   assert.match(styles, /\.route-choice\.selected \.route-time-cue \{ background: var\(--lime\); color: var\(--tone-text\); \}/);
   assert.match(styles, /\.week-grid article\.today \.week-date span, \.week-grid article\.today \.week-date em \{ color: var\(--tone-text\); \}/);
   assert.match(styles, /\.week-grid article\.today small \{ color: var\(--tone-text\); opacity: \.72; \}/);
+  assert.match(styles, /\.install-card \{[^}]*grid-column: 1 \/ -1;/);
+  assert.match(manifest, /"display": "standalone"/);
+  assert.match(manifest, /cycling-analytics-icon-192\.png/);
+  assert.match(manifest, /cycling-analytics-icon-512\.png/);
   assert.match(styles, /--ride-data-columns: 52px minmax\(190px, 1fr\) 112px 72px 66px 52px 18px/);
   assert.match(styles, /grid-template-columns: var\(--ride-data-columns\) 52px/);
   assert.match(styles, /\.forecast-stamp \{[^}]*width: 168px;[^}]*height: 168px;/);
@@ -97,6 +106,8 @@ test("removes starter preview metadata and dependencies", async () => {
   assert.doesNotMatch(dashboard, /Elevation shape/);
   assert.doesNotMatch(dashboard, /label: "Phase [23]"/);
   assert.doesNotMatch(dashboard, /Not valid for this ride type/);
+  await access(new URL("../public/cycling-analytics-icon-192.png", import.meta.url));
+  await access(new URL("../public/cycling-analytics-icon-512.png", import.meta.url));
   await assert.rejects(access(new URL("app/_sites-preview/SkeletonPreview.tsx", templateRoot)));
   await assert.rejects(access(new URL("app/_sites-preview/preview.css", templateRoot)));
 });

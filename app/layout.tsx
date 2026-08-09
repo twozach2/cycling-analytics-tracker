@@ -26,6 +26,20 @@ export async function generateMetadata(): Promise<Metadata> {
       template: "%s | Cycling Analytics",
     },
     description: "Personal ride analytics, training trends, and explainable recovery guidance.",
+    applicationName: "Cycling Analytics",
+    manifest: "/manifest.webmanifest",
+    icons: {
+      icon: [
+        { url: "/cycling-analytics-icon-192.png", sizes: "192x192", type: "image/png" },
+        { url: "/cycling-analytics-icon-512.png", sizes: "512x512", type: "image/png" },
+      ],
+      apple: [{ url: "/cycling-analytics-icon-192.png", sizes: "192x192", type: "image/png" }],
+    },
+    appleWebApp: {
+      capable: true,
+      statusBarStyle: "black-translucent",
+      title: "Cycling Analytics",
+    },
     openGraph: {
       title: "Ride with the trend.",
       description: "Personal ride analytics and explainable recovery guidance.",

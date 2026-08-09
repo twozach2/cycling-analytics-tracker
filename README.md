@@ -15,6 +15,7 @@ A private, full-stack cycling dashboard for importing Strava and activity-file d
 - Personalized Zwift route-time ranges using rider weight, sustainable power, distance, and climbing
 - Markdown export of the complete ride log or one selected ride, including rider configuration and methodology
 - Four complete color themes, including a neon Cyberpunk-inspired dark palette, with device-local preference and view restoration
+- Installable desktop PWA with its own app icon, standalone window, and retained device preferences
 - Cloudflare D1 persistence, R2 file storage, and ChatGPT-authenticated rider profiles
 
 ## Local development

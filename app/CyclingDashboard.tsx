@@ -21,6 +21,11 @@ type DataMode = "loading" | "demo" | "saved" | "unavailable";
 type RideEnvironment = "virtual" | "indoor" | "outdoor";
 type WorkoutSubtype = "trainer_workout" | "race" | null;
 
+type BeforeInstallPromptEvent = Event & {
+  prompt: () => Promise<void>;
+  userChoice: Promise<{ outcome: "accepted" | "dismissed"; platform: string }>;
+};
+
 type Ride = {
   id: string;
   name: string;
@@ -403,6 +408,8 @@ export default function CyclingDashboard() {
   const [initialPreferences] = useState<UiPreferences>(readUiPreferences);
   const [view, setView] = useState<View>(() => navItems.some((item) => item.id === initialPreferences.view) ? initialPreferences.view as View : "dashboard");
   const [theme, setTheme] = useState<ThemeId>(() => themeOptions.some((option) => option.id === initialPreferences.theme) ? initialPreferences.theme as ThemeId : "citrus");
+  const [installPrompt, setInstallPrompt] = useState<BeforeInstallPromptEvent | null>(null);
+  const [isStandaloneApp, setIsStandaloneApp] = useState(() => typeof window !== "undefined" && window.matchMedia("(display-mode: standalone)").matches);
   const [rides, setRides] = useState(initialRides);
   const [selectedRideId, setSelectedRideId] = useState(() => initialPreferences.selectedRideId ?? initialRides[0].id);
   const [dataMode, setDataMode] = useState<DataMode>("loading");
@@ -437,6 +444,28 @@ export default function CyclingDashboard() {
   useEffect(() => {
     document.documentElement.dataset.theme = theme;
   }, [theme]);
+
+  useEffect(() => {
+    const displayMode = window.matchMedia("(display-mode: standalone)");
+    const handleDisplayMode = (event: MediaQueryListEvent) => setIsStandaloneApp(event.matches);
+    const handleInstallPrompt = (event: Event) => {
+      event.preventDefault();
+      setInstallPrompt(event as BeforeInstallPromptEvent);
+    };
+    const handleInstalled = () => {
+      setIsStandaloneApp(true);
+      setInstallPrompt(null);
+    };
+
+    displayMode.addEventListener("change", handleDisplayMode);
+    window.addEventListener("beforeinstallprompt", handleInstallPrompt);
+    window.addEventListener("appinstalled", handleInstalled);
+    return () => {
+      displayMode.removeEventListener("change", handleDisplayMode);
+      window.removeEventListener("beforeinstallprompt", handleInstallPrompt);
+      window.removeEventListener("appinstalled", handleInstalled);
+    };
+  }, []);
 
   useEffect(() => {
     window.localStorage.setItem(UI_PREFERENCES_KEY, JSON.stringify({
@@ -897,6 +926,14 @@ export default function CyclingDashboard() {
     downloadMarkdown([ride], cyclingRideMarkdownFilename(ride), `${ride.name} exported · Markdown`);
   };
 
+  const installDesktopApp = async () => {
+    if (!installPrompt) return;
+    await installPrompt.prompt();
+    const choice = await installPrompt.userChoice;
+    if (choice.outcome === "accepted") setIsStandaloneApp(true);
+    setInstallPrompt(null);
+  };
+
   const pageMeta: Record<View, { eyebrow: string; title: string }> = {
     dashboard: { eyebrow: "Your training at a glance", title: "Ride with the trend." },
     plan: { eyebrow: "Readiness + next steps", title: "Plan today" },
@@ -1029,7 +1066,15 @@ export default function CyclingDashboard() {
             />
           </div>
         )}
-        {view === "method" && <Methodology currentFtp={currentFtp} currentWeightKg={currentWeightKg} theme={theme} setTheme={setTheme} />}
+        {view === "method" && <Methodology
+          currentFtp={currentFtp}
+          currentWeightKg={currentWeightKg}
+          theme={theme}
+          setTheme={setTheme}
+          installPromptAvailable={installPrompt !== null}
+          isStandaloneApp={isStandaloneApp}
+          installDesktopApp={installDesktopApp}
+        />}
       </section>
     </main>
   );
@@ -1946,11 +1991,14 @@ function ReviewField({ label, value }: { label: string; value: string }) {
   return <label className="review-field"><span>{label}</span><input value={value} readOnly /></label>;
 }
 
-function Methodology({ currentFtp, currentWeightKg, theme, setTheme }: {
+function Methodology({ currentFtp, currentWeightKg, theme, setTheme, installPromptAvailable, isStandaloneApp, installDesktopApp }: {
   currentFtp: number;
   currentWeightKg: number;
   theme: ThemeId;
   setTheme: (theme: ThemeId) => void;
+  installPromptAvailable: boolean;
+  isStandaloneApp: boolean;
+  installDesktopApp: () => Promise<void>;
 }) {
   return <div className="method-layout">
     <section className="theme-card panel">
@@ -1971,6 +2019,21 @@ function Methodology({ currentFtp, currentWeightKg, theme, setTheme }: {
         </button>)}
       </div>
       <p className="chart-note"><i /> Theme, last tab, selected ride, and ride-log controls are remembered on this device.</p>
+    </section>
+    <section className="install-card panel">
+      <div className="install-mark" aria-hidden="true">CA</div>
+      <div>
+        <span className="eyebrow">Desktop app</span>
+        <h2>{isStandaloneApp ? "Installed and ready." : "Give the tracker its own window."}</h2>
+        <p>{isStandaloneApp
+          ? "This copy launches independently and keeps its local theme, navigation, and ride-log preferences between sessions."
+          : "Install Cycling Analytics from Edge or Chrome for a Start-menu icon, standalone window, and device-local preference retention."}</p>
+      </div>
+      {isStandaloneApp
+        ? <span className="install-status"><i /> Running as an app</span>
+        : installPromptAvailable
+          ? <button className="primary-button" type="button" onClick={() => void installDesktopApp()}>Install app <span>↓</span></button>
+          : <span className="install-help">Use your browser menu → Install Cycling Analytics</span>}
     </section>
     <section className="method-hero panel-dark"><span className="eyebrow light">Explainable by design</span><h2>No mystery score.</h2><p>Every recommendation is assembled from visible inputs, conservative rules, and versioned calculations. Pain always overrides the number.</p><div className="version-stamp"><span>Current ruleset</span><strong>v3.5</strong></div></section>
     <section className="method-list panel"><div className="section-heading"><div><span className="eyebrow">Metric dictionary</span><h2>What the app calculates</h2></div></div>{METHOD_DEFINITIONS.map((method) => <article key={method.id} className="method-row"><span>{method.id}</span><div><strong>{method.title}</strong><code>{method.formula}</code><p>{method.note}</p></div></article>)}</section>

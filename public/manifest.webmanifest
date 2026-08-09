@@ -1,0 +1,24 @@
+{
+  "id": "/",
+  "name": "Cycling Analytics",
+  "short_name": "Cycling",
+  "description": "Personal ride analytics, training trends, and explainable recovery guidance.",
+  "start_url": "/?source=installed-app",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#080a16",
+  "theme_color": "#f9f002",
+  "categories": ["sports", "health", "fitness"],
+  "icons": [
+    {
+      "src": "/cycling-analytics-icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png"
+    },
+    {
+      "src": "/cycling-analytics-icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png"
+    }
+  ]
+}
