@@ -1,7 +1,4 @@
-"use client";
-
 import { ChangeEvent, DragEvent, useEffect, useRef, useState } from "react";
-import Image from "next/image";
 import { parseActivityFile, type DetectedActivity } from "@/lib/activity-parser";
 import {
   calculateReadiness,
@@ -1738,7 +1735,7 @@ function PlanToday({ rides, recovery, setRecovery, recoverySaveState, saveRecove
                 </span>
 
                 <span className="route-image-wrap">
-                  <Image src={`/zwift-routes/${suggestion.route.id}.png`} width={355} height={290} alt={`${suggestion.route.name} route map from Zwift`} />
+                  <img src={`/zwift-routes/${suggestion.route.id}.png`} width={355} height={290} loading="lazy" alt={`${suggestion.route.name} route map from Zwift`} />
                   <span className="official-route-label">Official Zwift map</span>
                 </span>
 

@@ -12,8 +12,9 @@
 
 # testing
 /coverage
+*.tsbuildinfo
 
-# next.js
+# generated web builds
 /.next/
 /.vinext/
 /out/
@@ -39,3 +40,4 @@ yarn-error.log*
 /.wrangler/
 /outputs/
 /work/
+/.local-data/

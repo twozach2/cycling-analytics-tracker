@@ -1,22 +1,8 @@
 # Cycling Analytics
 
-A private, full-stack cycling dashboard for importing Strava and activity-file data, tracking training trends, and generating explainable daily guidance and Zwift route suggestions.
+A private cycling dashboard for importing Strava and activity-file data, tracking training trends, and generating explainable daily guidance and Zwift route suggestions.
 
-## Highlights
-
-- Required rider setup for FTP and body weight—no generic athlete defaults
-- Strava OAuth with six-month backfill, automatic 15-minute in-app refresh, incremental sync, and duplicate protection
-- FIT, TCX, and GPX uploads with original-file retention
-- Power, heart-rate, cadence, workload, FTP, and aerobic-durability analysis
-- Rolling 90-day estimated cycling VO₂-max trend from recorded five-minute power and ride-specific weight
-- Virtual/indoor/outdoor classification with trainer-workout subtypes and environment-matched comparisons
-- Automatic Strava ride-type suggestions with persistent manual overrides
-- Per-ride FTP snapshots plus conservative decoupling eligibility checks
-- Personalized Zwift route-time ranges using rider weight, sustainable power, distance, and climbing
-- Markdown export of the complete ride log or one selected ride, including rider configuration and methodology
-- Four complete color themes, including a neon Cyberpunk-inspired dark palette, with device-local preference and view restoration
-- Installable desktop PWA with its own app icon, standalone window, and retained device preferences
-- Cloudflare D1 persistence, R2 file storage, and ChatGPT-authenticated rider profiles
+The `codex/standalone` branch is the local-first application track. Phase 1 replaces the hosted runtime with a Vite React SPA, a Hono server bound to `127.0.0.1:8722`, SQLite, and an on-disk ride-file store. The hosted `main` branch is unchanged.
 
 ## Local development
 
@@ -24,24 +10,42 @@ Requires Node.js `>=22.13.0`.
 
 ```bash
 npm install
+copy .env.example .env.local
 npm run dev
 ```
 
-Copy `.env.example` to `.env.local` and add your own Strava application credentials when testing the integration locally. Never commit real credentials or tokens.
+Vite opens the development UI on `http://127.0.0.1:5173` and proxies `/api` to the local service. A production build is served entirely from `http://127.0.0.1:8722`:
+
+```bash
+npm run build
+npm start
+```
+
+Strava remains optional. Put your application client ID and secret in `.env.local`; never commit credentials or tokens.
+
+## Local data
+
+The app uses one device-local rider. SQLite migrations run automatically at startup, and structured data is stored in `cycling.sqlite`. Original activity files and Strava stream payloads are stored under `ride-files/`.
+
+Default data locations:
+
+- Windows: `%LOCALAPPDATA%\\CyclingAnalytics`
+- macOS: `~/Library/Application Support/CyclingAnalytics`
+- Linux: `$XDG_DATA_HOME/CyclingAnalytics` or `~/.local/share/CyclingAnalytics`
+
+Set `CYCLING_DATA_DIR` to use another directory. This is especially useful for development and tests.
 
 ## Validation
 
 ```bash
-npm run build
+npm run lint
 npm test
 ```
 
-Generate a Drizzle migration after changing `db/schema.ts`:
+After changing `db/schema.ts`, generate and review a migration:
 
 ```bash
 npm run db:generate
 ```
 
-## Privacy and data
-
-Rider settings and activity records are associated with the authenticated user on the current deployment. Structured data is stored in D1; original activity files and imported stream payloads are stored in R2. FTP and body weight must be supplied by the rider before dependent calculations or Strava synchronization are enabled.
+Phase 2 moves integration credentials and tokens into the operating system's secure credential store. Phase 3 adds the Electron window and startup lifecycle; Phase 4 creates signed installers.

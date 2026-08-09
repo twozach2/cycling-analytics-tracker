@@ -1,11 +1,12 @@
 import { and, desc, eq } from "drizzle-orm";
-import { env } from "cloudflare:workers";
 import { getDb } from "../../../../../db";
 import { activityStreams, externalConnections, ftpHistory, powerDuration as powerDurationTable, rideMetrics, riders, rides } from "../../../../../db/schema";
 import { currentRider } from "../../../../../lib/current-rider";
 import { derivePowerDuration, deriveStreamMetrics, type ActivitySample } from "../../../../../lib/activity-parser";
 import { deriveRideMetrics, evaluateDecouplingEligibility } from "../../../../../lib/metrics";
 import { classifyStravaActivity, classifyStravaRideType, ftpSnapshotForRide, isCyclingActivity, parseReadBudget, shouldRunAutomaticSync, syncAfterEpoch, type StravaSyncMode } from "../../../../../lib/strava-sync";
+import { getFileStore } from "../../../../../server/platform/file-store";
+import { runtimeConfig } from "../../../../../server/platform/runtime-config";
 
 type StravaActivity = {
   id: number;
@@ -63,7 +64,7 @@ function samplesFromStreams(streams: StreamSet, startedAt: string): ActivitySamp
 }
 
 async function refreshAccessToken(connection: typeof externalConnections.$inferSelect) {
-  const config = env as unknown as Record<string, string | undefined>;
+  const config = runtimeConfig();
   if (!config.STRAVA_CLIENT_ID || !config.STRAVA_CLIENT_SECRET || !connection.refreshToken) throw new Error("Strava credentials are incomplete.");
   if (connection.accessToken && (connection.expiresAt ?? 0) > Math.floor(Date.now() / 1000) + 3600) return connection.accessToken;
   const response = await fetch("https://www.strava.com/oauth/token", {
@@ -164,7 +165,7 @@ export async function POST(request: Request) {
   }
 
   const ftp = profile.ftp;
-  const fileStore = (env as unknown as { RIDE_FILES: R2Bucket }).RIDE_FILES;
+  const fileStore = getFileStore();
   const streamCandidates: Array<{ activity: StravaActivity; rideId: string }> = [];
   const storedStreamCandidates: Array<{ activity: StravaActivity; rideId: string; r2Key: string }> = [];
   let imported = 0;

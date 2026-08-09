@@ -1,12 +1,12 @@
-import { env } from "cloudflare:workers";
 import { getDb } from "../../../../../db";
 import { oauthStates, riders } from "../../../../../db/schema";
 import { currentRider } from "../../../../../lib/current-rider";
+import { runtimeConfig } from "../../../../../server/platform/runtime-config";
 
 export async function GET(request: Request) {
   const rider = await currentRider(request);
   if (!rider) return Response.json({ error: "Sign in before connecting Strava." }, { status: 401 });
-  const config = env as unknown as Record<string, string | undefined>;
+  const config = runtimeConfig();
   if (!config.STRAVA_CLIENT_ID || !config.STRAVA_CLIENT_SECRET) {
     return Response.redirect(new URL("/?integration=strava-setup", request.url), 302);
   }

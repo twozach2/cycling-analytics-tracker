@@ -1,8 +1,8 @@
 import { and, eq } from "drizzle-orm";
-import { env } from "cloudflare:workers";
 import { getDb } from "../../../../../db";
 import { externalConnections, oauthStates } from "../../../../../db/schema";
 import { currentRider } from "../../../../../lib/current-rider";
+import { runtimeConfig } from "../../../../../server/platform/runtime-config";
 
 type StravaTokenResponse = {
   access_token?: string;
@@ -35,7 +35,7 @@ export async function GET(request: Request) {
     return Response.redirect(new URL("/?integration=strava-expired", request.url), 302);
   }
 
-  const config = env as unknown as Record<string, string | undefined>;
+  const config = runtimeConfig();
   if (!config.STRAVA_CLIENT_ID || !config.STRAVA_CLIENT_SECRET) {
     return Response.redirect(new URL("/?integration=strava-setup", request.url), 302);
   }

@@ -1,11 +1,9 @@
 import { and, desc, eq, lte } from "drizzle-orm";
-import { env } from "cloudflare:workers";
 import { getDb } from "../../../db";
 import { externalConnections, ftpHistory, powerDuration, riderGoals, riders, rides } from "../../../db/schema";
 import { currentRider } from "../../../lib/current-rider";
 import { buildCyclingVo2Trend, predictFtp } from "../../../lib/phase3";
-
-const runtime = () => env as unknown as Record<string, string | undefined>;
+import { runtimeConfig } from "../../../server/platform/runtime-config";
 
 export async function GET(request: Request) {
   const rider = await currentRider(request);
@@ -37,7 +35,7 @@ export async function GET(request: Request) {
     ? { minimumWatts: null, maximumWatts: null, midpointWatts: null, confidence: "none", signals: ["Enter an FTP to enable power-based predictions."] }
     : predictFtp(bests, currentFtpWatts);
   const strava = connections.find((connection) => connection.provider === "strava");
-  const config = runtime();
+  const config = runtimeConfig();
   const vo2Estimate = buildCyclingVo2Trend(fiveMinuteEfforts.map((effort) => ({
     startedAt: effort.startedAt,
     fiveMinutePowerWatts: effort.fiveMinutePowerWatts,

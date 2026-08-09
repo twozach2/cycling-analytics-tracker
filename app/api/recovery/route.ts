@@ -1,16 +1,7 @@
 import { desc, eq } from "drizzle-orm";
-import { getChatGPTUser } from "../../chatgpt-auth";
 import { getDb } from "../../../db";
 import { recoveryLogs, riders } from "../../../db/schema";
-
-async function currentRider(request: Request) {
-  const user = await getChatGPTUser();
-  if (user) return { id: user.userId, name: user.displayName };
-  const hostname = new URL(request.url).hostname;
-  return hostname === "localhost" || hostname === "127.0.0.1"
-    ? { id: "local-rider", name: "Local rider" }
-    : null;
-}
+import { currentRider } from "../../../lib/current-rider";
 
 export async function GET(request: Request) {
   const rider = await currentRider(request);

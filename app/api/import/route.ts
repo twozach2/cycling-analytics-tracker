@@ -1,8 +1,8 @@
 import { and, eq } from "drizzle-orm";
-import { env } from "cloudflare:workers";
-import { getChatGPTUser } from "../../chatgpt-auth";
 import { getDb } from "../../../db";
 import { riders, sourceFiles } from "../../../db/schema";
+import { currentRider } from "../../../lib/current-rider";
+import { getFileStore } from "../../../server/platform/file-store";
 
 const MAX_FILE_BYTES = 25 * 1024 * 1024;
 const allowedExtensions = new Set(["fit", "tcx", "gpx"]);
@@ -11,18 +11,8 @@ function bytesToHex(bytes: ArrayBuffer) {
   return Array.from(new Uint8Array(bytes), (byte) => byte.toString(16).padStart(2, "0")).join("");
 }
 
-async function currentRiderId(request: Request) {
-  const user = await getChatGPTUser();
-  if (user) return { id: user.userId, name: user.displayName };
-  const hostname = new URL(request.url).hostname;
-  if (hostname === "localhost" || hostname === "127.0.0.1") {
-    return { id: "local-rider", name: "Local rider" };
-  }
-  return null;
-}
-
 export async function POST(request: Request) {
-  const rider = await currentRiderId(request);
+  const rider = await currentRider(request);
   if (!rider) return Response.json({ error: "Sign in to import activity files." }, { status: 401 });
 
   const formData = await request.formData();
@@ -39,7 +29,7 @@ export async function POST(request: Request) {
   const bytes = await file.arrayBuffer();
   const sha256 = bytesToHex(await crypto.subtle.digest("SHA-256", bytes));
   const r2Key = `${rider.id}/${sha256}.${extension}`;
-  const fileStore = (env as unknown as { RIDE_FILES: R2Bucket }).RIDE_FILES;
+  const fileStore = getFileStore();
   await fileStore.put(r2Key, bytes, {
     httpMetadata: { contentType: file.type || "application/octet-stream" },
     customMetadata: { originalFilename: file.name, sha256 },

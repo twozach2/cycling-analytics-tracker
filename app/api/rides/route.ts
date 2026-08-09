@@ -1,16 +1,14 @@
 import { and, desc, eq } from "drizzle-orm";
-import { getChatGPTUser } from "../../chatgpt-auth";
 import { getDb } from "../../../db";
 import { ftpHistory, powerDuration, rideMetrics, riders, rides, sourceFiles } from "../../../db/schema";
+import { currentRider } from "../../../lib/current-rider";
 import { deriveRideMetrics, evaluateDecouplingEligibility, recommendRecovery } from "../../../lib/metrics";
 import { ftpSnapshotForRide, type ActivityEnvironment, type RideTrainingType, type WorkoutSubtype } from "../../../lib/strava-sync";
 
 const allowedRideTypes = new Set<RideTrainingType>(["Zone 2", "Zone 2 benchmark", "Recovery", "Tempo", "Threshold", "Free ride"]);
 
 async function riderIdFor(request: Request) {
-  const user = await getChatGPTUser();
-  const hostname = new URL(request.url).hostname;
-  return user?.userId ?? ((hostname === "localhost" || hostname === "127.0.0.1") ? "local-rider" : null);
+  return (await currentRider(request)).id;
 }
 
 export async function GET(request: Request) {

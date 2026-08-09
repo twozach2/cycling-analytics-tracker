@@ -1,8 +1,8 @@
 import { and, eq } from "drizzle-orm";
-import { env } from "cloudflare:workers";
 import { getDb } from "../../../../../db";
 import { externalConnections } from "../../../../../db/schema";
 import { currentRider } from "../../../../../lib/current-rider";
+import { runtimeConfig } from "../../../../../server/platform/runtime-config";
 
 export async function POST(request: Request) {
   const rider = await currentRider(request);
@@ -12,7 +12,7 @@ export async function POST(request: Request) {
     .where(and(eq(externalConnections.riderId, rider.id), eq(externalConnections.provider, "strava")))
     .limit(1);
   if (!connection) return Response.json({ disconnected: true });
-  const config = env as unknown as Record<string, string | undefined>;
+  const config = runtimeConfig();
   if (connection.refreshToken && config.STRAVA_CLIENT_ID && config.STRAVA_CLIENT_SECRET) {
     const basic = btoa(`${config.STRAVA_CLIENT_ID}:${config.STRAVA_CLIENT_SECRET}`);
     const response = await fetch("https://www.strava.com/oauth/revoke", {
