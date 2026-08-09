@@ -6,11 +6,16 @@ export type RideMetricInput = {
   ftpWatts: number | null;
 };
 
+export type BodyCondition = "normal" | "mild_soreness" | "significant_soreness" | "pain_concern";
+
+export type PainLocation = "unspecified" | "knee" | "back" | "neck_shoulders" | "hands_wrists" | "hips" | "saddle_contact" | "other";
+
 export type SubjectiveRecovery = {
   sleepQuality?: number;
   legFreshness?: "fresh" | "normal" | "heavy" | "dead";
-  kneePain?: number;
-  soreness?: number;
+  bodyCondition?: BodyCondition;
+  painLocation?: PainLocation;
+  painSeverity?: number;
   motivation?: number;
 };
 
@@ -64,6 +69,7 @@ export function calculateReadiness(input: {
   subjective: SubjectiveRecovery;
 }): ReadinessResult {
   const legScores = { fresh: 100, normal: 78, heavy: 45, dead: 10 } as const;
+  const bodyScores = { normal: 100, mild_soreness: 75, significant_soreness: 35, pain_concern: 70 } as const;
   const hoursScore = clamp((input.hoursSinceLastHardRide / 48) * 100);
   const loadScore = input.acuteChronicRatio === null
     ? 75
@@ -72,19 +78,21 @@ export function calculateReadiness(input: {
       : clamp(100 - ((input.acuteChronicRatio - 1.2) * 90));
   const sleepScore = clamp((((input.subjective.sleepQuality ?? 3) - 1) / 4) * 100);
   const legScore = legScores[input.subjective.legFreshness ?? "normal"];
-  const painScore = clamp(100 - ((input.subjective.kneePain ?? 0) * 20));
-  const sorenessScore = clamp(100 - ((input.subjective.soreness ?? 0) * 10));
+  const bodyCondition = input.subjective.bodyCondition ?? "normal";
+  const bodyScore = bodyScores[bodyCondition];
+  const painSeverity = bodyCondition === "pain_concern" ? clamp(input.subjective.painSeverity ?? 1, 1, 10) : 0;
   const motivationScore = clamp((((input.subjective.motivation ?? 3) - 1) / 4) * 100);
   let score = Math.round(
     (hoursScore * 0.25) +
     (loadScore * 0.20) +
     (sleepScore * 0.20) +
     (legScore * 0.15) +
-    (painScore * 0.10) +
-    (sorenessScore * 0.05) +
+    (bodyScore * 0.15) +
     (motivationScore * 0.05),
   );
-  if ((input.subjective.kneePain ?? 0) >= 3) score = Math.min(score, 39);
+  if (painSeverity >= 7) score = Math.min(score, 20);
+  else if (painSeverity >= 5) score = Math.min(score, 39);
+  else if (painSeverity >= 3) score = Math.min(score, 54);
 
   if (score >= 85) return { score, label: "Ready for hard work", tone: "green" };
   if (score >= 70) return { score, label: "Good to train", tone: "green" };
@@ -175,15 +183,19 @@ export function recommendRecovery(
   recent72HourLoad: number,
   subjective: SubjectiveRecovery = {},
 ): RecoveryRecommendation {
-  if ((subjective.kneePain ?? 0) >= 3) {
+  const painSeverity = subjective.bodyCondition === "pain_concern" ? subjective.painSeverity ?? 1 : 0;
+  if (painSeverity >= 3) {
+    const location = formatPainLocation(subjective.painLocation);
     return {
       minimumHours: 24,
       maximumHours: 48,
       status: "pain flag",
-      nextSession: "No hard riding. Rest or easy spinning only; reassess symptoms.",
+      nextSession: painSeverity >= 7
+        ? "Do not train through severe pain. Stop and seek appropriate medical guidance."
+        : "No hard riding. Rest or use pain-free movement only; reassess symptoms.",
       reasons: [
-        `Knee pain is ${subjective.kneePain}/10`,
-        "Pain overrides the numerical readiness estimate",
+        `${location} pain or injury concern is ${painSeverity}/10`,
+        "A pain concern acts as a safety guardrail rather than a fatigue score",
       ],
     };
   }
@@ -242,10 +254,12 @@ export function recommendRecovery(
     maximumHours += 24;
     reasons.push("Legs reported as dead");
   }
-  if ((subjective.soreness ?? 0) >= 6) {
+  if (subjective.bodyCondition === "significant_soreness") {
     minimumHours += 8;
     maximumHours += 12;
-    reasons.push(`General soreness is ${subjective.soreness}/10`);
+    reasons.push("Significant soreness or stiffness reported");
+  } else if (subjective.bodyCondition === "mild_soreness") {
+    reasons.push("Mild soreness or stiffness reported");
   }
 
   const status =
@@ -268,6 +282,20 @@ export function recommendRecovery(
     nextSession,
     reasons,
   };
+}
+
+function formatPainLocation(location: PainLocation | undefined) {
+  const labels: Record<PainLocation, string> = {
+    unspecified: "Unspecified",
+    knee: "Knee",
+    back: "Back",
+    neck_shoulders: "Neck or shoulder",
+    hands_wrists: "Hand or wrist",
+    hips: "Hip",
+    saddle_contact: "Saddle or contact-point",
+    other: "Other",
+  };
+  return labels[location ?? "unspecified"];
 }
 
 export function formatDuration(totalSeconds: number) {

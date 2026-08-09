@@ -4,6 +4,7 @@ import test from "node:test";
 
 test("desktop packaging ships only compiled app code plus runtime resources", async () => {
   const config = await readFile(new URL("../electron-builder.yml", import.meta.url), "utf8");
+  const desktopMain = await readFile(new URL("../electron/main.ts", import.meta.url), "utf8");
   assert.match(config, /appId: com\.twozach\.cycling-analytics/);
   assert.match(config, /dist\/\*\*\/\*/);
   assert.match(config, /dist-electron\/\*\*\/\*/);
@@ -16,6 +17,10 @@ test("desktop packaging ships only compiled app code plus runtime resources", as
   assert.match(config, /onlyLoadAppFromAsar: true/);
   assert.match(config, /npmRebuild: false/);
   assert.doesNotMatch(config, /server\/\*\*|tests\/\*\*/);
+  assert.match(desktopMain, /CYCLING_WEB_DIR\s*=\s*path\.join\(app\.getAppPath\(\),\s*"dist"\)/);
+  assert.match(desktopMain, /zoomFactor:\s*1\.1/);
+  assert.doesNotMatch(desktopMain, /CYCLING_WEB_DIR\s*=\s*app\.isPackaged/);
+  assert.doesNotMatch(desktopMain, /CYCLING_WEB_DIR\s*=\s*path\.join\(process\.resourcesPath,\s*"dist"\)/);
 });
 
 test("release workflow builds natively on all three operating systems", async () => {

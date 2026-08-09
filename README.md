@@ -36,7 +36,8 @@ Strava client credentials and OAuth tokens are deliberately excluded from SQLite
 
 Default data locations:
 
-- Windows: `%LOCALAPPDATA%\\CyclingAnalytics`
+- Installed Windows app: `%APPDATA%\\cycling-analytics`
+- Windows local-server development: `%LOCALAPPDATA%\\CyclingAnalytics`
 - macOS: `~/Library/Application Support/CyclingAnalytics`
 - Linux: `$XDG_DATA_HOME/CyclingAnalytics` or `~/.local/share/CyclingAnalytics`
 

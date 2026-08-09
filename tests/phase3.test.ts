@@ -86,15 +86,17 @@ test("goal projection presents three scenarios", () => {
   assert.match(projection.disclaimer, /not a promise/i);
 });
 
-test("pain makes workout guidance and the generated week cautious", () => {
-  const input = { readinessScore: 80, kneePain: 3, acuteChronicRatio: 1, recentHardSessions: 0 };
-  assert.match(recommendWorkout(input).primary, /Rest|recovery/);
-  assert.equal(recommendWorkout(input).mode, "rest");
-  assert.equal(buildWeeklyPlan(input, "2026-08-10")[0].session, "Rest or pain-free recovery spin");
+test("pain concerns make workout guidance and the generated week appropriately cautious", () => {
+  const moderateConcern = { readinessScore: 54, painConcernSeverity: 3, acuteChronicRatio: 1, recentHardSessions: 0 };
+  const substantialConcern = { ...moderateConcern, readinessScore: 39, painConcernSeverity: 5 };
+  assert.equal(recommendWorkout(moderateConcern).mode, "recovery");
+  assert.match(recommendWorkout(moderateConcern).primary, /pain-free recovery spin/);
+  assert.equal(recommendWorkout(substantialConcern).mode, "rest");
+  assert.equal(buildWeeklyPlan(substantialConcern, "2026-08-10")[0].session, "Rest or pain-free movement");
 });
 
 test("weekly plan starts today and advances through real calendar dates", () => {
-  const input = { readinessScore: 80, kneePain: 0, acuteChronicRatio: 1, recentHardSessions: 0 };
+  const input = { readinessScore: 80, painConcernSeverity: 0, acuteChronicRatio: 1, recentHardSessions: 0 };
   const plan = buildWeeklyPlan(input, "2026-08-08");
   assert.deepEqual(plan.map((day) => day.day), ["Sat", "Sun", "Mon", "Tue", "Wed", "Thu", "Fri"]);
   assert.deepEqual(plan.map((day) => day.dateIso), ["2026-08-08", "2026-08-09", "2026-08-10", "2026-08-11", "2026-08-12", "2026-08-13", "2026-08-14"]);

@@ -39,6 +39,7 @@ async function createWindow() {
       contextIsolation: true,
       nodeIntegration: false,
       sandbox: true,
+      zoomFactor: 1.1,
     },
   });
 
@@ -61,9 +62,9 @@ async function createWindow() {
 async function startDesktopApp() {
   process.env.CYCLING_DATA_DIR ||= app.getPath("userData");
   process.env.CYCLING_STANDALONE = "electron";
-  process.env.CYCLING_WEB_DIR = app.isPackaged
-    ? path.join(process.resourcesPath, "dist")
-    : path.join(app.getAppPath(), "dist");
+  // The compiled web app is packaged inside app.asar alongside the Electron entrypoint.
+  // Electron's filesystem layer resolves this path transparently in packaged builds.
+  process.env.CYCLING_WEB_DIR = path.join(app.getAppPath(), "dist");
   process.env.CYCLING_MIGRATIONS_DIR = app.isPackaged
     ? path.join(process.resourcesPath, "drizzle")
     : path.join(app.getAppPath(), "drizzle");

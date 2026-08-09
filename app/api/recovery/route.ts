@@ -2,6 +2,7 @@ import { desc, eq } from "drizzle-orm";
 import { getDb } from "../../../db";
 import { recoveryLogs, riders } from "../../../db/schema";
 import { currentRider } from "../../../lib/current-rider";
+import type { BodyCondition, PainLocation } from "../../../lib/metrics";
 
 export async function GET(request: Request) {
   const rider = await currentRider(request);
@@ -19,12 +20,16 @@ type RecoveryPayload = {
   sleepQuality?: number;
   legFreshness?: "fresh" | "normal" | "heavy" | "dead";
   motivation?: number;
-  soreness?: number;
-  kneePain?: number;
+  bodyCondition?: BodyCondition;
+  painLocation?: PainLocation;
+  painSeverity?: number;
 };
 
 const bounded = (value: number | undefined, minimum: number, maximum: number, fallback: number) =>
   Number.isFinite(value) ? Math.min(maximum, Math.max(minimum, Math.round(value!))) : fallback;
+
+const bodyConditions: BodyCondition[] = ["normal", "mild_soreness", "significant_soreness", "pain_concern"];
+const painLocations: PainLocation[] = ["unspecified", "knee", "back", "neck_shoulders", "hands_wrists", "hips", "saddle_contact", "other"];
 
 export async function POST(request: Request) {
   const rider = await currentRider(request);
@@ -33,6 +38,15 @@ export async function POST(request: Request) {
   const legFreshness = ["fresh", "normal", "heavy", "dead"].includes(payload.legFreshness ?? "")
     ? payload.legFreshness!
     : "normal";
+  const bodyCondition = bodyConditions.includes(payload.bodyCondition ?? "normal")
+    ? payload.bodyCondition!
+    : "normal";
+  const painLocation = bodyCondition === "pain_concern" && painLocations.includes(payload.painLocation ?? "unspecified")
+    ? payload.painLocation!
+    : null;
+  const painSeverity = bodyCondition === "pain_concern"
+    ? bounded(payload.painSeverity, 1, 10, 1)
+    : 0;
   const recovery = {
     id: crypto.randomUUID(),
     riderId: rider.id,
@@ -40,8 +54,12 @@ export async function POST(request: Request) {
     sleepQuality: bounded(payload.sleepQuality, 1, 5, 3),
     legFreshness,
     motivation: bounded(payload.motivation, 1, 5, 3),
-    generalSoreness: bounded(payload.soreness, 0, 10, 0),
-    kneePain: bounded(payload.kneePain, 0, 10, 0),
+    bodyCondition,
+    painLocation,
+    painSeverity,
+    // Retain legacy values so older app builds can still open new check-ins.
+    generalSoreness: bodyCondition === "mild_soreness" ? 3 : bodyCondition === "significant_soreness" ? 7 : 0,
+    kneePain: bodyCondition === "pain_concern" && painLocation === "knee" ? painSeverity : 0,
   };
   const db = getDb();
   await db.insert(riders).values({ id: rider.id, displayName: rider.name }).onConflictDoNothing();

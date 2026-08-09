@@ -31,7 +31,7 @@ test("labels average-power intensity as estimated", () => {
   assert.equal(metrics.trainingLoadIsEstimated, true);
 });
 
-test("pain overrides the numerical readiness estimate", () => {
+test("a localized pain concern overrides the numerical recovery estimate", () => {
   const metrics = deriveRideMetrics({
     movingTimeSeconds: 1800,
     averagePowerWatts: 80,
@@ -39,7 +39,7 @@ test("pain overrides the numerical readiness estimate", () => {
     averageHeartRateBpm: 110,
     ftpWatts: 165,
   });
-  const recovery = recommendRecovery(metrics, 1800, 20, { kneePain: 3 });
+  const recovery = recommendRecovery(metrics, 1800, 20, { bodyCondition: "pain_concern", painLocation: "knee", painSeverity: 3 });
 
   assert.equal(recovery.status, "pain flag");
   assert.match(recovery.nextSession, /No hard riding/);
@@ -56,7 +56,7 @@ test("adds explainable adjustments for accumulated load and heavy legs", () => {
   const recovery = recommendRecovery(metrics, 5058, 164, {
     sleepQuality: 4,
     legFreshness: "heavy",
-    kneePain: 0,
+    bodyCondition: "normal",
   });
 
   assert.equal(recovery.status, "moderate fatigue");
@@ -68,7 +68,7 @@ test("readiness combines objective load and the recovery questionnaire", () => {
   const readiness = calculateReadiness({
     hoursSinceLastHardRide: 48,
     acuteChronicRatio: 1.05,
-    subjective: { sleepQuality: 5, legFreshness: "fresh", kneePain: 0, motivation: 5 },
+    subjective: { sleepQuality: 5, legFreshness: "fresh", bodyCondition: "normal", motivation: 5 },
   });
 
   assert.equal(readiness.score, 100);
@@ -82,15 +82,32 @@ test("readiness recovery time advances against the current clock instead of the 
   assert.equal(elapsedHoursSince(null, Date.parse("2026-08-09T12:00:00.000Z")), 72);
 });
 
-test("pain caps readiness even when every other signal is strong", () => {
+test("a substantial pain concern caps readiness even when every other signal is strong", () => {
   const readiness = calculateReadiness({
     hoursSinceLastHardRide: 72,
     acuteChronicRatio: 0.9,
-    subjective: { sleepQuality: 5, legFreshness: "fresh", kneePain: 3, motivation: 5 },
+    subjective: { sleepQuality: 5, legFreshness: "fresh", bodyCondition: "pain_concern", painSeverity: 5, motivation: 5 },
   });
 
   assert.equal(readiness.score, 39);
   assert.equal(readiness.label, "Rest / recovery recommended");
+});
+
+test("ordinary soreness affects readiness without acting as an injury override", () => {
+  const mild = calculateReadiness({
+    hoursSinceLastHardRide: 72,
+    acuteChronicRatio: 0.9,
+    subjective: { sleepQuality: 5, legFreshness: "fresh", bodyCondition: "mild_soreness", motivation: 5 },
+  });
+  const painConcern = calculateReadiness({
+    hoursSinceLastHardRide: 72,
+    acuteChronicRatio: 0.9,
+    subjective: { sleepQuality: 5, legFreshness: "fresh", bodyCondition: "pain_concern", painSeverity: 3, motivation: 5 },
+  });
+
+  assert.ok(mild.score > painConcern.score);
+  assert.equal(painConcern.score, 54);
+  assert.equal(painConcern.label, "Easy ride preferred");
 });
 
 test("decoupling eligibility rejects short, variable, stopped, and warm-up-dominated rides", () => {
