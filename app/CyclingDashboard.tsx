@@ -414,6 +414,7 @@ export default function CyclingDashboard() {
   const [currentWeightKg, setCurrentWeightKg] = useState<number | null>(null);
   const [profileStatus, setProfileStatus] = useState<"loading" | "ready" | "error">("loading");
   const [syncNote, setSyncNote] = useState("");
+  const [showStravaSettings, setShowStravaSettings] = useState(false);
   const [rideTypeSavingId, setRideTypeSavingId] = useState<string | null>(null);
   const [rideFilter, setRideFilter] = useState(() => ["All rides", ...rideTypes].includes(initialPreferences.rideFilter ?? "") ? initialPreferences.rideFilter as string : "All rides");
   const [search, setSearch] = useState(() => initialPreferences.search ?? "");
@@ -581,6 +582,7 @@ export default function CyclingDashboard() {
     };
     const timer = window.setTimeout(() => {
       setView("import");
+      if (integration === "strava-setup") setShowStravaSettings(true);
       setSyncNote(messages[integration] ?? "Strava connection updated");
       url.searchParams.delete("integration");
       window.history.replaceState({}, "", `${url.pathname}${url.search}${url.hash}`);
@@ -1036,7 +1038,7 @@ export default function CyclingDashboard() {
         )}
         {view === "import" && (
           <div className="import-page-stack">
-            <ConnectedSources refreshRides={refreshSavedRides} />
+            <ConnectedSources refreshRides={refreshSavedRides} showSettings={showStravaSettings} />
             <ImportRide
               detected={detected}
               filename={importName}
@@ -1095,6 +1097,8 @@ function RiderSetup({ initialFtp, initialWeightKg, onSaved }: {
   const [weightValue, setWeightValue] = useState(initialWeightKg === null ? "" : String(Math.round(initialWeightKg * 2.2046226218)));
   const [saveState, setSaveState] = useState<"idle" | "saving" | "error">("idle");
   const [message, setMessage] = useState("");
+  const [stravaClientId, setStravaClientId] = useState("");
+  const [stravaClientSecret, setStravaClientSecret] = useState("");
 
   const saveProfile = async (event: React.FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -1110,9 +1114,23 @@ function RiderSetup({ initialFtp, initialWeightKg, onSaved }: {
       setMessage("Enter a body weight between 80 and 500 pounds.");
       return;
     }
+    if ((stravaClientId.trim() && !stravaClientSecret.trim()) || (!stravaClientId.trim() && stravaClientSecret.trim())) {
+      setSaveState("error");
+      setMessage("Enter both Strava credentials, or leave both blank and configure Strava later.");
+      return;
+    }
     setSaveState("saving");
     setMessage("");
     try {
+      if (stravaClientId.trim() && stravaClientSecret.trim()) {
+        const settingsResponse = await fetch("/api/settings/strava", {
+          method: "PUT",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ clientId: stravaClientId, clientSecret: stravaClientSecret }),
+        });
+        const settingsPayload = await settingsResponse.json() as { error?: string };
+        if (!settingsResponse.ok) throw new Error(settingsPayload.error ?? "Strava credentials could not be saved.");
+      }
       const response = await fetch("/api/phase3", {
         method: "POST",
         headers: { "content-type": "application/json" },
@@ -1137,6 +1155,11 @@ function RiderSetup({ initialFtp, initialWeightKg, onSaved }: {
       <form className="profile-setup-form" onSubmit={saveProfile}>
         <label><span>Functional threshold power</span><span className="profile-input"><input type="number" min="50" max="500" required value={ftpValue} onChange={(event) => setFtpValue(event.target.value)} /><small>watts</small></span><em>Your current sustainable one-hour power estimate.</em></label>
         <label><span>Body weight</span><span className="profile-input"><input type="number" min="80" max="500" step="1" required value={weightValue} onChange={(event) => setWeightValue(event.target.value)} /><small>lb</small></span><em>Used with FTP for W/kg and climbing estimates.</em></label>
+        <div className="profile-strava-setup">
+          <div><strong>Optional Strava setup</strong><span>Create an API application, set its callback domain to <code>127.0.0.1</code>, then paste both values. You can also do this later from Import.</span></div>
+          <label><span>Client ID</span><input type="text" autoComplete="off" value={stravaClientId} onChange={(event) => setStravaClientId(event.target.value)} /></label>
+          <label><span>Client secret</span><input type="password" autoComplete="new-password" value={stravaClientSecret} onChange={(event) => setStravaClientSecret(event.target.value)} /></label>
+        </div>
         <button className="primary-button wide" type="submit" disabled={saveState === "saving"}>{saveState === "saving" ? "Saving…" : "Save and open dashboard"}</button>
         <p className={`profile-setup-message ${saveState}`} role="status">{message}</p>
       </form>
@@ -1463,6 +1486,12 @@ type PhaseThreeInsights = {
     strava: { configured: boolean; connected: boolean; displayName: string | null; lastSyncedAt: string | null };
     garmin: { status: string; detail: string };
   };
+};
+
+type StravaSettings = {
+  configured: boolean;
+  clientId: string | null;
+  storage: "owner-only-file";
 };
 
 function PlanToday({ rides, recovery, setRecovery, recoverySaveState, saveRecovery, currentFtp, setCurrentFtp, currentWeightKg, setCurrentWeightKg }: {
@@ -1806,8 +1835,12 @@ function PlanToday({ rides, recovery, setRecovery, recoverySaveState, saveRecove
   );
 }
 
-function ConnectedSources({ refreshRides }: { refreshRides: () => Promise<void> }) {
+function ConnectedSources({ refreshRides, showSettings }: { refreshRides: () => Promise<void>; showSettings: boolean }) {
   const [insights, setInsights] = useState<PhaseThreeInsights | null>(null);
+  const [settings, setSettings] = useState<StravaSettings | null>(null);
+  const [settingsOpen, setSettingsOpen] = useState(showSettings);
+  const [clientId, setClientId] = useState("");
+  const [clientSecret, setClientSecret] = useState("");
   const [actionState, setActionState] = useState<"idle" | "working" | "success" | "error">("idle");
   const [actionMessage, setActionMessage] = useState("");
 
@@ -1816,6 +1849,14 @@ function ConnectedSources({ refreshRides }: { refreshRides: () => Promise<void> 
     const payload = await response.json() as PhaseThreeInsights & { error?: string };
     if (!response.ok) throw new Error(payload.error ?? "Connected sources could not be loaded.");
     setInsights(payload);
+  };
+
+  const loadSettings = async () => {
+    const response = await fetch("/api/settings/strava", { cache: "no-store" });
+    const payload = await response.json() as StravaSettings & { error?: string };
+    if (!response.ok) throw new Error(payload.error ?? "Strava settings could not be loaded.");
+    setSettings(payload);
+    setClientId(payload.clientId ?? "");
   };
 
   useEffect(() => {
@@ -1830,6 +1871,67 @@ function ConnectedSources({ refreshRides }: { refreshRides: () => Promise<void> 
       .catch(() => { if (active) setActionMessage("Connection status is temporarily unavailable."); });
     return () => { active = false; };
   }, []);
+
+  useEffect(() => {
+    let active = true;
+    void fetch("/api/settings/strava", { cache: "no-store" })
+      .then(async (response) => ({ response, payload: await response.json() as StravaSettings & { error?: string } }))
+      .then(({ response, payload }) => {
+        if (!active) return;
+        if (!response.ok) throw new Error(payload.error ?? "Strava settings could not be loaded.");
+        setSettings(payload);
+        setClientId(payload.clientId ?? "");
+      })
+      .catch(() => { if (active) setActionMessage("Strava settings are temporarily unavailable."); });
+    return () => { active = false; };
+  }, []);
+
+  useEffect(() => {
+    if (!showSettings) return;
+    const timer = window.setTimeout(() => setSettingsOpen(true), 0);
+    return () => window.clearTimeout(timer);
+  }, [showSettings]);
+
+  const saveStravaSettings = async (event: React.FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    setActionState("working");
+    setActionMessage("Saving Strava credentials on this device...");
+    try {
+      const response = await fetch("/api/settings/strava", {
+        method: "PUT",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ clientId, clientSecret }),
+      });
+      const payload = await response.json() as StravaSettings & { error?: string };
+      if (!response.ok) throw new Error(payload.error ?? "Strava credentials could not be saved.");
+      setSettings(payload);
+      setClientId(payload.clientId ?? "");
+      setClientSecret("");
+      await loadInsights();
+      setActionState("success");
+      setActionMessage("Strava credentials saved locally. You can connect your account now.");
+    } catch (error) {
+      setActionState("error");
+      setActionMessage(error instanceof Error ? error.message : "Strava credentials could not be saved.");
+    }
+  };
+
+  const removeStravaSettings = async () => {
+    setActionState("working");
+    setActionMessage("Removing local Strava credentials...");
+    try {
+      const response = await fetch("/api/settings/strava", { method: "DELETE" });
+      const payload = await response.json() as { error?: string };
+      if (!response.ok) throw new Error(payload.error ?? "Strava credentials could not be removed.");
+      await Promise.all([loadInsights(), loadSettings()]);
+      setClientSecret("");
+      setActionState("success");
+      setActionMessage("Strava credentials and tokens were removed. Saved rides remain in your log.");
+    } catch (error) {
+      setActionState("error");
+      setActionMessage(error instanceof Error ? error.message : "Strava credentials could not be removed.");
+    }
+  };
 
   const syncStrava = async (mode: "new" | "six_months") => {
     setActionState("working");
@@ -1875,9 +1977,10 @@ function ConnectedSources({ refreshRides }: { refreshRides: () => Promise<void> 
       const response = await fetch("/api/integrations/strava/disconnect", { method: "POST" });
       const payload = await response.json() as { error?: string };
       if (!response.ok) throw new Error(payload.error ?? "Strava could not be disconnected.");
-      await loadInsights();
+      await Promise.all([loadInsights(), loadSettings()]);
       setActionState("success");
-      setActionMessage("Strava access was revoked. Synced rides remain in your private log.");
+      setClientSecret("");
+      setActionMessage("Strava access was revoked and local credentials were removed. Synced rides remain in your private log.");
     } catch (error) {
       setActionState("error");
       setActionMessage(error instanceof Error ? error.message : "Strava could not be disconnected.");
@@ -1901,12 +2004,31 @@ function ConnectedSources({ refreshRides }: { refreshRides: () => Promise<void> 
             {insights?.integrations.strava.connected ? <>
               <button className="primary-button" onClick={() => void syncStrava("new")} disabled={actionState === "working"}>Sync new rides</button>
               <button className="secondary-button" onClick={() => void syncStrava("six_months")} disabled={actionState === "working"}>Import last 6 months</button>
+              <button className="text-button" onClick={() => setSettingsOpen((open) => !open)} disabled={actionState === "working"}>Credentials</button>
               <button className="text-button" onClick={() => void disconnectStrava()} disabled={actionState === "working"}>Disconnect</button>
-            </> : <button className="primary-button strava-button" onClick={() => window.location.assign("/api/integrations/strava/start")} disabled={!insights?.integrations.strava.configured}>Connect with Strava</button>}
+            </> : <>
+              <button className="primary-button strava-button" onClick={() => settings?.configured ? window.location.assign("/api/integrations/strava/start") : setSettingsOpen(true)}>{settings?.configured ? "Connect with Strava" : "Configure Strava"}</button>
+              {settings?.configured && <button className="text-button" onClick={() => setSettingsOpen((open) => !open)}>Edit credentials</button>}
+            </>}
           </div>
         </article>
         <article className="connection-tile"><div className="connection-mark garmin">G</div><div><strong>Garmin Connect</strong><span>Cloud sync requires Garmin Developer Program approval.</span><small>Garmin FIT files already receive full stream analysis.</small></div><a className="secondary-link" href="https://developer.garmin.com/gc-developer-program/activity-api/" target="_blank" rel="noreferrer">Application details ↗</a></article>
       </div>
+      {settingsOpen && <form className="strava-settings-panel" onSubmit={saveStravaSettings}>
+        <div className="strava-settings-copy">
+          <span className="eyebrow">Local Strava application</span>
+          <h3>{settings?.configured ? "Update API credentials" : "Connect your own Strava API application"}</h3>
+          <p>Create an application at <a href="https://www.strava.com/settings/api" target="_blank" rel="noreferrer">strava.com/settings/api</a>. Set the Authorization Callback Domain to <code>127.0.0.1</code>. The local callback is <code>http://127.0.0.1:8722/api/integrations/strava/callback</code>.</p>
+          <small>Phase 2 stores these values in an owner-only local file, never in SQLite. Phase 3 will encrypt them with your operating system&apos;s credential protection.</small>
+        </div>
+        <label><span>Client ID</span><input type="text" autoComplete="off" required value={clientId} onChange={(event) => setClientId(event.target.value)} /></label>
+        <label><span>Client secret</span><input type="password" autoComplete="new-password" required value={clientSecret} onChange={(event) => setClientSecret(event.target.value)} placeholder={settings?.configured ? "Enter again to replace" : "Paste client secret"} /></label>
+        <div className="strava-settings-actions">
+          <button className="primary-button" type="submit" disabled={actionState === "working"}>{actionState === "working" ? "Saving..." : "Save credentials"}</button>
+          <button className="text-button" type="button" onClick={() => setSettingsOpen(false)}>Close</button>
+          {settings?.configured && <button className="text-button danger" type="button" onClick={() => void removeStravaSettings()} disabled={actionState === "working"}>Remove credentials</button>}
+        </div>
+      </form>}
     </section>
   );
 }

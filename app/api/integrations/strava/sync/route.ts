@@ -6,7 +6,7 @@ import { derivePowerDuration, deriveStreamMetrics, type ActivitySample } from ".
 import { deriveRideMetrics, evaluateDecouplingEligibility } from "../../../../../lib/metrics";
 import { classifyStravaActivity, classifyStravaRideType, ftpSnapshotForRide, isCyclingActivity, parseReadBudget, shouldRunAutomaticSync, syncAfterEpoch, type StravaSyncMode } from "../../../../../lib/strava-sync";
 import { getFileStore } from "../../../../../server/platform/file-store";
-import { runtimeConfig } from "../../../../../server/platform/runtime-config";
+import { getSecretStore, STRAVA_SECRETS } from "../../../../../server/platform/secret-store";
 
 type StravaActivity = {
   id: number;
@@ -64,24 +64,32 @@ function samplesFromStreams(streams: StreamSet, startedAt: string): ActivitySamp
 }
 
 async function refreshAccessToken(connection: typeof externalConnections.$inferSelect) {
-  const config = runtimeConfig();
-  if (!config.STRAVA_CLIENT_ID || !config.STRAVA_CLIENT_SECRET || !connection.refreshToken) throw new Error("Strava credentials are incomplete.");
-  if (connection.accessToken && (connection.expiresAt ?? 0) > Math.floor(Date.now() / 1000) + 3600) return connection.accessToken;
+  const secretStore = getSecretStore();
+  const [clientId, clientSecret, accessToken, refreshToken] = await Promise.all([
+    secretStore.get(STRAVA_SECRETS.clientId),
+    secretStore.get(STRAVA_SECRETS.clientSecret),
+    secretStore.get(STRAVA_SECRETS.accessToken),
+    secretStore.get(STRAVA_SECRETS.refreshToken),
+  ]);
+  if (!clientId || !clientSecret || !refreshToken) throw new Error("Strava credentials are incomplete. Reconnect Strava from Import.");
+  if (accessToken && (connection.expiresAt ?? 0) > Math.floor(Date.now() / 1000) + 3600) return accessToken;
   const response = await fetch("https://www.strava.com/oauth/token", {
     method: "POST",
     headers: { "content-type": "application/x-www-form-urlencoded" },
     body: new URLSearchParams({
-      client_id: config.STRAVA_CLIENT_ID,
-      client_secret: config.STRAVA_CLIENT_SECRET,
+      client_id: clientId,
+      client_secret: clientSecret,
       grant_type: "refresh_token",
-      refresh_token: connection.refreshToken,
+      refresh_token: refreshToken,
     }),
   });
   const token = await response.json() as TokenResponse;
   if (!response.ok || !token.access_token || !token.refresh_token || !token.expires_at) throw new Error(token.message ?? "Strava access could not be refreshed.");
+  await Promise.all([
+    secretStore.set(STRAVA_SECRETS.accessToken, token.access_token),
+    secretStore.set(STRAVA_SECRETS.refreshToken, token.refresh_token),
+  ]);
   await getDb().update(externalConnections).set({
-    accessToken: token.access_token,
-    refreshToken: token.refresh_token,
     expiresAt: token.expires_at,
     updatedAt: new Date().toISOString(),
   }).where(eq(externalConnections.id, connection.id));

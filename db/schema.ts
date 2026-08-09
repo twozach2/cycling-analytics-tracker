@@ -178,8 +178,6 @@ export const externalConnections = sqliteTable(
     provider: text("provider", { enum: ["strava", "garmin"] }).notNull(),
     externalAthleteId: text("external_athlete_id"),
     displayName: text("display_name"),
-    accessToken: text("access_token"),
-    refreshToken: text("refresh_token"),
     expiresAt: integer("expires_at"),
     scopes: text("scopes").notNull().default(""),
     lastSyncedAt: text("last_synced_at"),

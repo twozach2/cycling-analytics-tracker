@@ -9,7 +9,7 @@
     "dev": "concurrently -k -n api,web -c cyan,green \"tsx watch server/index.ts\" \"vite\"",
     "build": "vite build && tsc --noEmit",
     "start": "tsx server/index.ts",
-    "test": "npm run build && node --import tsx --test tests/markdown-export.test.ts tests/metrics.test.ts tests/phase3.test.ts tests/strava-sync.test.ts tests/local-server.test.ts tests/rendered-html.test.mjs",
+    "test": "npm run build && node --import tsx --test tests/markdown-export.test.ts tests/metrics.test.ts tests/phase3.test.ts tests/strava-sync.test.ts tests/secret-store.test.ts tests/strava-settings.test.ts tests/local-server.test.ts tests/rendered-html.test.mjs",
     "lint": "eslint . --ignore-pattern dist",
     "db:generate": "drizzle-kit generate"
   },

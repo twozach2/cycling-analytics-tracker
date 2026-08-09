@@ -37,6 +37,9 @@ test("keeps the dashboard features while removing hosted runtime dependencies", 
   assert.match(database, /migrate\(/);
   assert.match(fileStore, /rideFilesDirectory/);
   assert.match(fileStore, /Invalid ride-file key/);
+  assert.match(dashboard, /Connect your own Strava API application/);
+  assert.match(dashboard, /\/api\/settings\/strava/);
+  assert.match(dashboard, /Authorization Callback Domain/);
 
   assert.match(dashboard, /label: "Plan today"/);
   assert.match(dashboard, /Zwift route match/);

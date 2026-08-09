@@ -10,7 +10,6 @@ Requires Node.js `>=22.13.0`.
 
 ```bash
 npm install
-copy .env.example .env.local
 npm run dev
 ```
 
@@ -21,11 +20,13 @@ npm run build
 npm start
 ```
 
-Strava remains optional. Put your application client ID and secret in `.env.local`; never commit credentials or tokens.
+Strava remains optional. Configure your own Strava API application from the Import tab; client credentials are no longer read from environment variables.
 
 ## Local data
 
 The app uses one device-local rider. SQLite migrations run automatically at startup, and structured data is stored in `cycling.sqlite`. Original activity files and Strava stream payloads are stored under `ride-files/`.
+
+Strava client credentials and OAuth tokens are deliberately excluded from SQLite. During Phase 2 they live in `secrets.json`, written with owner-only file permissions. This interim store is not encrypted; Phase 3 replaces it with the same `SecretStore` interface backed by the operating system's secure storage.
 
 Default data locations:
 
@@ -48,4 +49,4 @@ After changing `db/schema.ts`, generate and review a migration:
 npm run db:generate
 ```
 
-Phase 2 moves integration credentials and tokens into the operating system's secure credential store. Phase 3 adds the Electron window and startup lifecycle; Phase 4 creates signed installers.
+Phase 3 adds the Electron window, startup lifecycle, and OS-encrypted secret storage. Phase 4 creates signed installers.

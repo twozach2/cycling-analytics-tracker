@@ -1,13 +1,17 @@
 import { getDb } from "../../../../../db";
 import { oauthStates, riders } from "../../../../../db/schema";
 import { currentRider } from "../../../../../lib/current-rider";
-import { runtimeConfig } from "../../../../../server/platform/runtime-config";
+import { getSecretStore, STRAVA_SECRETS } from "../../../../../server/platform/secret-store";
 
 export async function GET(request: Request) {
   const rider = await currentRider(request);
   if (!rider) return Response.json({ error: "Sign in before connecting Strava." }, { status: 401 });
-  const config = runtimeConfig();
-  if (!config.STRAVA_CLIENT_ID || !config.STRAVA_CLIENT_SECRET) {
+  const store = getSecretStore();
+  const [clientId, clientSecret] = await Promise.all([
+    store.get(STRAVA_SECRETS.clientId),
+    store.get(STRAVA_SECRETS.clientSecret),
+  ]);
+  if (!clientId || !clientSecret) {
     return Response.redirect(new URL("/?integration=strava-setup", request.url), 302);
   }
 
@@ -22,7 +26,7 @@ export async function GET(request: Request) {
   });
 
   const authorize = new URL("https://www.strava.com/oauth/authorize");
-  authorize.searchParams.set("client_id", config.STRAVA_CLIENT_ID);
+  authorize.searchParams.set("client_id", clientId);
   authorize.searchParams.set("redirect_uri", new URL("/api/integrations/strava/callback", request.url).toString());
   authorize.searchParams.set("response_type", "code");
   authorize.searchParams.set("approval_prompt", "auto");

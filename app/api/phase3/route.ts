@@ -3,7 +3,7 @@ import { getDb } from "../../../db";
 import { externalConnections, ftpHistory, powerDuration, riderGoals, riders, rides } from "../../../db/schema";
 import { currentRider } from "../../../lib/current-rider";
 import { buildCyclingVo2Trend, predictFtp } from "../../../lib/phase3";
-import { runtimeConfig } from "../../../server/platform/runtime-config";
+import { getSecretStore, STRAVA_SECRETS } from "../../../server/platform/secret-store";
 
 export async function GET(request: Request) {
   const rider = await currentRider(request);
@@ -35,7 +35,13 @@ export async function GET(request: Request) {
     ? { minimumWatts: null, maximumWatts: null, midpointWatts: null, confidence: "none", signals: ["Enter an FTP to enable power-based predictions."] }
     : predictFtp(bests, currentFtpWatts);
   const strava = connections.find((connection) => connection.provider === "strava");
-  const config = runtimeConfig();
+  const secretStore = getSecretStore();
+  const [stravaClientId, stravaClientSecret, stravaAccessToken, stravaRefreshToken] = await Promise.all([
+    secretStore.get(STRAVA_SECRETS.clientId),
+    secretStore.get(STRAVA_SECRETS.clientSecret),
+    secretStore.get(STRAVA_SECRETS.accessToken),
+    secretStore.get(STRAVA_SECRETS.refreshToken),
+  ]);
   const vo2Estimate = buildCyclingVo2Trend(fiveMinuteEfforts.map((effort) => ({
     startedAt: effort.startedAt,
     fiveMinutePowerWatts: effort.fiveMinutePowerWatts,
@@ -52,8 +58,8 @@ export async function GET(request: Request) {
     goal: goal ? { id: goal.id, targetFtpWatts: goal.targetFtpWatts, createdAt: goal.createdAt } : null,
     integrations: {
       strava: {
-        configured: Boolean(config.STRAVA_CLIENT_ID && config.STRAVA_CLIENT_SECRET),
-        connected: Boolean(strava),
+        configured: Boolean(stravaClientId && stravaClientSecret),
+        connected: Boolean(strava && stravaAccessToken && stravaRefreshToken),
         displayName: strava?.displayName ?? null,
         lastSyncedAt: strava?.lastSyncedAt ?? null,
       },

@@ -188,6 +188,12 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline: 3px s
 .profile-setup-form > label { display: flex; min-width: 0; flex-direction: column; gap: 8px; }
 .profile-setup-form > label > span:first-child { font-size: 12px; font-weight: 700; }
 .profile-setup-form label em { color: var(--muted); font-size: 10px; font-style: normal; line-height: 1.45; }
+.profile-strava-setup { display: grid; grid-column: 1 / -1; grid-template-columns: 1.4fr 1fr 1fr; gap: 14px; align-items: end; margin-top: 8px; padding: 20px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface-muted); }
+.profile-strava-setup > div { display: flex; flex-direction: column; gap: 6px; align-self: center; }
+.profile-strava-setup > div strong { font-size: 12px; }
+.profile-strava-setup > div span { color: var(--muted); font-size: 9px; line-height: 1.5; }
+.profile-strava-setup label { display: flex; flex-direction: column; gap: 7px; color: var(--muted); font: 700 8px/1 var(--font-data); text-transform: uppercase; }
+.profile-strava-setup input { width: 100%; height: 42px; padding: 0 11px; border: 1px solid var(--line); border-radius: 6px; background: var(--field); color: var(--ink); font: 600 11px/1 var(--font-data); }
 .profile-input { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; overflow: hidden; border: 1px solid var(--line); border-radius: 7px; background: var(--field); }
 .profile-input input { width: 100%; height: 54px; padding: 0 14px; border: 0; background: transparent; font: 700 18px/1 var(--font-data); }
 .profile-input input:focus-visible { outline-offset: -3px; }
@@ -571,6 +577,16 @@ blockquote { margin: 16px 0 0; padding: 14px 16px; border-left: 3px solid var(--
 .connection-actions { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 9px; }
 .connection-actions .primary-button, .connection-actions .secondary-button { min-height: 38px; white-space: nowrap; }
 .connection-actions .strava-button { background: #fc4c02; box-shadow: none; }
+.strava-settings-panel { display: grid; grid-template-columns: minmax(260px, 1.5fr) minmax(150px, .7fr) minmax(180px, .9fr); gap: 14px; align-items: end; margin-top: 12px; padding: 20px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface-muted); }
+.strava-settings-copy { display: flex; flex-direction: column; gap: 6px; align-self: stretch; }
+.strava-settings-copy h3 { margin: 0; font-size: 16px; letter-spacing: -.02em; }
+.strava-settings-copy p, .strava-settings-copy small { margin: 0; color: var(--muted); font-size: 9px; line-height: 1.5; }
+.strava-settings-copy a { color: var(--ink); font-weight: 700; }
+.strava-settings-copy code { font: 9px/1.4 var(--font-data); overflow-wrap: anywhere; }
+.strava-settings-panel > label { display: flex; flex-direction: column; gap: 7px; color: var(--muted); font: 700 8px/1 var(--font-data); text-transform: uppercase; }
+.strava-settings-panel input { width: 100%; height: 42px; padding: 0 11px; border: 1px solid var(--line); border-radius: 6px; background: var(--field); color: var(--ink); font: 600 11px/1 var(--font-data); }
+.strava-settings-actions { display: flex; grid-column: 2 / -1; flex-wrap: wrap; justify-content: flex-end; gap: 10px; }
+.text-button.danger { color: var(--warning-text); }
 .secondary-link { display: inline-flex; min-height: 38px; align-items: center; justify-content: center; padding: 0 13px; border: 1px solid var(--ink); border-radius: 6px; background: var(--lime); color: var(--tone-text); font-size: 10px; font-weight: 670; text-decoration: none; white-space: nowrap; }
 .forecast-scale { height: 14px; margin: 20px 0 15px; overflow: hidden; border-radius: 999px; background: var(--surface-muted); }
 .forecast-scale i { display: block; height: 100%; border-radius: inherit; background: linear-gradient(90deg, var(--sky), var(--lime)); }
@@ -751,6 +767,8 @@ blockquote { margin: 16px 0 0; padding: 14px 16px; border-left: 3px solid var(--
   .metric-ribbon { grid-template-columns: repeat(2, 1fr); }
   .phase-kpis { grid-template-columns: repeat(2, 1fr); }
   .connection-grid { grid-template-columns: 1fr; }
+  .strava-settings-panel { grid-template-columns: 1fr 1fr; }
+  .strava-settings-copy, .strava-settings-actions { grid-column: 1 / -1; }
   .week-grid { grid-template-columns: repeat(4, 1fr); }
   .ride-stats { grid-template-columns: repeat(3, 1fr); }
   .theme-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
@@ -795,6 +813,9 @@ blockquote { margin: 16px 0 0; padding: 14px 16px; border-left: 3px solid var(--
   .raw-series-grid { grid-template-columns: 1fr; }
   .connection-tile { grid-template-columns: 44px 1fr; }
   .connection-actions, .connection-tile .secondary-link { grid-column: 2; justify-self: start; }
+  .strava-settings-panel { grid-template-columns: 1fr; }
+  .strava-settings-copy, .strava-settings-actions { grid-column: 1; }
+  .strava-settings-actions { justify-content: flex-start; }
   .week-grid { grid-template-columns: repeat(2, 1fr); }
   .route-choice-grid { grid-template-columns: 1fr; }
   .route-choice { display: grid; grid-template-columns: minmax(230px, .85fr) 1.15fr; }
@@ -813,6 +834,7 @@ blockquote { margin: 16px 0 0; padding: 14px 16px; border-left: 3px solid var(--
   .profile-gate-shell { padding: 20px 14px 32px; }
   .profile-gate-card { margin: 32px auto; padding: 26px 20px; }
   .profile-setup-form { grid-template-columns: 1fr; }
+  .profile-strava-setup { grid-template-columns: 1fr; }
   .top-actions { gap: 8px; }
   .export-button { width: 42px; padding: 0; font-size: 0; }
   .export-button span { font-size: 16px; }

@@ -2,7 +2,7 @@ import { and, eq } from "drizzle-orm";
 import { getDb } from "../../../../../db";
 import { externalConnections, oauthStates } from "../../../../../db/schema";
 import { currentRider } from "../../../../../lib/current-rider";
-import { runtimeConfig } from "../../../../../server/platform/runtime-config";
+import { getSecretStore, STRAVA_SECRETS } from "../../../../../server/platform/secret-store";
 
 type StravaTokenResponse = {
   access_token?: string;
@@ -35,16 +35,20 @@ export async function GET(request: Request) {
     return Response.redirect(new URL("/?integration=strava-expired", request.url), 302);
   }
 
-  const config = runtimeConfig();
-  if (!config.STRAVA_CLIENT_ID || !config.STRAVA_CLIENT_SECRET) {
+  const secretStore = getSecretStore();
+  const [clientId, clientSecret] = await Promise.all([
+    secretStore.get(STRAVA_SECRETS.clientId),
+    secretStore.get(STRAVA_SECRETS.clientSecret),
+  ]);
+  if (!clientId || !clientSecret) {
     return Response.redirect(new URL("/?integration=strava-setup", request.url), 302);
   }
   const tokenResponse = await fetch("https://www.strava.com/oauth/token", {
     method: "POST",
     headers: { "content-type": "application/x-www-form-urlencoded" },
     body: new URLSearchParams({
-      client_id: config.STRAVA_CLIENT_ID,
-      client_secret: config.STRAVA_CLIENT_SECRET,
+      client_id: clientId,
+      client_secret: clientSecret,
       code,
       grant_type: "authorization_code",
     }),
@@ -53,6 +57,10 @@ export async function GET(request: Request) {
   if (!tokenResponse.ok || !token.access_token || !token.refresh_token || !token.expires_at) {
     return Response.redirect(new URL("/?integration=strava-failed", request.url), 302);
   }
+  await Promise.all([
+    secretStore.set(STRAVA_SECRETS.accessToken, token.access_token),
+    secretStore.set(STRAVA_SECRETS.refreshToken, token.refresh_token),
+  ]);
   const athleteName = [token.athlete?.firstname, token.athlete?.lastname].filter(Boolean).join(" ") || token.athlete?.username || "Connected athlete";
   const now = new Date().toISOString();
   await db.insert(externalConnections).values({
@@ -61,8 +69,6 @@ export async function GET(request: Request) {
     provider: "strava",
     externalAthleteId: token.athlete?.id ? String(token.athlete.id) : null,
     displayName: athleteName,
-    accessToken: token.access_token,
-    refreshToken: token.refresh_token,
     expiresAt: token.expires_at,
     scopes: token.scope ?? grantedScopes.replaceAll(",", " "),
     updatedAt: now,
@@ -71,8 +77,6 @@ export async function GET(request: Request) {
     set: {
       externalAthleteId: token.athlete?.id ? String(token.athlete.id) : null,
       displayName: athleteName,
-      accessToken: token.access_token,
-      refreshToken: token.refresh_token,
       expiresAt: token.expires_at,
       scopes: token.scope ?? grantedScopes.replaceAll(",", " "),
       updatedAt: now,
