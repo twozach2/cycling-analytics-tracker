@@ -1532,6 +1532,37 @@ function DistributionRow({ label, value, tone }: { label: string; value: number;
   return <div className="distribution-row"><span>{label}</span><div><i className={tone} style={{ width: `${Math.max(1, Math.min(100, value))}%` }} /></div><strong>{value.toFixed(0)}%</strong></div>;
 }
 
+type PowerRecordEffortView = {
+  rideId: string;
+  rideName: string;
+  startedAt: string;
+  bestPowerWatts: number;
+};
+
+type PowerRecordHistoryView = {
+  algorithmVersion: string;
+  records: Array<{
+    durationSeconds: number;
+    label: string;
+    allTime: PowerRecordEffortView;
+    previousRecord: PowerRecordEffortView | null;
+    best30Days: PowerRecordEffortView | null;
+    best90Days: PowerRecordEffortView | null;
+    improvementWatts: number | null;
+    improvementPercent: number | null;
+    effortCount: number;
+    recordCount: number;
+  }>;
+  timeline: Array<{
+    durationSeconds: number;
+    label: string;
+    effort: PowerRecordEffortView;
+    previousPowerWatts: number | null;
+    improvementWatts: number | null;
+    improvementPercent: number | null;
+  }>;
+};
+
 type PhaseThreeInsights = {
   currentFtpWatts: number | null;
   weightKg: number | null;
@@ -1549,6 +1580,7 @@ type PhaseThreeInsights = {
     measuredAt: string | null;
     points: Array<{ startedAt: string; estimateMlKgMin: number }>;
   };
+  powerRecords: PowerRecordHistoryView;
   goal: { id: string; targetFtpWatts: number; createdAt: string } | null;
   integrations: {
     strava: { configured: boolean; connected: boolean; displayName: string | null; lastSyncedAt: string | null };
@@ -1561,6 +1593,49 @@ type StravaSettings = {
   clientId: string | null;
   storage: "owner-only-file" | "operating-system-encrypted";
 };
+
+function PowerRecordsCard({ history }: { history: PowerRecordHistoryView | null | undefined }) {
+  const preferredDurations = new Set([5, 60, 300, 1200, 3600, 5400]);
+  const featured = (history?.records ?? []).filter((record) => preferredDurations.has(record.durationSeconds));
+  const recordTimeline = (history?.timeline ?? []).filter((event) => event.previousPowerWatts !== null);
+  const visibleTimeline = (recordTimeline.length ? recordTimeline : history?.timeline ?? []).slice(0, 8);
+  const dateLabel = (startedAt: string) => new Date(startedAt).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
+  return (
+    <section className="power-records-card panel full-width">
+      <div className="section-heading"><div><span className="eyebrow">Personal records</span><h2>Power-duration history</h2><p>Best continuous power from each ride, separated by effort duration.</p></div><span className="small-badge">gap-aware / {history?.algorithmVersion ?? "power-duration-v2"}</span></div>
+      {featured.length ? <>
+        <div className="power-record-grid">
+          {featured.map((record) => <article key={record.durationSeconds}>
+            <span className="power-record-duration">{record.label}</span>
+            <strong>{Math.round(record.allTime.bestPowerWatts)} <small>W</small></strong>
+            <p>{record.allTime.rideName}</p>
+            <time dateTime={record.allTime.startedAt}>{dateLabel(record.allTime.startedAt)}</time>
+            <div className="power-record-change">
+              <span>{record.improvementWatts === null ? "First baseline" : `+${record.improvementWatts.toFixed(1)} W / +${record.improvementPercent?.toFixed(1)}%`}</span>
+              <small>{record.recordCount} record {record.recordCount === 1 ? "mark" : "changes"}</small>
+            </div>
+            <dl>
+              <div><dt>30-day best</dt><dd>{record.best30Days ? `${Math.round(record.best30Days.bestPowerWatts)} W` : "--"}</dd></div>
+              <div><dt>90-day best</dt><dd>{record.best90Days ? `${Math.round(record.best90Days.bestPowerWatts)} W` : "--"}</dd></div>
+            </dl>
+          </article>)}
+        </div>
+        <details className="pr-timeline">
+          <summary><span>PR timeline</span><strong>{visibleTimeline.length} recent milestones</strong></summary>
+          <div className="pr-timeline-list">
+            {visibleTimeline.map((event) => <article key={`${event.durationSeconds}-${event.effort.rideId}-${event.effort.startedAt}`}>
+              <time dateTime={event.effort.startedAt}>{dateLabel(event.effort.startedAt)}</time>
+              <strong>{event.label} / {Math.round(event.effort.bestPowerWatts)} W</strong>
+              <span>{event.effort.rideName}</span>
+              <em>{event.improvementWatts === null ? "Baseline established" : `+${event.improvementWatts.toFixed(1)} W from the prior record`}</em>
+            </article>)}
+          </div>
+        </details>
+      </> : <div className="analysis-empty compact"><strong>No power-duration history yet.</strong><span>Import a FIT, TCX, or Strava ride with detailed power samples to establish your first records.</span></div>}
+      <p className="chart-note"><i /> Records require a legitimate continuous window. Pauses and recording gaps are not bridged, and zero-power coasting remains part of the effort.</p>
+    </section>
+  );
+}
 
 function PlanToday({ rides, recovery, setRecovery, recoverySaveState, saveRecovery, currentFtp, setCurrentFtp, currentWeightKg, setCurrentWeightKg }: {
   rides: Ride[];
@@ -1886,6 +1961,8 @@ function PlanToday({ rides, recovery, setRecovery, recoverySaveState, saveRecove
         </> : <div className="analysis-empty"><strong>No five-minute power evidence yet.</strong><span>Import a powered ride with at least five continuous minutes of detailed data.</span></div>}
         <p className="chart-note"><i /> Formula: 16.6 + 8.87 × five-minute W/kg. Use the trend—not the absolute number. It assumes the five-minute effort was maximal and is not a lab measurement.</p>
       </section>
+
+      <PowerRecordsCard history={insights?.powerRecords} />
 
       <section className="goal-card panel">
         <div className="section-heading"><div><span className="eyebrow">Goal projection</span><h2>{goalTarget} W FTP</h2></div></div>

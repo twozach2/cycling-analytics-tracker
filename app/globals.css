@@ -580,7 +580,7 @@ blockquote { margin: 16px 0 0; padding: 14px 16px; border-left: 3px solid var(--
 .phase-action-message.error { border-color: #e3a08d; background: #fff0e9; color: #7d3021; }
 .phase-action-message.working { border-color: #b7cbd2; background: #eaf3f5; color: #35515c; }
 .connections-card .phase-action-message { margin-bottom: 16px; }
-.connections-card, .ftp-forecast, .vo2-card, .goal-card, .workout-card, .block-card, .weekly-plan, .route-suite { padding: 26px; }
+.connections-card, .ftp-forecast, .vo2-card, .power-records-card, .goal-card, .workout-card, .block-card, .weekly-plan, .route-suite { padding: 26px; }
 .connection-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
 .connection-tile { display: grid; grid-template-columns: 48px minmax(180px, 1fr) auto; align-items: center; gap: 14px; padding: 16px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface-muted); }
 .connection-tile.strava-source { grid-column: 1 / -1; }
@@ -625,6 +625,31 @@ blockquote { margin: 16px 0 0; padding: 14px 16px; border-left: 3px solid var(--
 .vo2-trend { display: flex; align-items: stretch; gap: 7px; height: 132px; margin-top: 18px; padding-top: 8px; border-bottom: 1px solid var(--line); }
 .vo2-trend > span { display: flex; min-width: 0; flex: 1; flex-direction: column; align-items: center; justify-content: flex-end; gap: 7px; }
 .vo2-trend i { display: block; width: min(24px, 75%); min-height: 4px; border-radius: 4px 4px 0 0; background: linear-gradient(180deg, var(--lime), #89b8c6); }
+.power-record-grid { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 9px; }
+.power-record-grid > article { display: flex; min-width: 0; flex-direction: column; padding: 16px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface-muted); }
+.power-record-duration { color: var(--muted); font: 750 9px/1 var(--font-data); letter-spacing: .08em; text-transform: uppercase; }
+.power-record-grid > article > strong { margin-top: 13px; font-size: 30px; line-height: .95; letter-spacing: -.055em; }
+.power-record-grid > article > strong small { color: var(--muted); font: 750 9px/1 var(--font-data); letter-spacing: 0; }
+.power-record-grid p { min-height: 29px; margin: 10px 0 3px; overflow: hidden; font-size: 10px; font-weight: 680; line-height: 1.35; }
+.power-record-grid time { color: var(--muted); font: 8px/1.3 var(--font-data); }
+.power-record-change { display: flex; min-height: 42px; flex-direction: column; gap: 4px; margin: 13px 0 0; padding-top: 11px; border-top: 1px solid var(--line); }
+.power-record-change span { color: var(--focus); font: 750 9px/1.3 var(--font-data); }
+.power-record-change small { color: var(--muted); font: 8px/1.3 var(--font-data); }
+.power-record-grid dl { display: grid; grid-template-columns: 1fr 1fr; gap: 5px; margin: auto 0 0; padding-top: 12px; }
+.power-record-grid dl div { min-width: 0; padding: 8px; border-radius: 5px; background: var(--panel-glass); }
+.power-record-grid dt { color: var(--muted); font: 7px/1.2 var(--font-data); text-transform: uppercase; }
+.power-record-grid dd { margin: 5px 0 0; font: 750 9px/1 var(--font-data); }
+.pr-timeline { margin-top: 14px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface-muted); }
+.pr-timeline summary { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 15px 17px; cursor: pointer; list-style: none; }
+.pr-timeline summary::-webkit-details-marker { display: none; }
+.pr-timeline summary span { font-size: 11px; font-weight: 720; }
+.pr-timeline summary strong { color: var(--muted); font: 750 8px/1 var(--font-data); letter-spacing: .04em; text-transform: uppercase; }
+.pr-timeline-list { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); border-top: 1px solid var(--line); }
+.pr-timeline-list article { display: grid; grid-template-columns: 92px 92px minmax(0, 1fr) auto; align-items: center; gap: 10px; min-width: 0; padding: 13px 16px; border-bottom: 1px solid var(--line); }
+.pr-timeline-list article:nth-child(odd) { border-right: 1px solid var(--line); }
+.pr-timeline-list time, .pr-timeline-list span, .pr-timeline-list em { overflow: hidden; color: var(--muted); font: 8px/1.35 var(--font-data); text-overflow: ellipsis; white-space: nowrap; }
+.pr-timeline-list strong { font-size: 10px; white-space: nowrap; }
+.pr-timeline-list em { color: var(--focus); font-style: normal; }
 .vo2-trend small { min-height: 16px; overflow: hidden; color: var(--muted); font: 6px/1 var(--font-data); text-overflow: ellipsis; white-space: nowrap; }
 .goal-control { display: flex; align-items: flex-end; justify-content: space-between; gap: 12px; }
 .projection-list { display: flex; flex-direction: column; margin-top: 20px; border-top: 1px solid var(--line); }
@@ -823,6 +848,9 @@ blockquote { margin: 16px 0 0; padding: 14px 16px; border-left: 3px solid var(--
   .import-layout, .method-layout { grid-template-columns: 1fr; }
   .phase-two-layout { grid-template-columns: 1fr; }
   .phase-three-layout { grid-template-columns: 1fr; }
+  .power-record-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  .pr-timeline-list { grid-template-columns: 1fr; }
+  .pr-timeline-list article:nth-child(odd) { border-right: 0; }
   .phase-two-hero, .phase-kpis, .workload-card { grid-column: 1; }
   .phase-three-hero, .phase-action-message, .connections-card, .weekly-plan, .route-suite { grid-column: 1; }
   .phase-two-hero { align-items: flex-start; flex-direction: column; }
@@ -889,6 +917,12 @@ blockquote { margin: 16px 0 0; padding: 14px 16px; border-left: 3px solid var(--
   .distribution-row { grid-template-columns: 105px 1fr 34px; }
   .confirm-ftp { align-items: stretch; flex-direction: column; }
   .confirm-ftp input { width: 100%; }
+  .power-record-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .power-record-grid > article { padding: 13px; }
+  .pr-timeline-list article { grid-template-columns: 1fr auto; }
+  .pr-timeline-list article > span, .pr-timeline-list article > em { grid-column: 1 / -1; }
+  .pr-timeline summary { align-items: flex-start; flex-direction: column; }
+  .pr-timeline summary strong { line-height: 1.35; }
   .vo2-summary { grid-template-columns: 1fr; }
   .vo2-summary > div { padding-right: 0; padding-left: 0; border-top: 1px solid var(--line); border-left: 0; }
   .vo2-summary > div:first-child { border-top: 0; }

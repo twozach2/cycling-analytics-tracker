@@ -42,6 +42,23 @@ export type ActivitySample = {
   distance: number | null;
 };
 
+export const POWER_DURATION_TARGETS_SECONDS = [
+  5,
+  15,
+  30,
+  60,
+  120,
+  300,
+  480,
+  600,
+  900,
+  1200,
+  1800,
+  2700,
+  3600,
+  5400,
+] as const;
+
 const numberOrNull = (value: string | null | undefined) => {
   if (!value) return null;
   const parsed = Number(value);
@@ -134,27 +151,107 @@ export function deriveStreamMetrics(samples: ActivitySample[]) {
   };
 }
 
-export function derivePowerDuration(samples: ActivitySample[]) {
-  const powerSamples = samples
-    .filter((sample): sample is ActivitySample & { time: number; power: number } => sample.time !== null && sample.power !== null && sample.power >= 0)
-    .sort((a, b) => a.time - b.time);
-  if (powerSamples.length < 2) return [];
-  const targets = [5, 15, 30, 60, 120, 300, 480, 1200, 1800, 2700, 3600];
+type TimedPowerSample = { time: number; power: number };
 
-  return targets.flatMap((durationSeconds) => {
-    const targetMs = durationSeconds * 1000;
-    let left = 0;
-    let sum = 0;
-    let best = 0;
-    for (let right = 0; right < powerSamples.length; right += 1) {
-      sum += powerSamples[right].power;
-      while (left + 1 < right && powerSamples[right].time - powerSamples[left + 1].time >= targetMs) {
-        sum -= powerSamples[left].power;
-        left += 1;
-      }
-      const span = powerSamples[right].time - powerSamples[left].time;
-      if (span >= targetMs * 0.95) best = Math.max(best, sum / (right - left + 1));
+function normalizePowerSamples(samples: ActivitySample[]) {
+  const duplicateBuckets = new Map<number, { total: number; count: number }>();
+  for (const sample of samples) {
+    if (sample.time === null || sample.power === null || sample.power < 0 || !Number.isFinite(sample.time) || !Number.isFinite(sample.power)) continue;
+    const bucket = duplicateBuckets.get(sample.time) ?? { total: 0, count: 0 };
+    bucket.total += sample.power;
+    bucket.count += 1;
+    duplicateBuckets.set(sample.time, bucket);
+  }
+  return Array.from(duplicateBuckets, ([time, bucket]) => ({ time, power: bucket.total / bucket.count }))
+    .sort((a, b) => a.time - b.time);
+}
+
+function medianPositiveDelta(samples: TimedPowerSample[]) {
+  const deltas = samples.slice(1)
+    .map((sample, index) => sample.time - samples[index].time)
+    .filter((delta) => delta > 0)
+    .sort((a, b) => a - b);
+  if (!deltas.length) return null;
+  const midpoint = Math.floor(deltas.length / 2);
+  return deltas.length % 2 === 0 ? (deltas[midpoint - 1] + deltas[midpoint]) / 2 : deltas[midpoint];
+}
+
+function continuousPowerSegments(samples: TimedPowerSample[]) {
+  if (samples.length < 2) return [];
+  const typicalIntervalMs = medianPositiveDelta(samples) ?? 1000;
+  // Preserve legitimate lower-frequency recordings while refusing to bridge pauses,
+  // auto-pause gaps, or trainer dropouts into a fictitious continuous effort.
+  const maximumGapMs = Math.max(3000, Math.min(15_000, typicalIntervalMs * 3));
+  const segments: TimedPowerSample[][] = [];
+  let current: TimedPowerSample[] = [samples[0]];
+  for (let index = 1; index < samples.length; index += 1) {
+    if (samples[index].time - samples[index - 1].time > maximumGapMs) {
+      if (current.length >= 2) segments.push(current);
+      current = [];
     }
+    current.push(samples[index]);
+  }
+  if (current.length >= 2) segments.push(current);
+  return segments;
+}
+
+type PowerIntegral = {
+  samples: TimedPowerSample[];
+  cumulativeWattMilliseconds: number[];
+  startTime: number;
+  endTime: number;
+};
+
+function buildPowerIntegral(samples: TimedPowerSample[]): PowerIntegral {
+  const cumulativeWattMilliseconds = [0];
+  for (let index = 1; index < samples.length; index += 1) {
+    const elapsedMs = samples[index].time - samples[index - 1].time;
+    cumulativeWattMilliseconds[index] = cumulativeWattMilliseconds[index - 1] + (samples[index - 1].power * elapsedMs);
+  }
+  return {
+    samples,
+    cumulativeWattMilliseconds,
+    startTime: samples[0].time,
+    endTime: samples.at(-1)!.time,
+  };
+}
+
+function powerIntegralAt(segment: PowerIntegral, time: number) {
+  if (time <= segment.startTime) return 0;
+  if (time >= segment.endTime) return segment.cumulativeWattMilliseconds.at(-1)!;
+  let low = 0;
+  let high = segment.samples.length - 1;
+  while (low + 1 < high) {
+    const midpoint = Math.floor((low + high) / 2);
+    if (segment.samples[midpoint].time <= time) low = midpoint;
+    else high = midpoint;
+  }
+  return segment.cumulativeWattMilliseconds[low] + (segment.samples[low].power * (time - segment.samples[low].time));
+}
+
+function bestPowerForDuration(segment: PowerIntegral, durationMs: number) {
+  const latestStart = segment.endTime - durationMs;
+  if (latestStart < segment.startTime) return 0;
+  const candidateStarts = new Set<number>([segment.startTime, latestStart]);
+  for (const sample of segment.samples) {
+    if (sample.time >= segment.startTime && sample.time <= latestStart) candidateStarts.add(sample.time);
+    const alignedToEnd = sample.time - durationMs;
+    if (alignedToEnd >= segment.startTime && alignedToEnd <= latestStart) candidateStarts.add(alignedToEnd);
+  }
+  let best = 0;
+  for (const start of candidateStarts) {
+    const work = powerIntegralAt(segment, start + durationMs) - powerIntegralAt(segment, start);
+    best = Math.max(best, work / durationMs);
+  }
+  return best;
+}
+
+export function derivePowerDuration(samples: ActivitySample[]) {
+  const segments = continuousPowerSegments(normalizePowerSamples(samples)).map(buildPowerIntegral);
+  if (!segments.length) return [];
+  return POWER_DURATION_TARGETS_SECONDS.flatMap((durationSeconds) => {
+    const durationMs = durationSeconds * 1000;
+    const best = segments.reduce((leader, segment) => Math.max(leader, bestPowerForDuration(segment, durationMs)), 0);
     return best > 0 ? [{ durationSeconds, bestPowerWatts: round(best) }] : [];
   });
 }

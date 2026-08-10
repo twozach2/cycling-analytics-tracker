@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { access } from "node:fs/promises";
 import test from "node:test";
 import { derivePowerDuration, deriveStreamMetrics, type ActivitySample } from "../lib/activity-parser.ts";
-import { buildCyclingVo2Trend, buildWeeklyPlan, estimateCyclingVo2Max, predictFtp, projectFtpGoal, recommendWorkout } from "../lib/phase3.ts";
+import { buildCyclingVo2Trend, buildPowerRecordHistory, buildWeeklyPlan, estimateCyclingVo2Max, predictFtp, projectFtpGoal, recommendWorkout } from "../lib/phase3.ts";
 import { estimateZwiftRouteTime, recommendZwiftRoutes, ROUTE_TIME_WINDOWS, ZWIFT_ROUTE_CATALOG, ZWIFT_ROUTE_COUNT, ZWIFT_WORLDS } from "../lib/zwift-routes.ts";
 import { fallbackGuestWorlds, parseGuestWorldsFromSchedule } from "../lib/zwift-world-rotation.ts";
 
@@ -19,6 +19,87 @@ test("derives rolling power evidence from timestamped samples", () => {
   }));
   const bests = derivePowerDuration(samples);
   assert.equal(bests.find((best) => best.durationSeconds === 1200)?.bestPowerWatts, 200);
+});
+
+test("power-duration uses elapsed time for irregular samples", () => {
+  const samples: ActivitySample[] = [0, 1000, 2100, 3500, 5000].map((time) => ({
+    time,
+    power: 215,
+    heartRate: null,
+    cadence: null,
+    distance: null,
+    elevation: null,
+    latitude: null,
+    longitude: null,
+  }));
+  assert.equal(derivePowerDuration(samples).find((best) => best.durationSeconds === 5)?.bestPowerWatts, 215);
+});
+
+test("power-duration rejects pauses and trainer dropouts", () => {
+  const block = (startSecond: number) => Array.from({ length: 241 }, (_, offset) => ({
+    time: (startSecond + offset) * 1000,
+    power: 400,
+    heartRate: null,
+    cadence: null,
+    distance: null,
+    elevation: null,
+    latitude: null,
+    longitude: null,
+  } satisfies ActivitySample));
+  const bests = derivePowerDuration([...block(0), ...block(600)]);
+  assert.equal(bests.some((best) => best.durationSeconds === 300), false);
+  assert.equal(bests.find((best) => best.durationSeconds === 120)?.bestPowerWatts, 400);
+});
+
+test("power-duration counts continuous zero-power time and ignores duplicate timestamps", () => {
+  const samples: ActivitySample[] = Array.from({ length: 121 }, (_, second) => ({
+    time: second * 1000,
+    power: second < 60 ? 200 : 0,
+    heartRate: null,
+    cadence: null,
+    distance: null,
+    elevation: null,
+    latitude: null,
+    longitude: null,
+  }));
+  samples.push({ ...samples[0], power: 200 });
+  const bests = derivePowerDuration(samples);
+  assert.equal(bests.find((best) => best.durationSeconds === 120)?.bestPowerWatts, 100);
+});
+
+test("power-duration includes ten, fifteen, and ninety minute targets", () => {
+  const samples: ActivitySample[] = Array.from({ length: 5401 }, (_, second) => ({
+    time: second * 1000,
+    power: 180,
+    heartRate: null,
+    cadence: null,
+    distance: null,
+    elevation: null,
+    latitude: null,
+    longitude: null,
+  }));
+  const durations = derivePowerDuration(samples).map((best) => best.durationSeconds);
+  assert.ok(durations.includes(600));
+  assert.ok(durations.includes(900));
+  assert.ok(durations.includes(5400));
+});
+
+test("builds all-time, recent, and previous power records with a PR timeline", () => {
+  const history = buildPowerRecordHistory([
+    { rideId: "a", rideName: "Baseline", startedAt: "2026-01-01T12:00:00Z", durationSeconds: 300, bestPowerWatts: 200 },
+    { rideId: "b", rideName: "January build", startedAt: "2026-01-10T12:00:00Z", durationSeconds: 300, bestPowerWatts: 210 },
+    { rideId: "c", rideName: "Not a record", startedAt: "2026-02-01T12:00:00Z", durationSeconds: 300, bestPowerWatts: 205 },
+    { rideId: "d", rideName: "April peak", startedAt: "2026-04-01T12:00:00Z", durationSeconds: 300, bestPowerWatts: 220 },
+  ], Date.parse("2026-04-10T12:00:00Z"));
+  const fiveMinute = history.records.find((record) => record.durationSeconds === 300)!;
+  assert.equal(fiveMinute.allTime.rideName, "April peak");
+  assert.equal(fiveMinute.previousRecord?.bestPowerWatts, 210);
+  assert.equal(fiveMinute.improvementWatts, 10);
+  assert.equal(fiveMinute.improvementPercent, 4.8);
+  assert.equal(fiveMinute.best30Days?.bestPowerWatts, 220);
+  assert.equal(fiveMinute.recordCount, 3);
+  assert.equal(history.algorithmVersion, "power-duration-v2");
+  assert.equal(history.timeline.length, 3);
 });
 
 test("derives interval-smoothed durability from a variable ride", () => {

@@ -2,21 +2,27 @@ import { and, desc, eq, lte } from "drizzle-orm";
 import { getDb } from "../../../db";
 import { externalConnections, ftpHistory, powerDuration, riderGoals, riders, rides } from "../../../db/schema";
 import { currentRider } from "../../../lib/current-rider";
-import { buildCyclingVo2Trend, predictFtp } from "../../../lib/phase3";
+import { buildCyclingVo2Trend, buildPowerRecordHistory, predictFtp } from "../../../lib/phase3";
 import { getSecretStore, STRAVA_SECRETS } from "../../../server/platform/secret-store";
 
 export async function GET(request: Request) {
   const rider = await currentRider(request);
   if (!rider) return Response.json({ error: "Sign in to view training insights." }, { status: 401 });
   const db = getDb();
-  const [[profile], ftpRows, [goal], connections, bests, fiveMinuteEfforts] = await Promise.all([
+  const [[profile], ftpRows, [goal], connections, powerEfforts, fiveMinuteEfforts] = await Promise.all([
     db.select().from(riders).where(eq(riders.id, rider.id)).limit(1),
     db.select().from(ftpHistory).where(eq(ftpHistory.riderId, rider.id)).orderBy(desc(ftpHistory.effectiveAt)).limit(24),
     db.select().from(riderGoals).where(and(eq(riderGoals.riderId, rider.id), eq(riderGoals.status, "active"))).orderBy(desc(riderGoals.createdAt)).limit(1),
     db.select({ provider: externalConnections.provider, displayName: externalConnections.displayName, lastSyncedAt: externalConnections.lastSyncedAt })
       .from(externalConnections)
       .where(eq(externalConnections.riderId, rider.id)),
-    db.select({ durationSeconds: powerDuration.durationSeconds, bestPowerWatts: powerDuration.bestPowerWatts })
+    db.select({
+      rideId: rides.id,
+      rideName: rides.name,
+      startedAt: rides.startedAt,
+      durationSeconds: powerDuration.durationSeconds,
+      bestPowerWatts: powerDuration.bestPowerWatts,
+    })
       .from(powerDuration)
       .innerJoin(rides, eq(powerDuration.rideId, rides.id))
       .where(eq(rides.riderId, rider.id)),
@@ -33,7 +39,8 @@ export async function GET(request: Request) {
   const weightKg = profile?.defaultWeightKg ?? null;
   const prediction = currentFtpWatts === null
     ? { minimumWatts: null, maximumWatts: null, midpointWatts: null, confidence: "none", signals: ["Enter an FTP to enable power-based predictions."] }
-    : predictFtp(bests, currentFtpWatts);
+    : predictFtp(powerEfforts, currentFtpWatts);
+  const powerRecords = buildPowerRecordHistory(powerEfforts);
   const strava = connections.find((connection) => connection.provider === "strava");
   const secretStore = getSecretStore();
   const [stravaClientId, stravaClientSecret, stravaAccessToken, stravaRefreshToken] = await Promise.all([
@@ -55,6 +62,7 @@ export async function GET(request: Request) {
     ftpHistory: ftpRows.map((row) => ({ effectiveAt: row.effectiveAt, ftpWatts: row.ftpWatts, source: row.source })),
     prediction,
     vo2Estimate,
+    powerRecords,
     goal: goal ? { id: goal.id, targetFtpWatts: goal.targetFtpWatts, createdAt: goal.createdAt } : null,
     integrations: {
       strava: {

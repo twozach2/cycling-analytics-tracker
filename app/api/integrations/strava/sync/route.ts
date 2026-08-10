@@ -44,6 +44,19 @@ const MAX_STREAM_REQUESTS = 40;
 
 const finite = (value: unknown) => typeof value === "number" && Number.isFinite(value) ? value : null;
 
+async function upsertPowerDuration(
+  db: ReturnType<typeof getDb>,
+  rideId: string,
+  bests: Array<{ durationSeconds: number; bestPowerWatts: number }>,
+) {
+  for (const best of bests) {
+    await db.insert(powerDurationTable).values({ rideId, ...best }).onConflictDoUpdate({
+      target: [powerDurationTable.rideId, powerDurationTable.durationSeconds],
+      set: { bestPowerWatts: best.bestPowerWatts },
+    });
+  }
+}
+
 function samplesFromStreams(streams: StreamSet, startedAt: string): ActivitySample[] {
   const names = ["time", "distance", "heartrate", "cadence", "watts", "altitude"];
   const length = Math.max(0, ...names.map((name) => streams[name]?.data?.length ?? 0));
@@ -299,6 +312,7 @@ export async function POST(request: Request) {
       const samples = samplesFromStreams(streams, candidate.activity.start_date);
       if (!samples.length) continue;
       const streamMetrics = deriveStreamMetrics(samples);
+      const bests = derivePowerDuration(samples);
       const candidateMovingTime = Math.max(0, Math.round(finite(candidate.activity.moving_time) ?? 0));
       const candidateElapsedTime = Math.max(0, Math.round(finite(candidate.activity.elapsed_time) ?? candidateMovingTime));
       const candidateStoppedPercent = candidateElapsedTime > 0 ? Math.max(0, ((candidateElapsedTime - candidateMovingTime) / candidateElapsedTime) * 100) : null;
@@ -330,6 +344,7 @@ export async function POST(request: Request) {
         algorithmVersion: "phase3.3",
         dataQuality: "high",
       }).where(eq(rideMetrics.rideId, candidate.rideId));
+      await upsertPowerDuration(db, candidate.rideId, bests);
       streamsReprocessed += 1;
     } catch {
       // A missing or malformed stored stream should not prevent new rides from syncing.
@@ -398,9 +413,7 @@ export async function POST(request: Request) {
       algorithmVersion: "phase3.3",
       dataQuality: "high",
     }).where(eq(rideMetrics.rideId, candidate.rideId));
-    if (bests.length) {
-      await db.insert(powerDurationTable).values(bests.map((best) => ({ rideId: candidate.rideId, ...best }))).onConflictDoNothing();
-    }
+    await upsertPowerDuration(db, candidate.rideId, bests);
     streamsImported += 1;
   }
 
