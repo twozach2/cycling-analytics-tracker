@@ -146,7 +146,10 @@ test("Markdown export includes an auditable Coach Mode snapshot", () => {
   }, new Date("2026-08-10T12:00:00.000Z"));
 
   assert.match(markdown, /## Coach Mode snapshot/);
-  assert.match(markdown, /Algorithm: coach-v1/);
+  assert.match(markdown, /Algorithm: coach-v2/);
   assert.match(markdown, /Recommendation:/);
-  assert.match(markdown, /Caution: A stable chronic-load baseline is not available yet\./);
+  assert.match(markdown, /Caution: The 28-day weekly load baseline is not stable yet\./);
+  assert.match(markdown, /Seven-day load:/);
+  assert.match(markdown, /Pre-ride plan \(inferred\):/);
+  assert.match(markdown, /Completed-ride match:/);
 });

@@ -84,7 +84,7 @@ test("coach exposes every recommendation input and creates an adaptive seven-day
   assert.ok(report.positives.length >= 3);
   assert.equal(report.weeklyPlan[0].adaptive, false);
   assert.ok(report.weeklyPlan.slice(1).every((day) => day.adaptive));
-  assert.equal(report.algorithmVersion, "coach-v1");
+  assert.equal(report.algorithmVersion, "coach-v2");
 });
 test("endurance trend excludes rides outside the comparable intensity band", () => {
   const trend = detectEnduranceTrend([
@@ -120,4 +120,48 @@ test("an objectively hard ride completed today closes the plan even when labeled
   assert.equal(report.evidenceSummary.todayTrainingLoad, 81);
   assert.equal(report.evidenceSummary.recentHardSessions, 1);
   assert.ok(report.cautions.some((reason) => reason.includes("closes the intensity window")));
+});
+
+test("matches today’s completed stimulus against the inferred pre-ride recommendation", () => {
+  const history = Array.from({ length: 5 }, (_, index) => ride({
+    id: `history-${index}`,
+    date: new Date(Date.UTC(2026, 6, 15 + index * 5, 12)).toISOString(),
+  }));
+  const report = buildCoachReport({
+    rides: [
+      ride({ id: "today-tempo", name: "Tempo ride", date: "2026-08-10T18:00:00Z", trainingType: "Tempo", trainingLoad: 70, intensityFactor: 0.84 }),
+      ...history,
+    ],
+    readinessScore: 54,
+    preRideReadinessScore: 84,
+    subjective: { bodyCondition: "normal", sleepQuality: 5, legFreshness: "fresh", motivation: 5 },
+    checkInRecorded: true,
+    referenceDate: "2026-08-10T21:15:00Z",
+  });
+
+  assert.equal(report.completion.plannedMode, "tempo");
+  assert.equal(report.completion.actualMode, "tempo");
+  assert.equal(report.completion.status, "matched");
+  assert.equal(report.weeklyPlan[1].session, "Recovery spin · 40 min");
+  assert.match(report.weeklyPlan[1].purpose, /matched session/i);
+});
+
+test("flags a harder completed ride without prescribing make-up work tomorrow", () => {
+  const history = Array.from({ length: 5 }, (_, index) => ride({
+    id: `steady-${index}`,
+    date: new Date(Date.UTC(2026, 6, 15 + index * 5, 12)).toISOString(),
+  }));
+  const report = buildCoachReport({
+    rides: [ride({ id: "today-hard", date: "2026-08-10T18:00:00Z", trainingType: "Threshold", trainingLoad: 75, intensityFactor: 0.9 }), ...history],
+    readinessScore: 54,
+    preRideReadinessScore: 65,
+    subjective: { bodyCondition: "normal", sleepQuality: 4, legFreshness: "normal", motivation: 4 },
+    checkInRecorded: true,
+    referenceDate: "2026-08-10T21:15:00Z",
+  });
+
+  assert.equal(report.completion.plannedMode, "endurance");
+  assert.equal(report.completion.status, "harder");
+  assert.match(report.completion.headline, /exceeded/i);
+  assert.match(report.weeklyPlan[1].purpose, /Protect recovery/i);
 });

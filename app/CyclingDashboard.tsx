@@ -328,6 +328,29 @@ const completedTrainingOnDate = (rides: readonly Ride[], reference: Date): Compl
     maximumIntensityFactor: Math.max(0, ...matching.map((ride) => ride.intensityFactor)),
   };
 };
+type TrainingLoadSnapshot = { acuteLoad: number; weeklyBaseline: number; ratio: number | null; latestHardRide: Ride | null };
+const trainingLoadSnapshot = (rides: readonly Ride[], reference: Date, includeReferenceDay = true): TrainingLoadSnapshot => {
+  const referenceMs = reference.getTime();
+  const referenceKey = localDateKey(reference);
+  const eligible = rides.filter((ride) => {
+    const startedAt = new Date(rideStartedAt(ride));
+    return Number.isFinite(startedAt.getTime()) && startedAt.getTime() <= referenceMs && (includeReferenceDay || localDateKey(startedAt) !== referenceKey);
+  });
+  const within = (days: number) => eligible.filter((ride) => Date.parse(rideStartedAt(ride)) >= referenceMs - (days * 86_400_000));
+  const acute = within(7);
+  const recent = within(28);
+  const acuteLoad = acute.reduce((sum, ride) => sum + Math.max(0, ride.trainingLoad), 0);
+  const weeklyBaseline = recent.reduce((sum, ride) => sum + Math.max(0, ride.trainingLoad), 0) / 4;
+  const spanDays = recent.length > 1 ? (Math.max(...recent.map((ride) => Date.parse(rideStartedAt(ride)))) - Math.min(...recent.map((ride) => Date.parse(rideStartedAt(ride))))) / 86_400_000 : 0;
+  const latestHardRide = eligible.filter(isObjectivelyHardRide).sort((a, b) => Date.parse(rideStartedAt(b)) - Date.parse(rideStartedAt(a)))[0] ?? null;
+  return {
+    acuteLoad,
+    weeklyBaseline,
+    ratio: recent.length >= 4 && spanDays >= 14 && weeklyBaseline > 0 ? acuteLoad / weeklyBaseline : null,
+    latestHardRide,
+  };
+};
+
 
 type SavedRideRow = {
   ride: {
@@ -1153,7 +1176,20 @@ export default function CyclingDashboard() {
       todayIntensityFactor: todayTraining.maximumIntensityFactor,
       todayMovingTimeSeconds: todayTraining.movingTimeSeconds,
     });
-    const coachReport = buildCoachReport({ rides: rides.map(coachAnalyticsRide), readinessScore: snapshotReadiness.score, subjective: recovery, checkInRecorded: recoverySaveState === "saved", referenceDate: generatedAt });
+    const preRideLoad = trainingLoadSnapshot(rides, generatedAt, false);
+    const preRideReadiness = calculateReadiness({
+      hoursSinceLastHardRide: elapsedHoursSince(preRideLoad.latestHardRide ? rideStartedAt(preRideLoad.latestHardRide) : null, referenceMs),
+      acuteChronicRatio: preRideLoad.ratio,
+      subjective: recovery,
+    });
+    const coachReport = buildCoachReport({
+      rides: rides.map(coachAnalyticsRide),
+      readinessScore: snapshotReadiness.score,
+      preRideReadinessScore: preRideReadiness.score,
+      subjective: recovery,
+      checkInRecorded: recoverySaveState === "saved",
+      referenceDate: generatedAt,
+    });
 
     const markdown = buildCyclingMarkdown(exportRides, {
       ftpWatts: currentFtp,
@@ -1726,9 +1762,12 @@ function PerformanceDetails({ rides, currentFtp }: { rides: Ride[]; currentFtp: 
   });
   const acuteRides = withinDays(7);
   const load7 = acuteRides.reduce((sum, ride) => sum + ride.trainingLoad, 0);
-  const load28 = withinDays(28).reduce((sum, ride) => sum + ride.trainingLoad, 0) / 4;
+  const baselineRides = withinDays(28);
+  const load28 = baselineRides.reduce((sum, ride) => sum + ride.trainingLoad, 0) / 4;
   const load42 = withinDays(42).reduce((sum, ride) => sum + ride.trainingLoad, 0) / 6;
-  const acuteChronicRatio = load28 > 0 ? load7 / load28 : null;
+  const baselineSpanDays = baselineRides.length > 1 ? (Math.max(...baselineRides.map((ride) => Date.parse(ride.date))) - Math.min(...baselineRides.map((ride) => Date.parse(ride.date)))) / dayMs : 0;
+  const baselineReady = baselineRides.length >= 4 && baselineSpanDays >= 14 && load28 > 0;
+  const acuteChronicRatio = baselineReady ? load7 / load28 : null;
   const routeComparison = buildComparableRouteCohorts(rides.map((ride) => ({
     ...ride,
     environment: ride.environment ?? (ride.indoor ? "indoor" : "outdoor"),
@@ -1757,7 +1796,15 @@ function PerformanceDetails({ rides, currentFtp }: { rides: Ride[]; currentFtp: 
   const volumeHours = acuteRides.reduce((sum, ride) => sum + ride.movingTimeSeconds, 0) / 3600;
   const volumeDistance = acuteRides.reduce((sum, ride) => sum + ride.distanceMiles, 0);
   const volumeElevation = acuteRides.reduce((sum, ride) => sum + ride.elevationFeet, 0);
-  const loadStatus = acuteChronicRatio !== null && acuteChronicRatio > 1.5 ? "Review recent spike" : "Building steadily";
+  const loadStatus = acuteChronicRatio === null
+    ? "Baseline not ready"
+    : acuteChronicRatio < 0.8
+      ? "Below recent baseline"
+      : acuteChronicRatio <= 1.2
+        ? "Near recent baseline"
+        : acuteChronicRatio <= 1.3
+          ? "Moderately above baseline"
+          : "Review recent increase";
   const driftLabel = !latestBenchmark?.decouplingEligible || latestBenchmark?.decoupling === null || latestBenchmark?.decoupling === undefined
     ? "Not suitable for interpretation"
     : latestBenchmark.decoupling < 3 ? "Excellent durability" : latestBenchmark.decoupling <= 5 ? "Good durability" : latestBenchmark.decoupling <= 8 ? "Moderate drift" : "Significant drift";
@@ -1775,9 +1822,9 @@ function PerformanceDetails({ rides, currentFtp }: { rides: Ride[]; currentFtp: 
       </section>
 
       <section className="phase-kpis">
-        <MetricCard label="Acute load" value={Math.round(load7).toString()} unit="7 days" change={`${acuteRides.length} recent rides`} tone="lime" />
-        <MetricCard label="Chronic load" value={Math.round(load28).toString()} unit="28d weekly avg" change={`${Math.round(load42)} pts · 42d avg`} tone="cream" />
-        <MetricCard label="Load ratio" value={acuteChronicRatio?.toFixed(2) ?? "—"} unit="acute / chronic" change={loadStatus} tone="coral" />
+        <MetricCard label="7-day load" value={Math.round(load7).toString()} unit="recent total" change={`${acuteRides.length} recent rides`} tone="lime" />
+        <MetricCard label="28-day weekly baseline" value={baselineReady ? Math.round(load28).toString() : "—"} unit="weekly average" change={baselineReady ? `${Math.round(load42)} pts · 42d average` : "Needs 4 rides across 14 days"} tone="cream" />
+        <MetricCard label="Load comparison" value={acuteChronicRatio === null ? "—" : `${acuteChronicRatio.toFixed(2)}×`} unit="7d ÷ baseline" change={loadStatus} tone="coral" />
         <MetricCard label="Benchmarks" value={benchmarkRides.length.toString()} unit="eligible rides" change={benchmarkCohort.trendReady ? `Trend ready · ${groupedRoutes.length} route cohorts` : `${benchmarkRides.length} of ${ZONE2_BENCHMARK_PROTOCOL.minimumTrendRides} needed · ${groupedRoutes.length} route cohorts`} tone="sky" />
       </section>
 
@@ -1842,9 +1889,10 @@ function PerformanceDetails({ rides, currentFtp }: { rides: Ride[]; currentFtp: 
       </section>
 
       <section className="workload-card panel full-width">
-        <div className="section-heading"><div><span className="eyebrow">Weekly volume</span><h2>Load with context</h2></div><span className={`load-flag ${acuteChronicRatio !== null && acuteChronicRatio > 1.5 ? "alert" : ""}`}>{loadStatus}</span></div>
-        <div className="workload-grid"><Stat label="Hours" value={volumeHours.toFixed(1)} /><Stat label="Distance" value={volumeDistance.toFixed(1)} unit="mi" /><Stat label="Elevation" value={Math.round(volumeElevation).toLocaleString()} unit="ft" /><Stat label="Training load" value={Math.round(load7).toString()} unit="pts" /><Stat label="Hard sessions" value={acuteRides.filter((ride) => ride.type === "Tempo" || ride.type === "Threshold").length.toString()} /></div>
-        <p className="chart-note"><i /> The ratio flags abrupt workload changes for review; it is not presented as an exact injury threshold.</p>
+        <div className="section-heading"><div><span className="eyebrow">Weekly volume</span><h2>Load with context</h2></div><span className={`load-flag ${acuteChronicRatio !== null && acuteChronicRatio > 1.3 ? "alert" : ""}`}>{loadStatus}</span></div>
+        <div className="workload-equation" aria-label="Seven-day load divided by the 28-day weekly baseline"><article><span>Last 7 days</span><strong>{Math.round(load7)}</strong><small>total load</small></article><b>÷</b><article><span>28-day weekly baseline</span><strong>{baselineReady ? Math.round(load28) : "—"}</strong><small>28-day total ÷ 4</small></article><b>=</b><article className="workload-result"><span>Current comparison</span><strong>{acuteChronicRatio === null ? "—" : `${acuteChronicRatio.toFixed(2)}×`}</strong><small>{loadStatus}</small></article></div>
+        <div className="workload-grid"><Stat label="Hours" value={volumeHours.toFixed(1)} /><Stat label="Distance" value={volumeDistance.toFixed(1)} unit="mi" /><Stat label="Elevation" value={Math.round(volumeElevation).toLocaleString()} unit="ft" /><Stat label="7-day load" value={Math.round(load7).toString()} unit="pts" /><Stat label="Hard sessions" value={acuteRides.filter((ride) => ride.type === "Tempo" || ride.type === "Threshold").length.toString()} /></div>
+        <p className="chart-note"><i /> A value of 1.00 means the last seven days match your recent weekly average. This is a workload-change review signal, not an injury prediction.</p>
       </section>
     </div>
   );
@@ -2193,9 +2241,16 @@ function PlanToday({ rides, recovery, setRecovery, recoverySaveState, saveRecove
     todayIntensityFactor: todayTraining.maximumIntensityFactor,
     todayMovingTimeSeconds: todayTraining.movingTimeSeconds,
   });
+  const preRideLoad = trainingLoadSnapshot(rides, referenceDate, false);
+  const preRideReadiness = calculateReadiness({
+    hoursSinceLastHardRide: elapsedHoursSince(preRideLoad.latestHardRide ? rideStartedAt(preRideLoad.latestHardRide) : null, referenceMs),
+    acuteChronicRatio: preRideLoad.ratio,
+    subjective: recovery,
+  });
   const coach = buildCoachReport({
     rides: rides.map(coachAnalyticsRide),
     readinessScore: readiness.score,
+    preRideReadinessScore: preRideReadiness.score,
     subjective: recovery,
     checkInRecorded: recoverySaveState === "saved",
     referenceDate,
@@ -2217,6 +2272,16 @@ function PlanToday({ rides, recovery, setRecovery, recoverySaveState, saveRecove
   const vo2Status = vo2?.status === "trend_ready" ? "trend ready" : vo2?.status === "provisional" ? "provisional" : "needs 5 min power";
   const change = (current: number, previous: number, suffix = "") => previous ? `${current >= previous ? "+" : ""}${(current - previous).toFixed(1)}${suffix}` : "—";
   const projectionDate = (date: string | null) => date ? new Date(`${date}T12:00:00Z`).toLocaleDateString("en-US", { month: "short", year: "numeric", timeZone: "UTC" }) : "—";
+  const coachModeName = (mode: typeof coach.mode | null) => mode === null ? "No ride detected" : mode === "tempo" ? "Quality / tempo" : mode === "endurance" ? "Zone 2 / endurance" : mode[0].toUpperCase() + mode.slice(1);
+  const coachLoadStatus = coach.evidenceSummary.acuteChronicRatio === null
+    ? "Baseline not ready"
+    : coach.evidenceSummary.acuteChronicRatio < 0.8
+      ? "Below recent baseline"
+      : coach.evidenceSummary.acuteChronicRatio <= 1.2
+        ? "Near recent baseline"
+        : coach.evidenceSummary.acuteChronicRatio <= 1.3
+          ? "Moderately above baseline"
+          : "Elevated recent load";
 
   return (
     <div className="phase-three-layout">
@@ -2229,8 +2294,29 @@ function PlanToday({ rides, recovery, setRecovery, recoverySaveState, saveRecove
 
       <RecoveryCheckIn recovery={recovery} setRecovery={setRecovery} recoverySaveState={recoverySaveState} saveRecovery={saveRecovery} readiness={readiness} />
 
+      <section className={`coach-completion panel full-width completion-${coach.completion.status}`}>
+        <div className="section-heading"><div><span className="eyebrow">Today’s feedback loop</span><h2>{coach.completion.headline}</h2><p>{coach.completion.detail}</p></div><span className={`completion-badge ${coach.completion.status}`}>{coach.completion.status === "not_started" ? "awaiting ride" : coach.completion.status}</span></div>
+        <div className="coach-completion-grid">
+          <article><span>Inferred pre-ride plan</span><strong>{coachModeName(coach.completion.plannedMode)}</strong><small>Current saved check-in + pre-ride history</small></article>
+          <b>→</b>
+          <article><span>Completed today</span><strong>{coachModeName(coach.completion.actualMode)}</strong><small>{coach.completion.completedRideCount ? `${coach.completion.completedMinutes} min · ${coach.completion.completedLoad} load` : "Import or sync today’s ride"}</small></article>
+          <b>→</b>
+          <article className="completion-result"><span>Plan response</span><strong>{coach.completion.status === "harder" ? "Protect recovery" : coach.completion.status === "matched" ? "Absorb the work" : coach.completion.status === "lighter" ? "Reassess; don’t chase load" : "Updates after your ride"}</strong><small>Tomorrow is regenerated from the completed load</small></article>
+        </div>
+        <p className="chart-note"><i /> The pre-ride plan is reconstructed because older daily recommendations were not stored. It uses today’s saved check-in and excludes today’s rides from the training history.</p>
+      </section>
+
+
       <section className={`coach-reasoning panel full-width state-${coach.state}`}>
         <div className="section-heading"><div><span className="eyebrow">Why this choice</span><h2>Every input stays visible</h2><p>The coach consumes existing analytics; it does not invent new fitness metrics.</p></div><span className={`confidence-badge confidence-${coach.confidence}`}>{coach.confidence} confidence</span></div>
+        <div className="coach-load-equation" aria-label="Coach workload calculation">
+          <article><span>Last 7 days</span><strong>{coach.evidenceSummary.acuteLoad}</strong><small>total load, including today</small></article>
+          <b>÷</b>
+          <article><span>28-day weekly baseline</span><strong>{coach.evidenceSummary.chronicWeeklyLoad || "—"}</strong><small>28-day total ÷ 4</small></article>
+          <b>=</b>
+          <article className="coach-load-result"><span>Workload comparison</span><strong>{coach.evidenceSummary.acuteChronicRatio === null ? "—" : `${coach.evidenceSummary.acuteChronicRatio.toFixed(2)}×`}</strong><small>{coachLoadStatus}</small></article>
+        </div>
+        <p className="coach-load-note">1.00 means the last seven days equal your recent weekly average. The comparison informs caution; it does not predict injury.</p>
         <div className="coach-reason-grid">
           <article><span>Supports the choice</span>{coach.positives.length ? coach.positives.map((reason) => <p key={reason}><i>+</i>{reason}</p>) : <p><i>·</i>No positive signal changed the plan.</p>}</article>
           <article><span>Cautions</span>{coach.cautions.length ? coach.cautions.map((reason) => <p key={reason}><i>−</i>{reason}</p>) : <p><i>·</i>No caution changed the plan.</p>}</article>

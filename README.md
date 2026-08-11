@@ -8,6 +8,10 @@ Coach Mode is a deterministic, evidence-gated recommendation engine rather than 
 
 Hard-session advice is withheld or downgraded when pain or illness is reported, the recovery check-in is missing, recent evidence is weak, two hard sessions already occurred in seven days, or recovery time is insufficient. Future days are deliberately low-confidence placeholders and are regenerated from current evidence instead of being treated as a rigid prescription.
 
+Workload is presented as an explicit comparison: total load from the last seven days divided by the 28-day total normalized to a weekly average. A stable baseline requires at least four rides spanning 14 days. The ratio is a review signal for sudden workload change, not an injury prediction.
+
+After a same-day ride is imported, Coach Mode compares its completed stimulus with an inferred pre-ride recommendation, marks it as matched, lighter, or harder, and regenerates tomorrow around the resulting load. The inference uses the current saved check-in and pre-ride history because older daily recommendations were not persisted.
+
 Trend claims use genuinely comparable Zone 2 rides: the same indoor/outdoor environment, non-low classification and data quality, usable power plus heart rate, and intensity within 0.05 IF of the cohort median. Two rides create a possible signal, three or four a likely signal, and an established trend requires at least five rides spanning three weeks. Outdoor trends remain capped because wind, traffic, surface, and drafting are not observed.
 
 Each ride exposes the actual record count received for every detailed signal and distinguishes it from recorded summaries, derived values, or unavailable data. Existing Strava streams are backfilled from their stored payloads. The Markdown exporter includes this provenance and a complete Coach Mode reasoning snapshot for later audit.
