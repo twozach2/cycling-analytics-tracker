@@ -6,7 +6,7 @@ export type RideMetricInput = {
   ftpWatts: number | null;
 };
 
-export type BodyCondition = "normal" | "mild_soreness" | "significant_soreness" | "pain_concern";
+export type BodyCondition = "normal" | "mild_soreness" | "significant_soreness" | "pain_concern" | "illness";
 
 export type PainLocation = "unspecified" | "knee" | "back" | "neck_shoulders" | "hands_wrists" | "hips" | "saddle_contact" | "other";
 
@@ -17,18 +17,21 @@ export type SubjectiveRecovery = {
   painLocation?: PainLocation;
   painSeverity?: number;
   motivation?: number;
+  illnessSeverity?: number;
 };
 
 export type ReadinessResult = {
   score: number;
   label: "Ready for hard work" | "Good to train" | "Moderate fatigue" | "Easy ride preferred" | "Rest / recovery recommended";
   tone: "green" | "yellow" | "orange" | "red";
+  postRideAdjusted: boolean;
+  adjustments: string[];
 };
 
 export type RecoveryRecommendation = {
   minimumHours: number;
   maximumHours: number;
-  status: "low fatigue" | "moderate fatigue" | "high fatigue" | "pain flag";
+  status: "low fatigue" | "moderate fatigue" | "high fatigue" | "pain flag" | "illness flag";
   nextSession: string;
   reasons: string[];
 };
@@ -67,9 +70,12 @@ export function calculateReadiness(input: {
   hoursSinceLastHardRide: number;
   acuteChronicRatio: number | null;
   subjective: SubjectiveRecovery;
+  todayTrainingLoad?: number;
+  todayIntensityFactor?: number;
+  todayMovingTimeSeconds?: number;
 }): ReadinessResult {
   const legScores = { fresh: 100, normal: 78, heavy: 45, dead: 10 } as const;
-  const bodyScores = { normal: 100, mild_soreness: 75, significant_soreness: 35, pain_concern: 70 } as const;
+  const bodyScores = { normal: 100, mild_soreness: 75, significant_soreness: 35, pain_concern: 70, illness: 25 } as const;
   const hoursScore = clamp((input.hoursSinceLastHardRide / 48) * 100);
   const loadScore = input.acuteChronicRatio === null
     ? 75
@@ -81,7 +87,13 @@ export function calculateReadiness(input: {
   const bodyCondition = input.subjective.bodyCondition ?? "normal";
   const bodyScore = bodyScores[bodyCondition];
   const painSeverity = bodyCondition === "pain_concern" ? clamp(input.subjective.painSeverity ?? 1, 1, 10) : 0;
+  const illnessSeverity = bodyCondition === "illness" ? clamp(input.subjective.illnessSeverity ?? 1, 1, 10) : 0;
   const motivationScore = clamp((((input.subjective.motivation ?? 3) - 1) / 4) * 100);
+  const todayTrainingLoad = Math.max(0, input.todayTrainingLoad ?? 0);
+  const todayIntensityFactor = Math.max(0, input.todayIntensityFactor ?? 0);
+  const todayMinutes = Math.max(0, (input.todayMovingTimeSeconds ?? 0) / 60);
+  const adjustments: string[] = [];
+
   let score = Math.round(
     (hoursScore * 0.25) +
     (loadScore * 0.20) +
@@ -93,12 +105,31 @@ export function calculateReadiness(input: {
   if (painSeverity >= 7) score = Math.min(score, 20);
   else if (painSeverity >= 5) score = Math.min(score, 39);
   else if (painSeverity >= 3) score = Math.min(score, 54);
+  if (illnessSeverity >= 7) score = Math.min(score, 15);
+  else if (illnessSeverity >= 4) score = Math.min(score, 30);
+  else if (illnessSeverity > 0) score = Math.min(score, 45);
 
-  if (score >= 85) return { score, label: "Ready for hard work", tone: "green" };
-  if (score >= 70) return { score, label: "Good to train", tone: "green" };
-  if (score >= 55) return { score, label: "Moderate fatigue", tone: "yellow" };
-  if (score >= 40) return { score, label: "Easy ride preferred", tone: "orange" };
-  return { score, label: "Rest / recovery recommended", tone: "red" };
+  if (todayTrainingLoad >= 60 || (todayIntensityFactor >= 0.8 && todayMinutes >= 30)) {
+    score = Math.min(score, 54);
+    adjustments.push(`Today's completed training was substantial: ${Math.round(todayTrainingLoad)} load, ${Math.round(todayMinutes)} minutes, max IF ${todayIntensityFactor.toFixed(2)}.`);
+  } else if (todayTrainingLoad >= 30 || (todayIntensityFactor >= 0.7 && todayMinutes >= 30)) {
+    score = Math.min(score, 69);
+    adjustments.push(`Today's completed training added meaningful load: ${Math.round(todayTrainingLoad)} load across ${Math.round(todayMinutes)} minutes.`);
+  } else if (todayTrainingLoad >= 15) {
+    score = Math.min(score, 79);
+    adjustments.push(`Today's completed easy training is included: ${Math.round(todayTrainingLoad)} load across ${Math.round(todayMinutes)} minutes.`);
+  }
+
+  const result = score >= 85
+    ? { label: "Ready for hard work" as const, tone: "green" as const }
+    : score >= 70
+      ? { label: "Good to train" as const, tone: "green" as const }
+      : score >= 55
+        ? { label: "Moderate fatigue" as const, tone: "yellow" as const }
+        : score >= 40
+          ? { label: "Easy ride preferred" as const, tone: "orange" as const }
+          : { label: "Rest / recovery recommended" as const, tone: "red" as const };
+  return { score, ...result, postRideAdjusted: adjustments.length > 0, adjustments };
 }
 
 export function elapsedHoursSince(activityStartedAt: string | null, referenceTimeMs = Date.now(), fallbackHours = 72) {
@@ -183,6 +214,21 @@ export function recommendRecovery(
   recent72HourLoad: number,
   subjective: SubjectiveRecovery = {},
 ): RecoveryRecommendation {
+  const illnessSeverity = subjective.bodyCondition === "illness" ? subjective.illnessSeverity ?? 1 : 0;
+  if (illnessSeverity > 0) {
+    return {
+      minimumHours: illnessSeverity >= 4 ? 24 : 12,
+      maximumHours: illnessSeverity >= 4 ? 72 : 36,
+      status: "illness flag",
+      nextSession: illnessSeverity >= 4
+        ? "Training guidance is withheld. Rest and follow appropriate medical guidance for concerning symptoms."
+        : "Skip intensity. Reassess symptoms before choosing any easy movement.",
+      reasons: [
+        `Illness symptoms reported at ${illnessSeverity}/10`,
+        "Illness is a safety guardrail rather than a training-load adjustment",
+      ],
+    };
+  }
   const painSeverity = subjective.bodyCondition === "pain_concern" ? subjective.painSeverity ?? 1 : 0;
   if (painSeverity >= 3) {
     const location = formatPainLocation(subjective.painLocation);

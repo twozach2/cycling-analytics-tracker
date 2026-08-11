@@ -1,0 +1,1 @@
+ALTER TABLE `activity_streams` ADD `stream_sample_counts_json` text DEFAULT '{}' NOT NULL;

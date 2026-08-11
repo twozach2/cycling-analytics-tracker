@@ -1,5 +1,9 @@
 import { ChangeEvent, DragEvent, useCallback, useEffect, useRef, useState } from "react";
 import { parseActivityFile, type DetectedActivity } from "@/lib/activity-parser";
+import { buildCadenceOverview, hasCadenceDistribution, type CadenceAnalyticsRide, type CadenceCohortSummary } from "@/lib/cadence";
+import { buildComparableRouteCohorts, buildZone2BenchmarkCohort, COMPARABILITY_VERSION, ZONE2_BENCHMARK_PROTOCOL, ZONE2_BENCHMARK_VERSION } from "@/lib/comparability";
+import { buildCoachReport, type CoachRide } from "@/lib/coach";
+import { assessRideDataQuality, type RideDataQuality } from "@/lib/data-quality";
 import {
   calculateReadiness,
   deriveRideMetrics,
@@ -9,8 +13,8 @@ import {
   type PainLocation,
   type SubjectiveRecovery,
 } from "@/lib/metrics";
-import { buildWeeklyPlan, projectFtpGoal, recommendWorkout } from "@/lib/phase3";
-import { AUTOMATIC_SYNC_INTERVAL_MS } from "@/lib/strava-sync";
+import { projectFtpGoal } from "@/lib/phase3";
+import { AUTOMATIC_SYNC_INTERVAL_MS, classifyRide, type ClassificationConfidence, type RideContext, type RideTrainingType } from "@/lib/strava-sync";
 import { buildCyclingMarkdown, cyclingMarkdownFilename, cyclingRideMarkdownFilename, METHOD_DEFINITIONS } from "@/lib/markdown-export";
 import { recommendZwiftRoutes, ROUTE_ESTIMATE_WATTS_PER_KG, ZWIFT_ROUTE_COUNT, ZWIFT_WORLDS } from "@/lib/zwift-routes";
 import type { ZwiftRotation } from "@/lib/zwift-world-rotation";
@@ -31,13 +35,20 @@ type Ride = {
   name: string;
   route: string;
   date: string;
+  startedAt?: string;
   dateLabel: string;
   dayLabel: string;
-  type: "Zone 2" | "Zone 2 benchmark" | "Recovery" | "Tempo" | "Threshold" | "Free ride";
+  type: RideTrainingType;
   source: "Strava" | "Zwift" | "Upload";
   indoor: boolean;
   environment?: RideEnvironment;
   workoutSubtype?: WorkoutSubtype;
+  context?: RideContext;
+  rideTypeSource?: string;
+  rideContextSource?: string;
+  classificationConfidence?: ClassificationConfidence;
+  classificationReason?: string;
+  classificationVersion?: string;
   distanceMiles: number;
   movingTimeSeconds: number;
   elevationFeet: number;
@@ -66,6 +77,7 @@ type Ride = {
   first15HeartRate?: number | null;
   final15HeartRate?: number | null;
   note: string;
+  dataQuality?: RideDataQuality;
 };
 
 const initialRides: Ride[] = [
@@ -103,9 +115,11 @@ const initialRides: Ride[] = [
     date: "2026-07-31",
     dateLabel: "Jul 31",
     dayLabel: "FRI",
-    type: "Zone 2 benchmark",
+    type: "Zone 2",
+    context: "benchmark",
     source: "Zwift",
     indoor: true,
+    environment: "virtual",
     distanceMiles: 17.8,
     movingTimeSeconds: 3600,
     elevationFeet: 282,
@@ -120,6 +134,9 @@ const initialRides: Ride[] = [
     intensityFactor: 0.68,
     powerHeartRateRatio: 0.821,
     decoupling: 2.7,
+    decouplingEligible: true,
+    decouplingEligibilityReason: "Eligible steady ride.",
+    stoppedPercent: 0,
     variabilityIndex: 1.02,
     cadenceStddev: 3.8,
     cadenceTargetPercent: 72,
@@ -191,9 +208,11 @@ const initialRides: Ride[] = [
     date: "2026-07-24",
     dateLabel: "Jul 24",
     dayLabel: "FRI",
-    type: "Zone 2 benchmark",
+    type: "Zone 2",
+    context: "benchmark",
     source: "Zwift",
     indoor: true,
+    environment: "virtual",
     distanceMiles: 17.3,
     movingTimeSeconds: 3600,
     elevationFeet: 279,
@@ -208,6 +227,9 @@ const initialRides: Ride[] = [
     intensityFactor: 0.68,
     powerHeartRateRatio: 0.803,
     decoupling: 4.8,
+    decouplingEligible: true,
+    decouplingEligibilityReason: "Eligible steady ride.",
+    stoppedPercent: 0,
     variabilityIndex: 1.03,
     cadenceStddev: 4.5,
     cadenceTargetPercent: 61,
@@ -230,7 +252,7 @@ const powerDuration = [
 
 const navItems: Array<{ id: View; label: string; glyph: string }> = [
   { id: "dashboard", label: "Dashboard", glyph: "01" },
-  { id: "plan", label: "Plan today", glyph: "02" },
+  { id: "plan", label: "Coach", glyph: "02" },
   { id: "rides", label: "Ride log", glyph: "03" },
   { id: "import", label: "Import", glyph: "04" },
   { id: "method", label: "Method", glyph: "05" },
@@ -293,6 +315,19 @@ const miles = (meters: number | null) =>
 const feet = (meters: number | null) =>
   meters === null ? 0 : Math.round(meters * 3.28084);
 const localDateKey = (date = new Date()) => `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
+const rideStartedAt = (ride: Ride) => ride.startedAt ?? `${ride.date}T12:00:00`;
+const isObjectivelyHardRide = (ride: Ride) => ["Tempo", "Sweet Spot", "Threshold", "VO2", "Sprint", "FTP Test"].includes(ride.type) || (ride.intensityFactor >= 0.8 && ride.movingTimeSeconds >= 30 * 60);
+type CompletedTraining = { rides: number; trainingLoad: number; movingTimeSeconds: number; maximumIntensityFactor: number };
+const completedTrainingOnDate = (rides: readonly Ride[], reference: Date): CompletedTraining => {
+  const key = localDateKey(reference);
+  const matching = rides.filter((ride) => { const date = new Date(rideStartedAt(ride)); return Number.isFinite(date.getTime()) && localDateKey(date) === key; });
+  return {
+    rides: matching.length,
+    trainingLoad: Math.round(matching.reduce((sum, ride) => sum + Math.max(0, ride.trainingLoad), 0)),
+    movingTimeSeconds: matching.reduce((sum, ride) => sum + Math.max(0, ride.movingTimeSeconds), 0),
+    maximumIntensityFactor: Math.max(0, ...matching.map((ride) => ride.intensityFactor)),
+  };
+};
 
 type SavedRideRow = {
   ride: {
@@ -301,6 +336,12 @@ type SavedRideRow = {
     name: string;
     startedAt: string;
     rideType: string;
+    rideTypeSource: string;
+    rideContext: RideContext;
+    rideContextSource: string;
+    classificationConfidence: ClassificationConfidence;
+    classificationReason: string;
+    classificationVersion: string;
     indoor: boolean;
     environment: RideEnvironment;
     workoutSubtype: WorkoutSubtype;
@@ -315,6 +356,7 @@ type SavedRideRow = {
     averagePowerWatts: number | null;
     maximumPowerWatts: number | null;
     normalizedPowerWatts: number | null;
+    normalizedPowerSource: string | null;
     ftpAtRideWatts: number | null;
     ftpSnapshotSource: string | null;
     notes: string;
@@ -322,7 +364,9 @@ type SavedRideRow = {
   metrics: {
     powerHeartRateRatio: number | null;
     intensityFactor: number | null;
+    intensityIsEstimated: boolean;
     trainingLoad: number | null;
+    trainingLoadIsEstimated: boolean;
     variabilityIndex: number | null;
     aerobicDecouplingPercent: number | null;
     decouplingEligible: boolean;
@@ -335,33 +379,122 @@ type SavedRideRow = {
     cadenceHighPercent: number | null;
     first15HeartRateBpm: number | null;
     final15HeartRateBpm: number | null;
+    algorithmVersion: string;
+    dataQuality: "high" | "medium" | "low";
+  } | null;
+
+  stream: {
+    sampleCount: number;
+    availableStreamsJson: string;
+    streamSampleCountsJson: string;
+    encoding: string;
+    startedAt: string | null;
+    endedAt: string | null;
+  } | null;
+  sourceFile: {
+    filename: string;
+    fileType: string;
   } | null;
 };
 
-const rideTypes = ["Zone 2", "Zone 2 benchmark", "Recovery", "Tempo", "Threshold", "Free ride"] as const;
+const rideTypes = ["Zone 2", "Recovery", "Tempo", "Sweet Spot", "Threshold", "VO2", "Sprint", "FTP Test", "Free ride"] as const satisfies readonly RideTrainingType[];
+const rideContexts: Array<{ value: RideContext; label: string }> = [
+  { value: "ordinary", label: "Ordinary ride" },
+  { value: "benchmark", label: "Controlled benchmark" },
+  { value: "structured_workout", label: "Structured workout" },
+  { value: "race", label: "Race" },
+  { value: "group_ride", label: "Group ride" },
+];
+const contextLabel = (context: RideContext | undefined) => rideContexts.find((option) => option.value === context)?.label ?? "Ordinary ride";
 const environmentLabel = (environment: RideEnvironment | undefined, indoor = false) => environment === "virtual" ? "Virtual / Indoor" : environment === "indoor" || (environment === undefined && indoor) ? "Indoor" : "Outdoor";
 const workoutSubtypeLabel = (subtype: WorkoutSubtype | undefined) => subtype === "trainer_workout" ? "Trainer Workout" : subtype === "race" ? "Race" : null;
 const ftpSnapshotLabel = (source: string | null | undefined) => source === "ftp_history" ? "dated FTP history" : source === "current_at_import" ? "current FTP when imported" : source === "legacy_import" ? "original stored snapshot" : "stored ride snapshot";
+const cadenceAnalyticsRide = (ride: Ride): CadenceAnalyticsRide => ({
+  id: ride.id,
+  date: ride.date,
+  environment: ride.environment ?? (ride.indoor ? "indoor" : "outdoor"),
+  trainingType: ride.type,
+  averageCadence: ride.averageCadence,
+  cadenceStddev: ride.cadenceStddev,
+  cadenceAcceptablePercent: ride.cadenceAcceptablePercent,
+});
+const qualityForRide = (ride: Ride) => ride.dataQuality ?? assessRideDataQuality({
+  source: ride.source === "Strava" ? "strava_export" : ride.source === "Zwift" ? "zwift" : "manual",
+  movingTimeSeconds: ride.movingTimeSeconds,
+  averagePowerWatts: ride.averagePower,
+  averageHeartRateBpm: ride.averageHeartRate,
+  averageCadenceRpm: ride.averageCadence,
+  distanceMeters: ride.distanceMiles * 1609.344,
+  elevationGainMeters: ride.elevationFeet / 3.28084,
+  normalizedPowerSource: ride.normalizedPower ? "recorded" : "unavailable",
+  intensityIsEstimated: ride.normalizedPower === null,
+  trainingLoadIsEstimated: ride.normalizedPower === null,
+});
+const coachAnalyticsRide = (ride: Ride): CoachRide => ({
+  id: ride.id,
+  name: ride.name,
+  date: rideStartedAt(ride),
+  trainingType: ride.type,
+  context: ride.context ?? "ordinary",
+  environment: ride.environment ?? (ride.indoor ? "indoor" : "outdoor"),
+  movingTimeSeconds: ride.movingTimeSeconds,
+  trainingLoad: ride.trainingLoad,
+  intensityFactor: ride.intensityFactor,
+  averagePower: ride.averagePower,
+  averageHeartRate: ride.averageHeartRate,
+  powerHeartRateRatio: ride.powerHeartRateRatio,
+  classificationConfidence: ride.classificationConfidence ?? "low",
+  dataQualityLevel: qualityForRide(ride).level,
+});
 
-function mapSavedRide({ ride, metrics }: SavedRideRow): Ride {
+
+function mapSavedRide({ ride, metrics, stream, sourceFile }: SavedRideRow): Ride {
   const startedAt = new Date(ride.startedAt);
   const safeDate = Number.isNaN(startedAt.getTime()) ? new Date() : startedAt;
-  const type = rideTypes.includes(ride.rideType as (typeof rideTypes)[number])
-    ? ride.rideType as Ride["type"]
+  const normalizedRideType = ride.rideType === "Zone 2 benchmark" ? "Zone 2" : ride.rideType;
+  const type = rideTypes.includes(normalizedRideType as (typeof rideTypes)[number])
+    ? normalizedRideType as Ride["type"]
     : "Free ride";
   const source: Ride["source"] = ride.source === "zwift" ? "Zwift" : ride.source === "strava_export" ? "Strava" : "Upload";
   const sourceLabel = ride.source === "fit" ? "FIT upload" : ride.source === "tcx" ? "TCX upload" : ride.source === "gpx" ? "GPX upload" : "Imported activity";
+  const dataQuality = assessRideDataQuality({
+    source: ride.source,
+    sourceFilename: sourceFile?.filename,
+    sourceFileType: sourceFile?.fileType,
+    sampleCount: stream?.sampleCount,
+    availableStreams: stream?.availableStreamsJson,
+    streamSampleCounts: stream?.streamSampleCountsJson,
+    movingTimeSeconds: ride.movingTimeS ?? 0,
+    averagePowerWatts: ride.averagePowerWatts,
+    averageHeartRateBpm: ride.averageHeartRateBpm,
+    averageCadenceRpm: ride.averageCadenceRpm,
+    distanceMeters: ride.distanceM,
+    elevationGainMeters: ride.elevationGainM,
+    normalizedPowerSource: ride.normalizedPowerSource,
+    intensityIsEstimated: metrics?.intensityIsEstimated,
+    trainingLoadIsEstimated: metrics?.trainingLoadIsEstimated,
+    storedDataQuality: metrics?.dataQuality,
+    metricsAlgorithmVersion: metrics?.algorithmVersion,
+  });
+
 
   return {
     id: ride.id,
     name: ride.name,
     route: ride.routeName ?? sourceLabel,
     date: safeDate.toISOString().slice(0, 10),
+    startedAt: ride.startedAt,
     dateLabel: safeDate.toLocaleDateString("en-US", { month: "short", day: "numeric" }),
     dayLabel: safeDate.toLocaleDateString("en-US", { weekday: "short" }).toUpperCase(),
     type,
     source,
     indoor: ride.indoor,
+    context: ride.rideContext ?? (ride.rideType === "Zone 2 benchmark" ? "benchmark" : "ordinary"),
+    rideTypeSource: ride.rideTypeSource,
+    rideContextSource: ride.rideContextSource,
+    classificationConfidence: ride.classificationConfidence,
+    classificationReason: ride.classificationReason,
+    classificationVersion: ride.classificationVersion,
     environment: ride.environment ?? (ride.indoor ? "indoor" : "outdoor"),
     workoutSubtype: ride.workoutSubtype,
     distanceMiles: miles(ride.distanceM),
@@ -390,6 +523,7 @@ function mapSavedRide({ ride, metrics }: SavedRideRow): Ride {
     cadenceLowPercent: metrics?.cadenceLowPercent ?? null,
     cadenceHighPercent: metrics?.cadenceHighPercent ?? null,
     first15HeartRate: metrics?.first15HeartRateBpm ?? null,
+    dataQuality,
     final15HeartRate: metrics?.final15HeartRateBpm ?? null,
     note: ride.notes || (ride.normalizedPowerWatts === null
       ? "Saved from the original activity file. Intensity and load are estimated where recorded power data is unavailable."
@@ -419,6 +553,7 @@ export default function CyclingDashboard() {
   const [syncNote, setSyncNote] = useState("");
   const [showStravaSettings, setShowStravaSettings] = useState(false);
   const [rideTypeSavingId, setRideTypeSavingId] = useState<string | null>(null);
+  const [isReclassifying, setIsReclassifying] = useState(false);
   const [rideFilter, setRideFilter] = useState(() => ["All rides", ...rideTypes].includes(initialPreferences.rideFilter ?? "") ? initialPreferences.rideFilter as string : "All rides");
   const [search, setSearch] = useState(() => initialPreferences.search ?? "");
   const [recovery, setRecovery] = useState<SubjectiveRecovery>({
@@ -427,6 +562,7 @@ export default function CyclingDashboard() {
     bodyCondition: "normal",
     painLocation: "unspecified",
     painSeverity: 0,
+    illnessSeverity: 0,
     motivation: 3,
   });
   const [recoverySaveState, setRecoverySaveState] = useState<"idle" | "saving" | "saved" | "error">("idle");
@@ -438,6 +574,7 @@ export default function CyclingDashboard() {
   const [isSaving, setIsSaving] = useState(false);
   const [pendingFile, setPendingFile] = useState<File | null>(null);
   const [rideType, setRideType] = useState<Ride["type"]>("Free ride");
+  const [importContext, setImportContext] = useState<RideContext>("ordinary");
   const [routeName, setRouteName] = useState("");
   const [importEnvironment, setImportEnvironment] = useState<RideEnvironment>("outdoor");
   const [importWorkoutSubtype, setImportWorkoutSubtype] = useState<WorkoutSubtype>(null);
@@ -597,7 +734,7 @@ export default function CyclingDashboard() {
   useEffect(() => {
     let active = true;
     void fetch("/api/recovery", { cache: "no-store" })
-      .then(async (response) => ({ response, payload: await response.json() as { recovery?: { sleepQuality?: number; legFreshness?: SubjectiveRecovery["legFreshness"]; motivation?: number; bodyCondition?: BodyCondition | null; painLocation?: PainLocation | null; painSeverity?: number | null; generalSoreness?: number; kneePain?: number } | null } }))
+      .then(async (response) => ({ response, payload: await response.json() as { recovery?: { sleepQuality?: number; legFreshness?: SubjectiveRecovery["legFreshness"]; motivation?: number; bodyCondition?: BodyCondition | null; painLocation?: PainLocation | null; painSeverity?: number | null; illnessSeverity?: number | null; generalSoreness?: number; kneePain?: number } | null } }))
       .then(({ response, payload }) => {
         if (!active || !response.ok || !payload.recovery) return;
         const legacyBodyCondition: BodyCondition = (payload.recovery.kneePain ?? 0) > 0
@@ -618,6 +755,9 @@ export default function CyclingDashboard() {
             : "unspecified",
           painSeverity: bodyCondition === "pain_concern"
             ? payload.recovery.painSeverity ?? payload.recovery.kneePain ?? 1
+            : 0,
+          illnessSeverity: bodyCondition === "illness"
+            ? payload.recovery.illnessSeverity ?? 1
             : 0,
         });
         setRecoverySaveState("saved");
@@ -657,7 +797,7 @@ export default function CyclingDashboard() {
   const changeRideType = async (ride: Ride, nextType: Ride["type"]) => {
     if (ride.type === nextType) return;
     if (dataMode !== "saved") {
-      setRides((current) => current.map((entry) => entry.id === ride.id ? { ...entry, type: nextType } : entry));
+      setRides((current) => current.map((entry) => entry.id === ride.id ? { ...entry, type: nextType, rideTypeSource: "manual", classificationConfidence: "high", classificationReason: "Manually classified in the demo preview.", classificationVersion: "manual-v1" } : entry));
       setSyncNote("Demo ride type changed · Not saved");
       return;
     }
@@ -670,10 +810,42 @@ export default function CyclingDashboard() {
       });
       const payload = await response.json() as { error?: string };
       if (!response.ok) throw new Error(payload.error ?? "Ride type could not be saved.");
-      setRides((current) => current.map((entry) => entry.id === ride.id ? { ...entry, type: nextType } : entry));
+      setRides((current) => current.map((entry) => entry.id === ride.id ? { ...entry, type: nextType, rideTypeSource: "manual", classificationConfidence: "high", classificationReason: "Manually classified by the rider.", classificationVersion: "manual-v1" } : entry));
       setSyncNote(`${ride.name} · ${nextType} saved`);
     } catch (error) {
       setSyncNote(error instanceof Error ? error.message : "Ride type could not be saved.");
+    } finally {
+      setRideTypeSavingId(null);
+    }
+  };
+
+  const changeRideContext = async (ride: Ride, nextContext: RideContext) => {
+    if (ride.context === nextContext) return;
+    if (dataMode !== "saved") {
+      setRides((current) => current.map((entry) => entry.id === ride.id ? {
+        ...entry,
+        context: nextContext,
+        rideContextSource: "manual",
+        classificationConfidence: "high",
+        classificationReason: "Manually classified in the demo preview.",
+        classificationVersion: "manual-v1",
+      } : entry));
+      setSyncNote("Demo context changed - not saved");
+      return;
+    }
+    setRideTypeSavingId(ride.id);
+    try {
+      const response = await fetch("/api/rides", {
+        method: "PATCH",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ rideId: ride.id, rideContext: nextContext }),
+      });
+      const payload = await response.json() as { error?: string };
+      if (!response.ok) throw new Error(payload.error ?? "Ride context could not be saved.");
+      setRides((current) => current.map((entry) => entry.id === ride.id ? { ...entry, context: nextContext, rideContextSource: "manual", classificationConfidence: "high", classificationReason: "Manually classified by the rider.", classificationVersion: "manual-v1" } : entry));
+      setSyncNote(`${ride.name} context saved`);
+    } catch (error) {
+      setSyncNote(error instanceof Error ? error.message : "Ride context could not be saved.");
     } finally {
       setRideTypeSavingId(null);
     }
@@ -687,6 +859,7 @@ export default function CyclingDashboard() {
     setImportName(file.name);
     setPendingFile(file);
     setRideType("Free ride");
+    setImportContext("ordinary");
     setRouteName(file.name.replace(/\.(fit|tcx|gpx)$/i, "").replace(/[_-]+/g, " "));
     setIsReading(true);
     try {
@@ -694,6 +867,16 @@ export default function CyclingDashboard() {
       setDetected(parsed);
       setImportEnvironment(parsed.environment);
       setImportWorkoutSubtype(parsed.workoutSubtype);
+      const classificationPower = parsed.normalizedPower ?? parsed.averagePower;
+      const automaticClassification = classifyRide({
+        name: parsed.name,
+        workoutSubtype: parsed.workoutSubtype,
+        intensityFactor: currentFtp && classificationPower ? classificationPower / currentFtp : null,
+        movingTimeSeconds: parsed.movingTimeSeconds,
+        variabilityIndex: parsed.variabilityIndex,
+      });
+      setRideType(automaticClassification.trainingType);
+      setImportContext(automaticClassification.context);
     } catch (error) {
       setImportError(error instanceof Error ? error.message : "The activity could not be read.");
     } finally {
@@ -715,7 +898,8 @@ export default function CyclingDashboard() {
     setImportName("morning-zone-2.tcx");
     setImportError("");
     setPendingFile(null);
-    setRideType("Zone 2 benchmark");
+    setRideType("Zone 2");
+    setImportContext("benchmark");
     setRouteName("Watopia · Flat Route");
     setImportEnvironment("virtual");
     setImportWorkoutSubtype(null);
@@ -751,6 +935,7 @@ export default function CyclingDashboard() {
         { durationSeconds: 3600, bestPowerWatts: 112 },
       ],
       sampleCount: 3672,
+      streamSampleCounts: { time: 3672, watts: 3672, heartrate: 3672, cadence: 3672, distance: 3672, altitude: 3672 },
       environment: "virtual",
       workoutSubtype: null,
       warnings: [],
@@ -765,6 +950,7 @@ export default function CyclingDashboard() {
     setRouteName("");
     setImportEnvironment("outdoor");
     setImportWorkoutSubtype(null);
+    setImportContext("ordinary");
     if (fileInput.current) fileInput.current.value = "";
   };
 
@@ -791,6 +977,12 @@ export default function CyclingDashboard() {
       dateLabel: date.toLocaleDateString("en-US", { month: "short", day: "numeric" }),
       dayLabel: date.toLocaleDateString("en-US", { weekday: "short" }).toUpperCase(),
       type: rideType,
+      context: importContext,
+      rideTypeSource: "manual",
+      rideContextSource: "manual",
+      classificationConfidence: "high",
+      classificationReason: "Training stimulus and context were selected during import.",
+      classificationVersion: "manual-v1",
       source: "Upload",
       indoor: importEnvironment !== "outdoor",
       environment: importEnvironment,
@@ -850,6 +1042,7 @@ export default function CyclingDashboard() {
             name: detected.name,
             startedAt: detected.startedAt ?? new Date().toISOString(),
             rideType,
+            rideContext: importContext,
             environment: importEnvironment,
             workoutSubtype: importWorkoutSubtype,
             routeName: routeName.trim() || null,
@@ -878,6 +1071,9 @@ export default function CyclingDashboard() {
             final15HeartRateBpm: detected.final15HeartRate,
             pairedSampleCount: detected.pairedSampleCount,
             pairedCoveragePercent: detected.pairedCoveragePercent,
+            sampleCount: detected.sampleCount,
+            streamSampleCounts: detected.streamSampleCounts,
+            availableStreams: Object.entries(detected.streamSampleCounts).filter(([, count]) => count > 0).map(([stream]) => stream),
             powerDuration: detected.powerDuration,
           }),
         });
@@ -915,12 +1111,55 @@ export default function CyclingDashboard() {
     }
   };
 
+  const reclassifyAutomaticRides = async () => {
+    if (dataMode !== "saved") {
+      setSyncNote("Automatic reclassification is available for saved rides.");
+      return;
+    }
+    setIsReclassifying(true);
+    try {
+      const response = await fetch("/api/rides", {
+        method: "PATCH",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ action: "reclassify_automatic" }),
+      });
+      const payload = await response.json() as { updated?: number; preserved?: number; error?: string };
+      if (!response.ok) throw new Error(payload.error ?? "Rides could not be reclassified.");
+      await refreshSavedRides();
+      setSyncNote(`${payload.updated ?? 0} automatic rides reclassified; ${payload.preserved ?? 0} manual rides preserved`);
+    } catch (error) {
+      setSyncNote(error instanceof Error ? error.message : "Rides could not be reclassified.");
+    } finally {
+      setIsReclassifying(false);
+    }
+  };
+
   const downloadMarkdown = (exportRides: readonly Ride[], filename: string, message: string, generatedAt = new Date()) => {
     if (currentFtp === null || currentWeightKg === null) return;
+    const referenceMs = generatedAt.getTime();
+    const ridesWithin = (days: number) => rides.filter((ride) => { const timestamp = Date.parse(rideStartedAt(ride)); return Number.isFinite(timestamp) && timestamp <= referenceMs && timestamp >= referenceMs - (days * 86_400_000); });
+    const loadWithin = (days: number) => ridesWithin(days).reduce((sum, ride) => sum + ride.trainingLoad, 0);
+    const acuteLoad = loadWithin(7);
+    const chronicWeeklyLoad = loadWithin(28) / 4;
+    const chronicRides = ridesWithin(28);
+    const chronicSpanDays = chronicRides.length > 1 ? (Math.max(...chronicRides.map((ride) => Date.parse(rideStartedAt(ride)))) - Math.min(...chronicRides.map((ride) => Date.parse(rideStartedAt(ride))))) / 86_400_000 : 0;
+    const todayTraining = completedTrainingOnDate(rides, generatedAt);
+    const latestHardRide = rides.filter(isObjectivelyHardRide).sort((a, b) => Date.parse(rideStartedAt(b)) - Date.parse(rideStartedAt(a)))[0];
+    const snapshotReadiness = calculateReadiness({
+      hoursSinceLastHardRide: elapsedHoursSince(latestHardRide ? rideStartedAt(latestHardRide) : null, referenceMs),
+      acuteChronicRatio: chronicRides.length >= 4 && chronicSpanDays >= 14 && chronicWeeklyLoad > 0 ? acuteLoad / chronicWeeklyLoad : null,
+      subjective: recovery,
+      todayTrainingLoad: todayTraining.trainingLoad,
+      todayIntensityFactor: todayTraining.maximumIntensityFactor,
+      todayMovingTimeSeconds: todayTraining.movingTimeSeconds,
+    });
+    const coachReport = buildCoachReport({ rides: rides.map(coachAnalyticsRide), readinessScore: snapshotReadiness.score, subjective: recovery, checkInRecorded: recoverySaveState === "saved", referenceDate: generatedAt });
+
     const markdown = buildCyclingMarkdown(exportRides, {
       ftpWatts: currentFtp,
       bodyWeightKg: currentWeightKg,
       dataMode,
+      coachReport,
     }, generatedAt);
     const url = URL.createObjectURL(new Blob(["\uFEFF", markdown], { type: "text/markdown;charset=utf-8" }));
     const link = document.createElement("a");
@@ -952,7 +1191,7 @@ export default function CyclingDashboard() {
 
   const pageMeta: Record<View, { eyebrow: string; title: string }> = {
     dashboard: { eyebrow: "Your training at a glance", title: "Ride with the trend." },
-    plan: { eyebrow: "Readiness + next steps", title: "Plan today" },
+    plan: { eyebrow: "Evidence-gated training guidance", title: "Coach Mode" },
     rides: { eyebrow: "Your complete history", title: "Ride log" },
     import: { eyebrow: "Files + connected sources", title: "Import" },
     method: { eyebrow: "Transparent calculations", title: "Method" },
@@ -1024,7 +1263,7 @@ export default function CyclingDashboard() {
         )}
 
         {view === "dashboard" && <div className="dashboard-stack">
-          <Overview selectedRide={selectedRide} rides={rides} openRide={openRide} exportRide={exportRideMarkdown} changeRideType={changeRideType} rideTypeSaving={rideTypeSavingId === selectedRide.id} setView={setView} isDemo={dataMode !== "saved"} currentFtp={currentFtp} />
+          <Overview selectedRide={selectedRide} rides={rides} openRide={openRide} exportRide={exportRideMarkdown} changeRideType={changeRideType} changeRideContext={changeRideContext} rideTypeSaving={rideTypeSavingId === selectedRide.id} setView={setView} isDemo={dataMode !== "saved"} currentFtp={currentFtp} />
           <details className="performance-drawer">
             <summary><span><strong>Performance details</strong><small>Route comparisons, benchmarks, cadence, and workload</small></span><i>+</i></summary>
             <PerformanceDetails rides={rides} currentFtp={currentFtp} />
@@ -1051,6 +1290,8 @@ export default function CyclingDashboard() {
             setSearch={setSearch}
             openRide={openRide}
             exportRide={exportRideMarkdown}
+            reclassifyAutomaticRides={reclassifyAutomaticRides}
+            isReclassifying={isReclassifying}
           />
         )}
         {view === "import" && (
@@ -1065,6 +1306,8 @@ export default function CyclingDashboard() {
               hasFile={pendingFile !== null}
               rideType={rideType}
               setRideType={setRideType}
+              rideContext={importContext}
+              setRideContext={setImportContext}
               routeName={routeName}
               setRouteName={setRouteName}
               environment={importEnvironment}
@@ -1184,12 +1427,13 @@ function RiderSetup({ initialFtp, initialWeightKg, onSaved }: {
   );
 }
 
-function Overview({ selectedRide, rides, openRide, exportRide, changeRideType, rideTypeSaving, setView, isDemo, currentFtp }: {
+function Overview({ selectedRide, rides, openRide, exportRide, changeRideType, changeRideContext, rideTypeSaving, setView, isDemo, currentFtp }: {
   selectedRide: Ride;
   rides: Ride[];
   openRide: (ride: Ride) => void;
   exportRide: (ride: Ride) => void;
   changeRideType: (ride: Ride, nextType: Ride["type"]) => Promise<void>;
+  changeRideContext: (ride: Ride, nextContext: RideContext) => Promise<void>;
   rideTypeSaving: boolean;
   setView: (view: View) => void;
   isDemo: boolean;
@@ -1234,6 +1478,8 @@ function Overview({ selectedRide, rides, openRide, exportRide, changeRideType, r
     { label: "Avg", watts: selectedRide.averagePower, best: selectedRide.averagePower },
   ];
   const powerScale = Math.max(100, ...selectedPowerData.map((entry) => entry.watts));
+  const classificationSource = selectedRide.rideTypeSource === "manual" || selectedRide.rideContextSource === "manual" ? "Manual override" : "Automatic";
+  const selectedQuality = qualityForRide(selectedRide);
 
   return (
     <div className="dashboard-grid">
@@ -1288,7 +1534,7 @@ function Overview({ selectedRide, rides, openRide, exportRide, changeRideType, r
       </section>
 
       <section className="ride-detail panel span-two">
-        <div className="section-heading"><div><span className="eyebrow">Selected ride · {selectedRide.dateLabel}</span><h2>{selectedRide.name}</h2><p>{selectedRide.route}</p></div><div className="ride-detail-actions"><span className="environment-tag">{environmentLabel(selectedRide.environment, selectedRide.indoor)}</span>{workoutSubtypeLabel(selectedRide.workoutSubtype) && <span className="workout-tag">{workoutSubtypeLabel(selectedRide.workoutSubtype)}</span>}<label className="ride-type-control"><span>{rideTypeSaving ? "Saving…" : "Ride type"}</span><select value={selectedRide.type} onChange={(event) => void changeRideType(selectedRide, event.target.value as Ride["type"])} disabled={rideTypeSaving} aria-label={`Ride type for ${selectedRide.name}`}>{rideTypes.map((type) => <option key={type}>{type}</option>)}</select></label><button className="ghost-button ride-export-button" type="button" onClick={() => exportRide(selectedRide)}>Export this ride <span aria-hidden="true">↓</span></button></div></div>
+        <div className="section-heading"><div><span className="eyebrow">Selected ride · {selectedRide.dateLabel}</span><h2>{selectedRide.name}</h2><p>{selectedRide.route}</p></div><div className="ride-detail-actions"><span className={`environment-tag environment-${selectedRide.environment ?? (selectedRide.indoor ? "indoor" : "outdoor")}`}>{environmentLabel(selectedRide.environment, selectedRide.indoor)}</span>{workoutSubtypeLabel(selectedRide.workoutSubtype) && <span className="workout-tag">{workoutSubtypeLabel(selectedRide.workoutSubtype)}</span>}<label className="ride-type-control"><span>{rideTypeSaving ? "Saving…" : "Ride type"}</span><select value={selectedRide.type} onChange={(event) => void changeRideType(selectedRide, event.target.value as Ride["type"])} disabled={rideTypeSaving} aria-label={`Ride type for ${selectedRide.name}`}>{rideTypes.map((type) => <option key={type}>{type}</option>)}</select></label><button className="ghost-button ride-export-button" type="button" onClick={() => exportRide(selectedRide)}>Export this ride <span aria-hidden="true">↓</span></button></div></div>
         <div className="ride-stats">
           <Stat label="Distance" value={selectedRide.distanceMiles.toFixed(1)} unit="mi" />
           <Stat label="Moving time" value={formatDuration(selectedRide.movingTimeSeconds)} />
@@ -1297,11 +1543,41 @@ function Overview({ selectedRide, rides, openRide, exportRide, changeRideType, r
           <Stat label="Cadence" value={String(selectedRide.averageCadence)} unit="rpm" />
           <Stat label="Load" value={String(selectedRide.trainingLoad)} unit="pts" />
         </div>
+        <div className="classification-panel">
+          <div className="classification-heading">
+            <div><span className="eyebrow">Classification evidence</span><strong>{classificationSource}</strong></div>
+            <span className={`confidence-badge confidence-${selectedRide.classificationConfidence ?? "low"}`}>{selectedRide.classificationConfidence ?? "low"} confidence</span>
+          </div>
+          <div className="classification-controls">
+            <label className="ride-type-control">
+              <span>{rideTypeSaving ? "Saving..." : "Ride context"}</span>
+              <select value={selectedRide.context ?? "ordinary"} onChange={(event) => void changeRideContext(selectedRide, event.target.value as RideContext)} disabled={rideTypeSaving} aria-label={`Ride context for ${selectedRide.name}`}>
+                {rideContexts.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
+              </select>
+            </label>
+            <span>{contextLabel(selectedRide.context)}</span>
+          </div>
+          <p>{selectedRide.classificationReason ?? "Demo classification. Saved rides include the evidence used by the current classifier."}</p>
+          <small>{selectedRide.classificationVersion ?? "demo"}</small>
+        </div>
+        <section className={`data-quality-panel quality-${selectedQuality.level}`} aria-label={`Data quality and provenance for ${selectedRide.name}`}>
+          <div className="data-quality-heading"><div><span className="eyebrow">Data quality + provenance</span><h3>{selectedQuality.label}</h3><p>{selectedQuality.sourceLabel}{selectedQuality.sourceFilename ? ` · ${selectedQuality.sourceFilename}` : ""}</p></div><span className={`confidence-badge confidence-${selectedQuality.level === "moderate" ? "moderate" : selectedQuality.level}`}>{selectedQuality.level} evidence</span></div>
+          <div className="quality-summary"><span><strong>{selectedQuality.sampleCount?.toLocaleString() ?? "Summary"}</strong><small>{selectedQuality.sampleCount ? "stored samples" : "ride-level values"}</small></span><span><strong>{selectedQuality.recordedStreamCount}/6</strong><small>detailed signals</small></span><span><strong>{selectedQuality.metricsAlgorithmVersion}</strong><small>metrics version</small></span></div>
+          <div className="signal-grid">{selectedQuality.signals.map((signal) => <div className={`signal-status status-${signal.status}`} key={signal.id} title={signal.detail}><span>{signal.label}</span><strong>{signal.status === "recorded_stream" ? signal.recordCount === null ? "Count unavailable" : `${signal.recordCount.toLocaleString()} records` : signal.status === "recorded_summary" ? "Ride summary" : "0 records"}</strong><small>{signal.status === "recorded_stream" ? "received samples" : signal.status === "recorded_summary" ? "no sample series" : "not received"}</small></div>)}</div>
+          <div className="metric-provenance"><span>Normalized power <strong>{selectedQuality.normalizedPowerStatus.replaceAll("_", " ")}</strong></span><span>Intensity <strong>{selectedQuality.intensityStatus.replaceAll("_", " ")}</strong></span><span>Training load <strong>{selectedQuality.trainingLoadStatus.replaceAll("_", " ")}</strong></span></div>
+          {selectedQuality.limitations.length > 0 && <details className="quality-limitations"><summary>{selectedQuality.limitations.length} limitations · why some analytics may be withheld</summary>{selectedQuality.limitations.map((limitation) => <p key={limitation}>{limitation}</p>)}</details>}
+          <small className="quality-version">{selectedQuality.version} · no inferred sample coverage</small>
+        </section>
+
         <div className="ride-analysis-grid">
           <div className="analysis-tile"><span>Intensity</span><strong>{selectedRide.intensityFactor.toFixed(2)} <small>IF</small></strong><p>{selectedRide.ftpAtRideWatts ? `FTP snapshot ${selectedRide.ftpAtRideWatts} W · ${ftpSnapshotLabel(selectedRide.ftpSnapshotSource)}` : "FTP at ride unavailable"}</p></div>
           <div className="analysis-tile"><span>Aerobic durability</span><strong>{selectedRide.decouplingEligible && selectedRide.decoupling !== null ? `${selectedRide.decoupling.toFixed(1)}%` : "Not suitable"} <small>{selectedRide.decouplingEligible ? "drift" : ""}</small></strong><p>{selectedRide.decouplingEligible ? selectedRide.decoupling! < 5 ? "Good durability" : "Moderate drift" : selectedRide.decouplingEligibilityReason ?? "Needs detailed power + heart-rate data"}</p></div>
           <div className="analysis-tile"><span>Power variability</span><strong>{selectedRide.variabilityIndex?.toFixed(2) ?? "—"} <small>VI</small></strong><p>{selectedRide.variabilityIndex && selectedRide.variabilityIndex <= 1.05 ? "Very steady pacing" : "Variable effort"}</p></div>
         </div>
+        <section className="selected-cadence-panel" aria-label={`Cadence distribution for ${selectedRide.name}`}>
+          <div className="selected-cadence-heading"><div><span className="eyebrow">Selected ride cadence</span><h3>Pedaling distribution</h3></div><span className="small-badge">{selectedRide.dateLabel}</span></div>
+          <CadenceDistributionPanel ride={selectedRide} />
+        </section>
         <blockquote>{selectedRide.note}</blockquote>
       </section>
 
@@ -1326,11 +1602,13 @@ function RecoveryCheckIn({ recovery, setRecovery, recoverySaveState, saveRecover
   readiness: ReturnType<typeof calculateReadiness>;
 }) {
   const bodyCondition = recovery.bodyCondition ?? "normal";
+  const illnessSeverity = bodyCondition === "illness" ? recovery.illnessSeverity ?? 1 : 0;
   const painSeverity = bodyCondition === "pain_concern" ? recovery.painSeverity ?? 1 : 0;
   const conditions: Array<{ value: BodyCondition; label: string; detail: string }> = [
     { value: "normal", label: "Normal", detail: "No meaningful soreness" },
     { value: "mild_soreness", label: "Mild", detail: "Sore or stiff, but moving well" },
     { value: "significant_soreness", label: "Significant", detail: "Soreness may limit training" },
+    { value: "illness", label: "Illness", detail: "Systemic or respiratory symptoms" },
     { value: "pain_concern", label: "Pain concern", detail: "Localized or injury-like pain" },
   ];
   const locations: Array<{ value: PainLocation; label: string }> = [
@@ -1345,7 +1623,7 @@ function RecoveryCheckIn({ recovery, setRecovery, recoverySaveState, saveRecover
   ];
   return (
     <section className="checkin-card panel">
-      <div className="section-heading compact"><div><span className="eyebrow">Morning check-in</span><h2>How are you feeling?</h2></div><span className={`readiness-score tone-${readiness.tone}`}>{readiness.score}</span></div>
+      <div className="section-heading compact"><div><span className="eyebrow">{readiness.postRideAdjusted ? "Post-ride readiness" : "Recovery check-in"}</span><h2>How are you feeling?</h2></div><span className={`readiness-score tone-${readiness.tone}`}>{readiness.score}</span></div>
       <span className="checkin-label">Leg freshness</span>
       <div className="segmented-control" role="group" aria-label="Leg freshness">
         {(["fresh", "normal", "heavy", "dead"] as const).map((value) => <button key={value} className={recovery.legFreshness === value ? "selected" : ""} onClick={() => setRecovery({ ...recovery, legFreshness: value })}>{value}</button>)}
@@ -1366,6 +1644,7 @@ function RecoveryCheckIn({ recovery, setRecovery, recoverySaveState, saveRecover
                 bodyCondition: condition.value,
                 painLocation: condition.value === "pain_concern" ? recovery.painLocation ?? "unspecified" : "unspecified",
                 painSeverity: condition.value === "pain_concern" ? Math.max(1, recovery.painSeverity ?? 0) : 0,
+                illnessSeverity: condition.value === "illness" ? Math.max(1, recovery.illnessSeverity ?? 0) : 0,
               })}
             >
               <strong>{condition.label}</strong>
@@ -1386,6 +1665,10 @@ function RecoveryCheckIn({ recovery, setRecovery, recoverySaveState, saveRecover
           <p className={`pain-guidance ${painSeverity >= 7 ? "urgent" : ""}`}>{painSeverity >= 7 ? "Do not train through severe, sharp, or worsening pain. Consider appropriate medical guidance." : painSeverity >= 5 ? "The plan will recommend rest and pain-free movement only." : painSeverity >= 3 ? "The plan will remove intensity and keep any riding easy and pain-free." : "A mild concern is noted without automatically stopping training."}</p>
         </div>
       )}
+      {bodyCondition === "illness" && (
+        <div className="pain-details illness-details"><div className="range-row compact"><span><strong>Symptom severity</strong><small>{illnessSeverity}/10</small></span><input aria-label="Illness symptom severity" type="range" min="1" max="10" value={illnessSeverity} onChange={(event) => setRecovery({ ...recovery, illnessSeverity: Number(event.target.value) })} /></div><p className={`pain-guidance ${illnessSeverity >= 4 ? "urgent" : ""}`}>{illnessSeverity >= 4 ? "Training guidance will be withheld. Rest and use appropriate medical guidance for concerning symptoms." : "Intensity will be removed. Reassess symptoms before any easy movement."}</p></div>
+      )}
+      {readiness.adjustments.map((reason) => <div className="post-ride-adjustment" key={reason}><strong>Today&apos;s training is included</strong><span>{reason}</span></div>)}
       <div className="readiness-summary"><div><strong>{readiness.label}</strong><span>{recoverySaveState === "saved" ? "Private check-in saved" : recoverySaveState === "error" ? "Save failed · try again" : "0–100 · updates with current time and check-in"}</span></div><button className="text-button" onClick={() => void saveRecovery()} disabled={recoverySaveState === "saving"}>{recoverySaveState === "saving" ? "Saving…" : "Save check-in"}</button></div>
     </section>
   );
@@ -1403,7 +1686,7 @@ function RideRow({ ride, onClick, onExport }: { ride: Ride; onClick: () => void;
   return <div className="ride-row-shell"><button className="ride-row" type="button" onClick={onClick}><span className="ride-date"><strong>{ride.dayLabel}</strong><small>{ride.dateLabel}</small></span><span className="ride-main"><strong>{ride.name}</strong><small>{ride.route} · {environmentLabel(ride.environment, ride.indoor)}</small></span><span className={`ride-tag ${ride.type.toLowerCase().replaceAll(" ", "-")}`}>{ride.type}</span><span className="ride-number"><strong>{ride.distanceMiles.toFixed(1)}</strong><small>mi</small></span><span className="ride-number"><strong>{ride.averagePower}</strong><small>W avg</small></span><span className="ride-number"><strong>{ride.trainingLoad}</strong><small>load</small></span><span className="row-arrow">→</span></button><button className="ride-row-export" type="button" onClick={onExport} aria-label={`Export ${ride.name} as Markdown`} title="Export this ride as Markdown"><span>.md</span><strong aria-hidden="true">↓</strong></button></div>;
 }
 
-function RideLog({ rides, allRides, filter, setFilter, search, setSearch, openRide, exportRide }: { rides: Ride[]; allRides: Ride[]; filter: string; setFilter: (value: string) => void; search: string; setSearch: (value: string) => void; openRide: (ride: Ride) => void; exportRide: (ride: Ride) => void }) {
+function RideLog({ rides, allRides, filter, setFilter, search, setSearch, openRide, exportRide, reclassifyAutomaticRides, isReclassifying }: { rides: Ride[]; allRides: Ride[]; filter: string; setFilter: (value: string) => void; search: string; setSearch: (value: string) => void; openRide: (ride: Ride) => void; exportRide: (ride: Ride) => void; reclassifyAutomaticRides: () => Promise<void>; isReclassifying: boolean }) {
   const distance = allRides.reduce((sum, ride) => sum + ride.distanceMiles, 0);
   const movingSeconds = allRides.reduce((sum, ride) => sum + ride.movingTimeSeconds, 0);
   const elevation = allRides.reduce((sum, ride) => sum + ride.elevationFeet, 0);
@@ -1418,9 +1701,13 @@ function RideLog({ rides, allRides, filter, setFilter, search, setSearch, openRi
         <div><strong>{elevation.toLocaleString()}</strong><small>feet climbed</small></div>
       </section>
       <section className="panel ride-log-panel">
+        <div className="classification-toolbar">
+          <div><strong>Trustworthy classification</strong><span>Re-run the current rules on automatic labels. Manual corrections are never overwritten.</span></div>
+          <button className="ghost-button" type="button" onClick={() => void reclassifyAutomaticRides()} disabled={isReclassifying}>{isReclassifying ? "Classifying..." : "Reclassify automatic rides"}</button>
+        </div>
         <div className="filter-bar">
           <label className="search-box"><span>⌕</span><input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search rides or routes" /></label>
-          <div className="filter-buttons" role="group" aria-label="Filter ride type">{["All rides", "Zone 2", "Zone 2 benchmark", "Tempo", "Threshold", "Recovery", "Free ride"].map((value) => <button key={value} className={filter === value ? "selected" : ""} onClick={() => setFilter(value)}>{value}</button>)}</div>
+          <div className="filter-buttons" role="group" aria-label="Filter ride type">{["All rides", ...rideTypes].map((value) => <button key={value} className={filter === value ? "selected" : ""} onClick={() => setFilter(value)}>{value}</button>)}</div>
         </div>
         <div className="table-header"><span>Date</span><span>Ride</span><span>Type</span><span>Distance</span><span>Power</span><span>Load</span><span /><span>Export</span></div>
         <div className="ride-list full-list">{rides.map((ride) => <RideRow key={ride.id} ride={ride} onClick={() => openRide(ride)} onExport={() => exportRide(ride)} />)}{!rides.length && <div className="empty-state"><strong>No rides match this view.</strong><span>Try a different ride type or search term.</span></div>}</div>
@@ -1442,22 +1729,31 @@ function PerformanceDetails({ rides, currentFtp }: { rides: Ride[]; currentFtp: 
   const load28 = withinDays(28).reduce((sum, ride) => sum + ride.trainingLoad, 0) / 4;
   const load42 = withinDays(42).reduce((sum, ride) => sum + ride.trainingLoad, 0) / 6;
   const acuteChronicRatio = load28 > 0 ? load7 / load28 : null;
-  const groupedRoutes = Array.from(rides.reduce((groups, ride) => {
-    const route = ride.route.trim();
-    if (!route || /^(fit|tcx|gpx) upload$/i.test(route)) return groups;
-    const key = `${route.toLowerCase()}::${ride.environment ?? (ride.indoor ? "indoor" : "outdoor")}`;
-    const group = groups.get(key) ?? [];
-    group.push(ride);
-    groups.set(key, group);
-    return groups;
-  }, new Map<string, Ride[]>()).values()).filter((group) => group.length >= 2);
-  const benchmarkCandidates = rides
-    .filter((ride) => ride.type === "Zone 2 benchmark")
-    .sort((a, b) => Date.parse(b.date) - Date.parse(a.date));
-  const benchmarkEnvironment = benchmarkCandidates[0]?.environment ?? (benchmarkCandidates[0]?.indoor ? "indoor" : "outdoor");
-  const benchmarkRides = benchmarkCandidates.filter((ride) => (ride.environment ?? (ride.indoor ? "indoor" : "outdoor")) === benchmarkEnvironment);
+  const routeComparison = buildComparableRouteCohorts(rides.map((ride) => ({
+    ...ride,
+    environment: ride.environment ?? (ride.indoor ? "indoor" : "outdoor"),
+    trainingType: ride.type,
+    context: ride.context ?? "ordinary",
+  })));
+  const groupedRoutes = routeComparison.cohorts;
+  const benchmarkCandidates = rides.filter((ride) => ride.context === "benchmark");
+  const benchmarkCohort = buildZone2BenchmarkCohort(benchmarkCandidates.map((ride) => ({
+    ...ride,
+    trainingType: ride.type,
+    context: ride.context ?? "ordinary",
+    environment: ride.environment ?? (ride.indoor ? "indoor" : "outdoor"),
+    decouplingEligible: ride.decouplingEligible ?? false,
+    stoppedPercent: ride.stoppedPercent ?? null,
+  })));
+  const benchmarkRides = benchmarkCohort.rides;
   const latestBenchmark = benchmarkRides[0];
-  const previousBenchmark = benchmarkRides[1];
+  const previousBenchmark = benchmarkCohort.trendReady ? benchmarkRides[1] : undefined;
+  const benchmarkCandidateById = new Map(benchmarkCandidates.map((ride) => [ride.id, ride]));
+  const rideById = new Map(rides.map((ride) => [ride.id, ride]));
+  const cadenceOverview = buildCadenceOverview(rides.map(cadenceAnalyticsRide));
+  const cadenceRideById = new Map(rides.map((ride) => [ride.id, ride]));
+  const cadenceTrendScale = Math.max(100, Math.ceil(Math.max(0, ...cadenceOverview.recent.map((ride) => ride.averageCadence)) / 10) * 10);
+
   const volumeHours = acuteRides.reduce((sum, ride) => sum + ride.movingTimeSeconds, 0) / 3600;
   const volumeDistance = acuteRides.reduce((sum, ride) => sum + ride.distanceMiles, 0);
   const volumeElevation = acuteRides.reduce((sum, ride) => sum + ride.elevationFeet, 0);
@@ -1475,32 +1771,41 @@ function PerformanceDetails({ rides, currentFtp }: { rides: Ride[]; currentFtp: 
     <div className="phase-two-layout">
       <section className="phase-two-hero panel-dark">
         <div><span className="eyebrow light">Performance details</span><h2>Compare like with like.</h2></div>
-        <p>Repeated routes, controlled Zone 2 benchmarks, cadence stability, and workload context now use the rides in your log. Missing stream data stays visibly unavailable.</p>
+        <p>Comparisons now require matching environment, stimulus, context, distance, and complete power/heart-rate evidence. Trends remain withheld when the cohort is too small.</p>
       </section>
 
       <section className="phase-kpis">
         <MetricCard label="Acute load" value={Math.round(load7).toString()} unit="7 days" change={`${acuteRides.length} recent rides`} tone="lime" />
         <MetricCard label="Chronic load" value={Math.round(load28).toString()} unit="28d weekly avg" change={`${Math.round(load42)} pts · 42d avg`} tone="cream" />
         <MetricCard label="Load ratio" value={acuteChronicRatio?.toFixed(2) ?? "—"} unit="acute / chronic" change={loadStatus} tone="coral" />
-        <MetricCard label="Benchmarks" value={benchmarkRides.length.toString()} unit="Zone 2 rides" change={`${groupedRoutes.length} repeated routes`} tone="sky" />
+        <MetricCard label="Benchmarks" value={benchmarkRides.length.toString()} unit="eligible rides" change={benchmarkCohort.trendReady ? `Trend ready · ${groupedRoutes.length} route cohorts` : `${benchmarkRides.length} of ${ZONE2_BENCHMARK_PROTOCOL.minimumTrendRides} needed · ${groupedRoutes.length} route cohorts`} tone="sky" />
       </section>
 
       <section className="route-benchmarks panel">
-        <div className="section-heading"><div><span className="eyebrow">Same-route comparison</span><h2>Like for like</h2></div><span className="small-badge">{groupedRoutes.length} matched</span></div>
-        {groupedRoutes.length ? <div className="route-comparison-list">{groupedRoutes.slice(0, 3).map((group) => {
-          const sorted = [...group].sort((a, b) => Date.parse(a.date) - Date.parse(b.date));
+        <div className="section-heading"><div><span className="eyebrow">Same-route comparison</span><h2>Like for like</h2></div><span className="small-badge">{groupedRoutes.length} cohorts · {routeComparison.excluded.length} excluded</span></div>
+        {groupedRoutes.length ? <div className="route-comparison-list">{groupedRoutes.slice(0, 3).map((cohort) => {
+          const sorted = [...cohort.rides].sort((a, b) => Date.parse(a.date) - Date.parse(b.date));
           const first = sorted[0];
           const latest = sorted.at(-1)!;
-          return <article className="route-comparison" key={`${first.route.toLowerCase()}-${first.environment ?? (first.indoor ? "indoor" : "outdoor")}`}><div><strong>{first.route}</strong><span>{environmentLabel(first.environment, first.indoor)} · {first.dateLabel} → {latest.dateLabel} · {group.length} efforts</span></div><dl><div><dt>Time</dt><dd>{percentChange(latest.movingTimeSeconds, first.movingTimeSeconds, true)}</dd></div><div><dt>Power</dt><dd>{percentChange(latest.averagePower, first.averagePower)}</dd></div><div><dt>Heart rate</dt><dd>{percentChange(latest.averageHeartRate, first.averageHeartRate, true)}</dd></div><div><dt>W / bpm</dt><dd>{percentChange(latest.powerHeartRateRatio, first.powerHeartRateRatio)}</dd></div></dl></article>;
-        })}</div> : <div className="analysis-empty"><strong>No repeated route names yet.</strong><span>Use the same route/course name when importing repeat attempts.</span></div>}
+          return <article className="route-comparison" key={cohort.key}>
+            <div className="comparison-heading"><div><strong>{first.route}</strong><span>{environmentLabel(first.environment, first.indoor)} · {first.type} · {contextLabel(first.context)} · {first.dateLabel} → {latest.dateLabel} · {cohort.rides.length} efforts</span></div><span className={`confidence-badge confidence-${cohort.confidence}`}>{cohort.confidence} confidence</span></div>
+            <dl><div><dt>Time</dt><dd>{percentChange(latest.movingTimeSeconds, first.movingTimeSeconds, true)}</dd></div><div><dt>Power</dt><dd>{percentChange(latest.averagePower, first.averagePower)}</dd></div><div><dt>Heart rate</dt><dd>{percentChange(latest.averageHeartRate, first.averageHeartRate, true)}</dd></div><div><dt>W / bpm</dt><dd>{percentChange(latest.powerHeartRateRatio, first.powerHeartRateRatio)}</dd></div></dl>
+            <p className="comparison-reason">{cohort.reasons.join(" ")}</p>
+          </article>;
+        })}</div> : <div className="analysis-empty"><strong>No genuinely comparable route cohort yet.</strong><span>{routeComparison.excluded.length ? `${routeComparison.excluded.length} rides were withheld because route, environment, stimulus, context, distance, or power/HR evidence did not match.` : "Import repeat efforts with the same route, environment, stimulus, and complete power/HR data."}</span></div>}
+        <p className="chart-note"><i /> Route cohorts require distance within 8%. Race, group-ride, and structured-workout contexts are excluded; outdoor conditions cap confidence at moderate. {COMPARABILITY_VERSION}</p>
+        {routeComparison.excluded.length > 0 && <details className="benchmark-exclusions route-exclusions"><summary>{routeComparison.excluded.length} route ride{routeComparison.excluded.length === 1 ? "" : "s"} excluded · show reasons</summary><div>{routeComparison.excluded.slice(0, 5).map((entry) => <p key={entry.rideId}><strong>{rideById.get(entry.rideId)?.name ?? "Ride"}</strong><span>{entry.reason}</span></p>)}</div></details>}
       </section>
 
       <section className="benchmark-card panel">
-        <div className="section-heading"><div><span className="eyebrow">Zone 2 benchmark</span><h2>{Math.round(currentFtp * 2 / 3)} W · 60 minutes</h2></div><span className="small-badge">85–90 rpm</span></div>
+        <div className="section-heading"><div><span className="eyebrow">Controlled Zone 2 benchmark</span><h2>{Math.round(currentFtp * 2 / 3)} W · 60 minutes</h2></div><span className={`confidence-badge confidence-${benchmarkCohort.confidence}`}>{benchmarkCohort.confidence} confidence</span></div>
+        <div className="benchmark-protocol" aria-label="Controlled Zone 2 benchmark protocol"><span>50–70 min</span><span>IF 0.60–0.75</span><span>VI ≤ 1.05</span><span>Stops ≤ 2%</span><span>80–95 rpm</span><span>Paired power + HR</span></div>
         {latestBenchmark ? <>
-          <div className="benchmark-score"><div><span>Latest efficiency</span><strong>{latestBenchmark.powerHeartRateRatio ? latestBenchmark.powerHeartRateRatio.toFixed(3) : "—"}</strong><small>W / bpm · {latestBenchmark.dateLabel}</small></div>{previousBenchmark && <div><span>vs previous</span><strong>{percentChange(latestBenchmark.powerHeartRateRatio, previousBenchmark.powerHeartRateRatio)}</strong><small>{previousBenchmark.dateLabel}</small></div>}</div>
+          <div className="benchmark-score"><div><span>Latest eligible efficiency</span><strong>{latestBenchmark.powerHeartRateRatio ? latestBenchmark.powerHeartRateRatio.toFixed(3) : "—"}</strong><small>W / bpm · {latestBenchmark.dateLabel}</small></div>{previousBenchmark ? <div><span>vs previous comparable</span><strong>{percentChange(latestBenchmark.powerHeartRateRatio, previousBenchmark.powerHeartRateRatio)}</strong><small>{previousBenchmark.dateLabel} · trend threshold met</small></div> : <div><span>Trend status</span><strong>{benchmarkRides.length}/{ZONE2_BENCHMARK_PROTOCOL.minimumTrendRides}</strong><small>No trend claim yet</small></div>}</div>
+          <div className="benchmark-evidence"><strong>{benchmarkCohort.trendReady ? "Comparable trend established" : "Eligible observation; trend withheld"}</strong><span>{benchmarkCohort.reasons.join(" ")}</span><small>{ZONE2_BENCHMARK_VERSION}</small></div>
           <div className="benchmark-details"><Stat label="Average HR" value={latestBenchmark.averageHeartRate ? String(latestBenchmark.averageHeartRate) : "—"} unit="bpm" /><Stat label="First 15 min" value={latestBenchmark.first15HeartRate ? latestBenchmark.first15HeartRate.toFixed(0) : "—"} unit="bpm" /><Stat label="Final 15 min" value={latestBenchmark.final15HeartRate ? latestBenchmark.final15HeartRate.toFixed(0) : "—"} unit="bpm" /><Stat label="Cadence σ" value={latestBenchmark.cadenceStddev ? latestBenchmark.cadenceStddev.toFixed(1) : "—"} unit="rpm" /></div>
-        </> : <div className="analysis-empty"><strong>No benchmark ride classified yet.</strong><span>Classify a controlled ride as “Zone 2 benchmark” during import.</span></div>}
+        </> : <div className="analysis-empty"><strong>{benchmarkCandidates.length ? "Benchmark candidates did not pass the protocol." : "No benchmark ride classified yet."}</strong><span>{benchmarkCohort.excluded[0]?.reason ?? "Choose Zone 2 as the ride type and Controlled benchmark as its context."}</span></div>}
+        {benchmarkCohort.excluded.length > 0 && <details className="benchmark-exclusions"><summary>{benchmarkCohort.excluded.length} candidate{benchmarkCohort.excluded.length === 1 ? "" : "s"} excluded · show reasons</summary><div>{benchmarkCohort.excluded.slice(0, 5).map((entry) => <p key={entry.rideId}><strong>{benchmarkCandidateById.get(entry.rideId)?.name ?? "Benchmark ride"}</strong><span>{entry.reason}</span></p>)}</div></details>}
       </section>
 
       <section className="durability-card panel">
@@ -1509,14 +1814,31 @@ function PerformanceDetails({ rides, currentFtp }: { rides: Ride[]; currentFtp: 
         <p>{latestBenchmark?.decouplingEligible ? "Calculated from central power / heart-rate intervals after excluding warm-up and cooldown buckets." : latestBenchmark?.decouplingEligibilityReason ?? "Requires at least 45 minutes, VI ≤ 1.08, minimal stopped time, a steady non-workout effort, and sufficient paired power/HR data."}</p>
       </section>
 
-      <section className="cadence-card panel">
-        <div className="section-heading"><div><span className="eyebrow">Cadence distribution</span><h2>Pedaling stability</h2></div></div>
-        {latestBenchmark?.cadenceAcceptablePercent !== null && latestBenchmark?.cadenceAcceptablePercent !== undefined ? <div className="distribution-list">
-          <DistributionRow label="Target · 85–90" value={latestBenchmark.cadenceTargetPercent ?? 0} tone="target" />
-          <DistributionRow label="Endurance · 80–95" value={latestBenchmark.cadenceAcceptablePercent} tone="acceptable" />
-          <DistributionRow label="Grinding · below 75" value={latestBenchmark.cadenceLowPercent ?? 0} tone="low" />
-          <DistributionRow label="High · above 100" value={latestBenchmark.cadenceHighPercent ?? 0} tone="high" />
-        </div> : <div className="analysis-empty compact"><strong>Cadence stream needed.</strong><span>FIT and TCX files usually contain the richest samples.</span></div>}
+      <section className="cadence-card panel full-width">
+        <div className="section-heading"><div><span className="eyebrow">Cadence across every ride</span><h2>Pedaling patterns</h2><p>Recent average cadence plus ride-level medians separated by environment and training type.</p></div><span className="small-badge">{cadenceOverview.available.length}/{rides.length} rides with streams</span></div>
+        {cadenceOverview.available.length ? <>
+          <div className="cadence-performance-grid">
+            <article className="cadence-trend-panel">
+              <div className="cadence-subheading"><span>Recent rides</span><strong>Average cadence</strong><small>0-{cadenceTrendScale} rpm scale</small></div>
+              <div className="cadence-trend" aria-label={`Average cadence for the ${cadenceOverview.recent.length} most recent rides with cadence streams`}>
+                {cadenceOverview.recent.map((entry) => {
+                  const sourceRide = cadenceRideById.get(entry.id);
+                  return <div className={`cadence-trend-column environment-${entry.environment}`} key={entry.id} title={`${sourceRide?.name ?? "Ride"}: ${entry.averageCadence.toFixed(0)} rpm; ${environmentLabel(entry.environment)}; ${entry.trainingType}`}><span>{entry.averageCadence.toFixed(0)}</span><div><i style={{ height: `${Math.max(4, (entry.averageCadence / cadenceTrendScale) * 100)}%` }} /></div><small>{sourceRide?.dateLabel ?? entry.date}</small></div>;
+                })}
+              </div>
+              <div className="cadence-legend"><span className="environment-virtual">Virtual</span><span className="environment-indoor">Indoor</span><span className="environment-outdoor">Outdoor</span></div>
+            </article>
+            <article className="cadence-cohort-panel">
+              <div className="cadence-subheading"><span>Comparable context</span><strong>By environment</strong><small>Median of ride-level results</small></div>
+              <div className="cadence-cohort-grid">{cadenceOverview.environments.map((summary) => <CadenceCohortCard summary={summary} key={summary.key} />)}</div>
+            </article>
+          </div>
+          <div className="cadence-type-section">
+            <div className="cadence-subheading"><span>Training context</span><strong>By training type</strong><small>Largest cohorts first</small></div>
+            <div className="cadence-cohort-grid training-types">{cadenceOverview.trainingTypes.slice(0, 6).map((summary) => <CadenceCohortCard summary={summary} key={summary.key} />)}</div>
+          </div>
+          <p className="chart-note"><i /> All rides with per-sample cadence are included. Cohort values are ride-level medians, not sample-weighted averages or same-route performance claims. Zero-rpm coasting is excluded.</p>
+        </> : <div className="analysis-empty"><strong>No ride has a cadence stream yet.</strong><span>Strava detailed streams, FIT, or TCX can provide cadence when the recording device captured it.</span></div>}
       </section>
 
       <section className="workload-card panel full-width">
@@ -1526,6 +1848,32 @@ function PerformanceDetails({ rides, currentFtp }: { rides: Ride[]; currentFtp: 
       </section>
     </div>
   );
+}
+
+function CadenceDistributionPanel({ ride }: { ride: Ride }) {
+  const available = hasCadenceDistribution(cadenceAnalyticsRide(ride));
+  if (!available) {
+    return <div className="analysis-empty compact"><strong>Cadence stream unavailable for this ride.</strong><span>Strava detailed streams, FIT, or TCX can provide per-sample cadence when the recording device captured it.</span></div>;
+  }
+
+  return <div className="ride-cadence-content">
+    <div className="cadence-ride-summary">
+      <div><span>Average</span><strong>{ride.averageCadence} <small>rpm</small></strong></div>
+      <div><span>Maximum</span><strong>{ride.maximumCadence || "-"} <small>{ride.maximumCadence ? "rpm" : ""}</small></strong></div>
+      <div><span>Variability</span><strong>{ride.cadenceStddev?.toFixed(1) ?? "-"} <small>{ride.cadenceStddev !== null && ride.cadenceStddev !== undefined ? "rpm sigma" : ""}</small></strong></div>
+    </div>
+    <div className="distribution-list">
+      <DistributionRow label="Target 85-90 rpm" value={ride.cadenceTargetPercent ?? 0} tone="target" />
+      <DistributionRow label="Endurance 80-95 rpm" value={ride.cadenceAcceptablePercent ?? 0} tone="acceptable" />
+      <DistributionRow label="Grinding below 75 rpm" value={ride.cadenceLowPercent ?? 0} tone="low" />
+      <DistributionRow label="High above 100 rpm" value={ride.cadenceHighPercent ?? 0} tone="high" />
+    </div>
+    <p className="cadence-sample-note">Positive cadence samples only; zero-rpm coasting is excluded. Bands overlap and are not intended to total 100%.</p>
+  </div>;
+}
+
+function CadenceCohortCard({ summary }: { summary: CadenceCohortSummary }) {
+  return <article className="cadence-cohort-card"><span>{summary.label}</span><strong>{summary.medianAverageCadence.toFixed(0)} <small>rpm</small></strong><p>{summary.medianAcceptablePercent.toFixed(0)}% median in 80-95 rpm</p><small>{summary.rideCount} {summary.rideCount === 1 ? "ride" : "rides"}{summary.medianCadenceStddev === null ? "" : ` - ${summary.medianCadenceStddev.toFixed(1)} rpm median sigma`}</small></article>;
 }
 
 function DistributionRow({ label, value, tone }: { label: string; value: number; tone: string }) {
@@ -1826,17 +2174,33 @@ function PlanToday({ rides, recovery, setRecovery, recoverySaveState, saveRecove
   };
   const currentBlock = block(42, 0);
   const priorBlock = block(84, 42);
-  const acuteLoad = block(7, 0).load;
-  const chronicLoad = block(28, 0).load / 4;
-  const loadRatio = chronicLoad > 0 ? acuteLoad / chronicLoad : null;
-  const latestHardRide = rides.filter((ride) => ride.type === "Tempo" || ride.type === "Threshold").sort((a, b) => Date.parse(b.date) - Date.parse(a.date))[0];
+  const referenceDate = planStartDate === localDateKey() ? new Date() : new Date(`${planStartDate}T12:00:00`);
+  const referenceMs = referenceDate.getTime();
+  const liveRides = (days: number) => rides.filter((ride) => { const timestamp = Date.parse(rideStartedAt(ride)); return Number.isFinite(timestamp) && timestamp <= referenceMs && timestamp >= referenceMs - (days * dayMs); });
+  const liveLoad = (days: number) => liveRides(days).reduce((sum, ride) => sum + ride.trainingLoad, 0);
+  const liveAcuteLoad = liveLoad(7);
+  const liveChronicRides = liveRides(28);
+  const liveChronicLoad = liveChronicRides.reduce((sum, ride) => sum + ride.trainingLoad, 0) / 4;
+  const liveChronicSpanDays = liveChronicRides.length > 1 ? (Math.max(...liveChronicRides.map((ride) => Date.parse(rideStartedAt(ride)))) - Math.min(...liveChronicRides.map((ride) => Date.parse(rideStartedAt(ride))))) / dayMs : 0;
+  const loadRatio = liveChronicRides.length >= 4 && liveChronicSpanDays >= 14 && liveChronicLoad > 0 ? liveAcuteLoad / liveChronicLoad : null;
+  const todayTraining = completedTrainingOnDate(rides, referenceDate);
+  const latestHardRide = rides.filter(isObjectivelyHardRide).sort((a, b) => Date.parse(rideStartedAt(b)) - Date.parse(rideStartedAt(a)))[0];
   const readiness = calculateReadiness({
-    hoursSinceLastHardRide: elapsedHoursSince(latestHardRide?.date ?? null),
+    hoursSinceLastHardRide: elapsedHoursSince(latestHardRide ? rideStartedAt(latestHardRide) : null, referenceMs),
     acuteChronicRatio: loadRatio,
     subjective: recovery,
+    todayTrainingLoad: todayTraining.trainingLoad,
+    todayIntensityFactor: todayTraining.maximumIntensityFactor,
+    todayMovingTimeSeconds: todayTraining.movingTimeSeconds,
   });
-  const planningInput = { readinessScore: readiness.score, painConcernSeverity: recovery.bodyCondition === "pain_concern" ? recovery.painSeverity ?? 1 : 0, acuteChronicRatio: loadRatio, recentHardSessions: block(7, 0).rides ? rides.filter((ride) => (ride.type === "Tempo" || ride.type === "Threshold") && Date.parse(ride.date) > anchorMs - (7 * dayMs)).length : 0 };
-  const workout = recommendWorkout(planningInput);
+  const coach = buildCoachReport({
+    rides: rides.map(coachAnalyticsRide),
+    readinessScore: readiness.score,
+    subjective: recovery,
+    checkInRecorded: recoverySaveState === "saved",
+    referenceDate,
+  });
+  const workout = coach;
   const availableWorlds = worldRotation?.availableWorlds ?? ["Watopia"];
   const currentWeightPounds = Math.round(currentWeightKg * 2.2046226218);
   const routePowerMinimum = Math.round(currentWeightKg * ROUTE_ESTIMATE_WATTS_PER_KG.minimum);
@@ -1845,10 +2209,10 @@ function PlanToday({ rides, recovery, setRecovery, recoverySaveState, saveRecove
   const selectedRoute = routeSuite.find((suggestion) => suggestion.route.id === selectedRouteId)
     ?? routeSuite.find((suggestion) => suggestion.recommended)
     ?? routeSuite[0];
-  const weeklyPlan = buildWeeklyPlan(planningInput, planStartDate);
+  const weeklyPlan = coach.weeklyPlan;
   const prediction = insights?.prediction;
   const projectedFromFtp = prediction?.midpointWatts ?? currentFtp;
-  const projection = projectFtpGoal(projectedFromFtp, goalTarget, new Date(anchorMs).toISOString());
+  const projection = projectFtpGoal(projectedFromFtp, goalTarget, referenceDate.toISOString());
   const vo2 = insights?.vo2Estimate;
   const vo2Status = vo2?.status === "trend_ready" ? "trend ready" : vo2?.status === "provisional" ? "provisional" : "needs 5 min power";
   const change = (current: number, previous: number, suffix = "") => previous ? `${current >= previous ? "+" : ""}${(current - previous).toFixed(1)}${suffix}` : "—";
@@ -1857,17 +2221,31 @@ function PlanToday({ rides, recovery, setRecovery, recoverySaveState, saveRecove
   return (
     <div className="phase-three-layout">
       <section className="phase-three-hero panel-dark">
-        <div><span className="eyebrow light">Plan today · adapts with your check-in</span><h2>{workout.primary}</h2><p className="plan-hero-detail">{workout.detail}</p></div>
-        <div className="forecast-stamp"><span>Readiness</span><strong>{readiness.score}</strong><small>{readiness.label}</small></div>
+        <div><span className="eyebrow light">Coach Mode · {coach.confidence} confidence</span><h2>{workout.primary}</h2><p className="plan-hero-detail">{workout.detail}</p><small className="coach-version">{coach.algorithmVersion} · {coach.state}</small></div>
+        <div className="forecast-stamp"><span>{readiness.postRideAdjusted ? "Post-ride" : "Readiness"}</span><strong>{readiness.score}</strong><small>{readiness.label}</small></div>
       </section>
 
       {actionMessage && <div className={`phase-action-message ${actionState}`}>{actionMessage}</div>}
 
       <RecoveryCheckIn recovery={recovery} setRecovery={setRecovery} recoverySaveState={recoverySaveState} saveRecovery={saveRecovery} readiness={readiness} />
 
-      <section className="workout-card panel">
-        <div className="section-heading"><div><span className="eyebrow">Why this choice</span><h2>Keep the guardrails visible</h2></div></div>
-        <p>{workout.detail}</p><div className="avoid-strip"><span>Avoid today</span><strong>{workout.avoid}</strong></div>
+      <section className={`coach-reasoning panel full-width state-${coach.state}`}>
+        <div className="section-heading"><div><span className="eyebrow">Why this choice</span><h2>Every input stays visible</h2><p>The coach consumes existing analytics; it does not invent new fitness metrics.</p></div><span className={`confidence-badge confidence-${coach.confidence}`}>{coach.confidence} confidence</span></div>
+        <div className="coach-reason-grid">
+          <article><span>Supports the choice</span>{coach.positives.length ? coach.positives.map((reason) => <p key={reason}><i>+</i>{reason}</p>) : <p><i>·</i>No positive signal changed the plan.</p>}</article>
+          <article><span>Cautions</span>{coach.cautions.length ? coach.cautions.map((reason) => <p key={reason}><i>−</i>{reason}</p>) : <p><i>·</i>No caution changed the plan.</p>}</article>
+          <article className="guardrail-evidence"><span>Safety guardrails</span>{coach.guardrails.length ? coach.guardrails.map((reason) => <p key={reason}><i>!</i>{reason}</p>) : <p><i>✓</i>No pain or illness override is active.</p>}</article>
+        </div>
+        <div className="avoid-strip"><span>Avoid today</span><strong>{workout.avoid}</strong></div>
+        <div className="next-quality"><span>Next quality session</span><strong>{coach.nextQualitySession}</strong></div>
+        <small className="coach-evidence-version">{coach.algorithmVersion} · check-in {coach.evidenceSummary.checkInRecorded ? "saved" : "needed"} · {coach.evidenceSummary.highQualityRides} detailed recent rides</small>
+      </section>
+
+      <section className="coach-insights panel full-width">
+        <div className="section-heading"><div><span className="eyebrow">Evidence-backed insights</span><h2>Claims grow with the evidence</h2></div><span className={`confidence-badge confidence-${coach.trend.confidence}`}>{coach.trend.status} · {coach.trend.confidence}</span></div>
+        <article className={`coach-trend trend-${coach.trend.direction}`}><div><span>{coach.trend.title}</span><strong>{coach.trend.summary}</strong></div><p>{coach.trend.evidence.join(" · ") || coach.trend.limitations[0]}</p>{coach.trend.limitations.length > 0 && <small>{coach.trend.limitations.join(" ")}</small>}</article>
+        <div className="coach-baseline-grid">{coach.baselines.slice(0, 4).map((baseline) => <article key={baseline.trainingType}><span>{baseline.trainingType}</span><strong>{baseline.medianDurationMinutes} min <small>median</small></strong><p>{baseline.rideCount} rides · load {baseline.medianTrainingLoad}{baseline.medianEfficiency ? ` · ${baseline.medianEfficiency.toFixed(3)} W/bpm` : ""}</p></article>)}</div>
+        <p className="chart-note"><i /> Possible = 2 supporting rides; likely = 3–4; established = at least 5 comparable rides across 3 weeks. Future prescriptions remain conditional.</p>
       </section>
 
       <section className="route-suite panel full-width">
@@ -1936,8 +2314,8 @@ function PlanToday({ rides, recovery, setRecovery, recoverySaveState, saveRecove
 
       <section className="weekly-plan panel full-width">
         <div className="section-heading"><div><span className="eyebrow">The next seven days</span><h2>A useful plan, not a rigid prescription</h2></div><span className="small-badge">updates daily · local time</span></div>
-        <div className="week-grid">{weeklyPlan.map((day, index) => <article key={day.dateIso} className={index === 0 ? "today" : ""}><div className="week-date"><span>{index === 0 ? "Today" : day.day}</span><em>{day.dateLabel}</em></div><strong>{day.session}</strong><small>{day.purpose}</small></article>)}</div>
-        <p className="chart-note"><i /> The calendar advances automatically at local midnight. Updating the recovery check-in or importing training refreshes the guidance. Stop for pain or unusual symptoms.</p>
+        <div className="week-grid">{weeklyPlan.map((day, index) => <article key={day.dateIso} className={`${index === 0 ? "today" : ""} ${day.adaptive ? "adaptive" : ""}`}><div className="week-date"><span>{index === 0 ? "Today" : day.day}</span><em>{day.dateLabel}</em></div><strong>{day.session}</strong><small>{day.purpose}</small><em className="day-confidence">{day.adaptive ? "conditional · " : ""}{day.confidence} confidence</em></article>)}</div>
+        <p className="chart-note"><i /> Today is evidence-gated. Future days are low-confidence placeholders that are regenerated at local midnight and after every saved check-in or ride import.</p>
       </section>
 
       <section className="ftp-forecast panel">
@@ -2189,7 +2567,7 @@ function ConnectedSources({ refreshRides, showSettings }: { refreshRides: () => 
   );
 }
 
-function ImportRide({ detected, filename, error, isReading, isSaving, isDragging, hasFile, rideType, setRideType, routeName, setRouteName, environment, setEnvironment, workoutSubtype, setWorkoutSubtype, setIsDragging, fileInput, onFileChange, onDrop, onDemo, onAdd, onReset }: {
+function ImportRide({ detected, filename, error, isReading, isSaving, isDragging, hasFile, rideType, setRideType, rideContext, setRideContext, routeName, setRouteName, environment, setEnvironment, workoutSubtype, setWorkoutSubtype, setIsDragging, fileInput, onFileChange, onDrop, onDemo, onAdd, onReset }: {
   detected: DetectedActivity | null;
   filename: string;
   error: string;
@@ -2199,6 +2577,8 @@ function ImportRide({ detected, filename, error, isReading, isSaving, isDragging
   hasFile: boolean;
   rideType: Ride["type"];
   setRideType: (value: Ride["type"]) => void;
+  rideContext: RideContext;
+  setRideContext: (value: RideContext) => void;
   routeName: string;
   setRouteName: (value: string) => void;
   environment: RideEnvironment;
@@ -2250,6 +2630,7 @@ function ImportRide({ detected, filename, error, isReading, isSaving, isDragging
               <label className="review-field"><span>Route / course</span><input value={routeName} onChange={(event) => setRouteName(event.target.value)} placeholder="Use the same name for repeated routes" /></label>
               <label className="review-field"><span>Ride type</span><select value={rideType} onChange={(event) => setRideType(event.target.value as Ride["type"])}>{rideTypes.map((type) => <option key={type}>{type}</option>)}</select></label>
               <label className="review-field"><span>Environment</span><select value={environment} onChange={(event) => setEnvironment(event.target.value as RideEnvironment)}><option value="virtual">Virtual / Indoor</option><option value="indoor">Indoor</option><option value="outdoor">Outdoor</option></select></label>
+              <label className="review-field"><span>Ride context</span><select value={rideContext} onChange={(event) => setRideContext(event.target.value as RideContext)}>{rideContexts.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}</select></label>
               <label className="review-field"><span>Workout subtype</span><select value={workoutSubtype ?? ""} onChange={(event) => setWorkoutSubtype(event.target.value ? event.target.value as Exclude<WorkoutSubtype, null> : null)}><option value="">None</option><option value="trainer_workout">Trainer Workout</option><option value="race">Race</option></select></label>
             </div>
             {detected.warnings.length > 0 && <div className="warning-box"><strong>Check before saving</strong>{detected.warnings.map((warning) => <span key={warning}>· {warning}</span>)}</div>}

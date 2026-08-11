@@ -4,7 +4,8 @@ import { activityStreams, externalConnections, ftpHistory, powerDuration as powe
 import { currentRider } from "../../../../../lib/current-rider";
 import { derivePowerDuration, deriveStreamMetrics, type ActivitySample } from "../../../../../lib/activity-parser";
 import { deriveRideMetrics, evaluateDecouplingEligibility } from "../../../../../lib/metrics";
-import { classifyStravaActivity, classifyStravaRideType, ftpSnapshotForRide, isCyclingActivity, parseReadBudget, shouldRunAutomaticSync, syncAfterEpoch, type StravaSyncMode } from "../../../../../lib/strava-sync";
+import { classifyRide, classifyStravaActivity, ftpSnapshotForRide, isCyclingActivity, parseReadBudget, shouldRunAutomaticSync, syncAfterEpoch, type StravaSyncMode } from "../../../../../lib/strava-sync";
+import { countStravaStreamRecords } from "../../../../../lib/stream-counts";
 import { getFileStore } from "../../../../../server/platform/file-store";
 import { getSecretStore, STRAVA_SECRETS } from "../../../../../server/platform/secret-store";
 
@@ -195,7 +196,7 @@ export async function POST(request: Request) {
 
   for (const activity of [...activitiesById.values()].filter(isCyclingActivity)) {
     const externalId = String(activity.id);
-    const [existing] = await db.select({ id: rides.id, ftpAtRideWatts: rides.ftpAtRideWatts, ftpSnapshotSource: rides.ftpSnapshotSource, rideType: rides.rideType, rideTypeSource: rides.rideTypeSource }).from(rides)
+    const [existing] = await db.select({ id: rides.id, ftpAtRideWatts: rides.ftpAtRideWatts, ftpSnapshotSource: rides.ftpSnapshotSource, rideType: rides.rideType, rideTypeSource: rides.rideTypeSource, rideContext: rides.rideContext, rideContextSource: rides.rideContextSource }).from(rides)
       .where(and(eq(rides.riderId, rider.id), eq(rides.externalId, externalId)))
       .limit(1);
     const normalizedPower = finite(activity.weighted_average_watts);
@@ -204,6 +205,7 @@ export async function POST(request: Request) {
     const elapsedTime = Math.max(0, Math.round(finite(activity.elapsed_time) ?? movingTime));
     const stoppedPercent = elapsedTime > 0 ? Math.max(0, ((elapsedTime - movingTime) / elapsedTime) * 100) : null;
     const classification = classifyStravaActivity(activity);
+    const summaryVariability = normalizedPower !== null && averagePower !== null && averagePower > 0 ? normalizedPower / averagePower : null;
     const ftpSnapshot = ftpSnapshotForRide({
       startedAt: activity.start_date,
       history: ftpRows,
@@ -218,19 +220,28 @@ export async function POST(request: Request) {
       averageHeartRateBpm: finite(activity.average_heartrate),
       ftpWatts: ftpSnapshot.ftpWatts,
     });
-    const automaticRideType = classifyStravaRideType({
+    const automaticClassification = classifyRide({
       name: activity.name,
       workoutSubtype: classification.workoutSubtype,
       intensityFactor: derived.intensityFactor,
+      movingTimeSeconds: movingTime,
+      variabilityIndex: summaryVariability,
     });
     const preserveManualType = existing?.rideTypeSource === "manual";
+    const preserveManualContext = existing?.rideContextSource === "manual";
+    const manualOverrideNote = preserveManualType || preserveManualContext ? " A manual classification override was preserved." : "";
     const rideSummary = {
       source: "strava_export" as const,
       name: activity.name || "Strava ride",
       startedAt: activity.start_date,
       timezone: activity.timezone,
-      rideType: preserveManualType ? existing.rideType : automaticRideType,
+      rideType: preserveManualType ? existing.rideType : automaticClassification.trainingType,
       rideTypeSource: preserveManualType ? "manual" : "automatic",
+      rideContext: preserveManualContext ? existing.rideContext : automaticClassification.context,
+      rideContextSource: preserveManualContext ? "manual" : "automatic",
+      classificationConfidence: automaticClassification.confidence,
+      classificationReason: `${automaticClassification.reason}${manualOverrideNote}`,
+      classificationVersion: automaticClassification.version,
       indoor: classification.indoor,
       environment: classification.environment,
       workoutSubtype: classification.workoutSubtype,
@@ -268,7 +279,7 @@ export async function POST(request: Request) {
         intensityIsEstimated: derived.intensityIsEstimated,
         trainingLoad: derived.trainingLoad,
         trainingLoadIsEstimated: derived.trainingLoadIsEstimated,
-        variabilityIndex: normalizedPower !== null && averagePower !== null && averagePower > 0 ? normalizedPower / averagePower : null,
+        variabilityIndex: summaryVariability,
         stoppedPercent,
         decouplingEligible: false,
         decouplingEligibilityReason: "Detailed power and heart-rate streams are required.",
@@ -286,7 +297,7 @@ export async function POST(request: Request) {
         intensityIsEstimated: derived.intensityIsEstimated,
         trainingLoad: derived.trainingLoad,
         trainingLoadIsEstimated: derived.trainingLoadIsEstimated,
-        variabilityIndex: normalizedPower !== null && averagePower !== null && averagePower > 0 ? normalizedPower / averagePower : null,
+        variabilityIndex: summaryVariability,
         stoppedPercent,
         decouplingEligible: false,
         decouplingEligibilityReason: "Detailed power and heart-rate streams are required.",
@@ -309,6 +320,7 @@ export async function POST(request: Request) {
       const storedObject = await fileStore.get(candidate.r2Key);
       if (!storedObject) continue;
       const streams = JSON.parse(await storedObject.text()) as StreamSet;
+      const streamSampleCounts = countStravaStreamRecords(streams);
       const samples = samplesFromStreams(streams, candidate.activity.start_date);
       if (!samples.length) continue;
       const streamMetrics = deriveStreamMetrics(samples);
@@ -329,6 +341,7 @@ export async function POST(request: Request) {
         aerobicDecouplingPercent: streamMetrics.aerobicDecouplingPercent,
         isIntervalWorkout: candidateClassification.workoutSubtype === "trainer_workout",
       });
+      await db.update(activityStreams).set({ sampleCount: samples.length, availableStreamsJson: JSON.stringify(Object.keys(streams)), streamSampleCountsJson: JSON.stringify(streamSampleCounts) }).where(eq(activityStreams.rideId, candidate.rideId));
       await db.update(rideMetrics).set({
         aerobicDecouplingPercent: streamMetrics.aerobicDecouplingPercent,
         decouplingEligible: eligibility.eligible,
@@ -364,6 +377,7 @@ export async function POST(request: Request) {
     }
 
     const streams = await streamsResponse.json() as StreamSet;
+    const streamSampleCounts = countStravaStreamRecords(streams);
     const samples = samplesFromStreams(streams, candidate.activity.start_date);
     if (!samples.length) {
       streamFailures += 1;
@@ -395,6 +409,7 @@ export async function POST(request: Request) {
       encoding: "json",
       sampleCount: samples.length,
       availableStreamsJson: JSON.stringify(Object.keys(streams)),
+      streamSampleCountsJson: JSON.stringify(streamSampleCounts),
       startedAt: candidate.activity.start_date,
       endedAt: samples.at(-1)?.time ? new Date(samples.at(-1)!.time!).toISOString() : null,
     }).onConflictDoNothing();

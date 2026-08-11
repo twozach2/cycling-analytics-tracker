@@ -35,3 +35,25 @@ test("release workflow builds natively on all three operating systems", async ()
   assert.match(workflow, /MAC_SIGNING_AVAILABLE/);
   assert.doesNotMatch(workflow, /BEGIN (?:RSA )?PRIVATE KEY|APPLE_APP_SPECIFIC_PASSWORD:\s+[^$]/);
 });
+
+test("persistent browser preview uses isolated data and ports", async () => {
+  const packageJson = JSON.parse(await readFile(new URL("../package.json", import.meta.url), "utf8")) as {
+    scripts: Record<string, string>;
+  };
+  const viteConfig = await readFile(new URL("../vite.config.ts", import.meta.url), "utf8");
+  const launcher = await readFile(new URL("../scripts/start-web-preview.ts", import.meta.url), "utf8");
+  const shortcutInstaller = await readFile(new URL("../scripts/install-web-preview-shortcut.ps1", import.meta.url), "utf8");
+
+  assert.equal(packageJson.scripts["preview:web"], "tsx scripts/start-web-preview.ts");
+  assert.match(packageJson.scripts["dev:preview:services"], /--strictPort/);
+  assert.match(viteConfig, /CYCLING_API_PORT/);
+  assert.match(launcher, /CyclingAnalyticsPreview/);
+  assert.match(launcher, /previewApiPort = 8723/);
+  assert.match(launcher, /CYCLING_DATA_DIR: previewDataDirectory/);
+  assert.match(launcher, /isCyclingPreviewReady/);
+  assert.match(packageJson.scripts["preview:install-shortcut"], /install-web-preview-shortcut\.ps1/);
+  assert.match(launcher, /seedPreviewFromDesktop/);
+  assert.doesNotMatch(launcher, /secrets\.json/);
+  assert.match(shortcutInstaller, /Cycling Analytics Preview\.lnk/);
+  assert.match(shortcutInstaller, /npm\.cmd run preview:web/);
+});

@@ -127,3 +127,33 @@ test("decoupling eligibility rejects short, variable, stopped, and warm-up-domin
   assert.match(evaluateDecouplingEligibility({ ...steady, aerobicDecouplingPercent: -11.2 }).reason, /warm-up/i);
   assert.match(evaluateDecouplingEligibility({ ...steady, isIntervalWorkout: true }).reason, /workouts/i);
 });
+
+test("illness is a readiness and recovery safety override", () => {
+  const readiness = calculateReadiness({
+    hoursSinceLastHardRide: 72,
+    acuteChronicRatio: 0.9,
+    subjective: { sleepQuality: 5, legFreshness: "fresh", bodyCondition: "illness", illnessSeverity: 5, motivation: 5 },
+  });
+  const metrics = deriveRideMetrics({ movingTimeSeconds: 3600, averagePowerWatts: 110, normalizedPowerWatts: 112, averageHeartRateBpm: 130, ftpWatts: 165 });
+  const recovery = recommendRecovery(metrics, 3600, 0, { bodyCondition: "illness", illnessSeverity: 5 });
+  assert.equal(readiness.score, 30);
+  assert.equal(recovery.status, "illness flag");
+  assert.match(recovery.nextSession, /withheld/i);
+});
+test("completed training today lowers remaining readiness with an auditable reason", () => {
+  const subjective = { sleepQuality: 5, legFreshness: "fresh" as const, bodyCondition: "normal" as const, motivation: 5 };
+  const before = calculateReadiness({ hoursSinceLastHardRide: 72, acuteChronicRatio: 0.9, subjective });
+  const after = calculateReadiness({
+    hoursSinceLastHardRide: 0,
+    acuteChronicRatio: 0.9,
+    subjective,
+    todayTrainingLoad: 81,
+    todayIntensityFactor: 0.885,
+    todayMovingTimeSeconds: 3723,
+  });
+
+  assert.equal(before.score, 100);
+  assert.equal(after.score, 54);
+  assert.equal(after.postRideAdjusted, true);
+  assert.match(after.adjustments[0], /81 load/);
+});

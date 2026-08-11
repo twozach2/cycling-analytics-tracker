@@ -1,0 +1,1 @@
+ALTER TABLE `recovery_logs` ADD `illness_severity` integer;

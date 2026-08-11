@@ -1,3 +1,5 @@
+import { countActivitySampleRecords, type StreamRecordCounts } from "./stream-counts";
+
 export type DetectedActivity = {
   name: string;
   startedAt: string;
@@ -26,6 +28,7 @@ export type DetectedActivity = {
   final15HeartRate: number | null;
   powerDuration: Array<{ durationSeconds: number; bestPowerWatts: number }>;
   sampleCount: number;
+  streamSampleCounts: StreamRecordCounts;
   environment: "virtual" | "indoor" | "outdoor";
   workoutSubtype: "trainer_workout" | "race" | null;
   warnings: string[];
@@ -350,6 +353,7 @@ export function parseXmlActivity(xmlText: string, filename: string): DetectedAct
     variabilityIndex: null,
     powerDuration: derivePowerDuration(samples),
     sampleCount: samples.length,
+    streamSampleCounts: countActivitySampleRecords(samples),
     environment: virtual ? "virtual" : "outdoor",
     workoutSubtype: null,
     warnings,
@@ -448,6 +452,7 @@ export async function parseFitActivity(buffer: ArrayBuffer, filename: string): P
     variabilityIndex: normalizedPower !== null && averagePower !== null && averagePower > 0 ? round(normalizedPower / averagePower, 2) : null,
     powerDuration: derivePowerDuration(recordSamples),
     sampleCount: records.length,
+    streamSampleCounts: countActivitySampleRecords(recordSamples),
     environment: virtual ? "virtual" : indoor ? "indoor" : "outdoor",
     workoutSubtype: null,
     warnings,

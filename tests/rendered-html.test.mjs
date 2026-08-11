@@ -40,8 +40,17 @@ test("keeps the dashboard features while removing hosted runtime dependencies", 
   assert.match(dashboard, /Connect your own Strava API application/);
   assert.match(dashboard, /\/api\/settings\/strava/);
   assert.match(dashboard, /Authorization Callback Domain/);
+  assert.match(dashboard, /Selected ride cadence/);
+  assert.match(dashboard, /Cadence across every ride/);
+  assert.match(dashboard, /Zero-rpm coasting is excluded/i);
+  assert.doesNotMatch(dashboard, /Cadence stream needed/);
 
-  assert.match(dashboard, /label: "Plan today"/);
+  assert.match(dashboard, /label: "Coach"/);
+  assert.match(dashboard, /Coach Mode ·/);
+  assert.match(dashboard, /Every input stays visible/);
+  assert.match(dashboard, /Claims grow with the evidence/);
+  assert.match(dashboard, /Data quality \+ provenance/);
+  assert.match(dashboard, /Future days are low-confidence placeholders/);
   assert.match(dashboard, /Zwift route match/);
   assert.match(dashboard, /Shuffle routes/);
   assert.match(dashboard, /Export \.md/);
@@ -56,6 +65,10 @@ test("keeps the dashboard features while removing hosted runtime dependencies", 
   assert.match(styles, /html\[data-theme="night-city"\]/);
   assert.match(styles, /--lime: #f9f002/);
   assert.match(styles, /--font-geist-sans: "Geist Variable"/);
+  assert.match(styles, /select option, select optgroup \{ background-color: var\(--field\); color: var\(--ink\); \}/);
+  assert.match(styles, /select:disabled \{ color: var\(--muted\); -webkit-text-fill-color: var\(--muted\); opacity: 1; \}/);
+  assert.match(styles, /\.environment-tag, \.workout-tag .*color: var\(--tag-text\)/);
+  assert.match(styles, /\.environment-tag\.environment-virtual \{ background: var\(--tag-zone-bg\); \}/);
   assert.match(manifest, /"display": "standalone"/);
   await access(new URL("../public/cycling-analytics-icon-192.png", import.meta.url));
   await access(new URL("../public/cycling-analytics-icon-512.png", import.meta.url));

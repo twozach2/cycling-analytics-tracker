@@ -51,6 +51,15 @@ export const rides = sqliteTable(
     source: text("source", { enum: ["strava_export", "zwift", "gpx", "tcx", "fit", "manual"] }).notNull(),
     name: text("name").notNull(),
     startedAt: text("started_at").notNull(),
+    rideContext: text("ride_context", { enum: ["ordinary", "benchmark", "structured_workout", "race", "group_ride"] })
+      .notNull()
+      .default("ordinary"),
+    rideContextSource: text("ride_context_source").notNull().default("legacy"),
+    classificationConfidence: text("classification_confidence", { enum: ["low", "moderate", "high"] })
+      .notNull()
+      .default("low"),
+    classificationReason: text("classification_reason").notNull().default("Legacy classification; reclassify to add evidence."),
+    classificationVersion: text("classification_version").notNull().default("legacy"),
     timezone: text("timezone"),
     rideType: text("ride_type").notNull().default("unknown"),
     rideTypeSource: text("ride_type_source").notNull().default("legacy"),
@@ -103,6 +112,7 @@ export const activityStreams = sqliteTable("activity_streams", {
   encoding: text("encoding").notNull().default("json+gzip"),
   sampleCount: integer("sample_count").notNull(),
   availableStreamsJson: text("available_streams_json").notNull().default("[]"),
+  streamSampleCountsJson: text("stream_sample_counts_json").notNull().default("{}"),
   startedAt: text("started_at"),
   endedAt: text("ended_at"),
 });
@@ -213,9 +223,10 @@ export const recoveryLogs = sqliteTable(
     motivation: integer("motivation"),
     generalSoreness: integer("general_soreness"),
     kneePain: integer("knee_pain"),
-    bodyCondition: text("body_condition", { enum: ["normal", "mild_soreness", "significant_soreness", "pain_concern"] }),
+    bodyCondition: text("body_condition", { enum: ["normal", "mild_soreness", "significant_soreness", "pain_concern", "illness"] }),
     painLocation: text("pain_location", { enum: ["unspecified", "knee", "back", "neck_shoulders", "hands_wrists", "hips", "saddle_contact", "other"] }),
     painSeverity: integer("pain_severity"),
+    illnessSeverity: integer("illness_severity"),
     restingHeartRate: integer("resting_heart_rate"),
     notes: text("notes").notNull().default(""),
     createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),

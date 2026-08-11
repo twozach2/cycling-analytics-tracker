@@ -49,13 +49,33 @@ test("the local service persists a profile, imported file, and ride across resta
         elapsedTimeS: 3600,
         averagePowerWatts: 120,
         averageHeartRateBpm: 125,
+        sampleCount: 3600,
+        availableStreams: ["time", "watts", "heartrate"],
+        streamSampleCounts: { time: 3600, watts: 3598, heartrate: 3550 },
         rideType: "Zone 2",
         environment: "indoor",
+        rideContext: "benchmark",
       }),
     });
     assert.equal(saved.status, 201);
 
     const sha = createHash("sha256").update(gpx).digest("hex");
+    const savedRide = await saved.json() as { rideId: string };
+
+    const manualUpdate = await fetch(`${origin}/api/rides`, {
+      method: "PATCH",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ rideId: savedRide.rideId, rideType: "Tempo", rideContext: "group_ride" }),
+    });
+    assert.equal(manualUpdate.status, 200);
+
+    const reclassified = await fetch(`${origin}/api/rides`, {
+      method: "PATCH",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ action: "reclassify_automatic" }),
+    });
+    assert.equal(reclassified.status, 200);
+    assert.deepEqual(await reclassified.json(), { updated: 0, preserved: 1, total: 1 });
     await access(path.join(dataDirectory, "ride-files", "local-rider", `${sha}.gpx`));
 
     await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
@@ -67,9 +87,16 @@ test("the local service persists a profile, imported file, and ride across resta
     assert(address && typeof address === "object");
     origin = `http://127.0.0.1:${address.port}`;
     const rides = await fetch(`${origin}/api/rides`);
-    const rideLog = await rides.json() as { rides: Array<{ ride: { name: string } }> };
+    const rideLog = await rides.json() as { rides: Array<{ ride: { name: string; rideType: string; rideContext: string; rideTypeSource: string; rideContextSource: string; classificationConfidence: string; classificationVersion: string }; stream: { streamSampleCountsJson: string } | null }> };
     assert.equal(rideLog.rides.length, 1);
     assert.equal(rideLog.rides[0]?.ride.name, "Local persistence test");
+    assert.equal(rideLog.rides[0]?.ride.rideType, "Tempo");
+    assert.equal(rideLog.rides[0]?.ride.rideContext, "group_ride");
+    assert.equal(rideLog.rides[0]?.ride.rideTypeSource, "manual");
+    assert.equal(rideLog.rides[0]?.ride.rideContextSource, "manual");
+    assert.equal(rideLog.rides[0]?.ride.classificationConfidence, "high");
+    assert.equal(rideLog.rides[0]?.ride.classificationVersion, "manual-v1");
+    assert.deepEqual(JSON.parse(rideLog.rides[0]?.stream?.streamSampleCountsJson ?? "{}"), { time: 3600, watts: 3598, heartrate: 3550 });
   } finally {
     if (server.listening) {
       await new Promise<void>((resolve) => server.close(() => resolve()));

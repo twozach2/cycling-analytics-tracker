@@ -23,12 +23,13 @@ type RecoveryPayload = {
   bodyCondition?: BodyCondition;
   painLocation?: PainLocation;
   painSeverity?: number;
+  illnessSeverity?: number;
 };
 
 const bounded = (value: number | undefined, minimum: number, maximum: number, fallback: number) =>
   Number.isFinite(value) ? Math.min(maximum, Math.max(minimum, Math.round(value!))) : fallback;
 
-const bodyConditions: BodyCondition[] = ["normal", "mild_soreness", "significant_soreness", "pain_concern"];
+const bodyConditions: BodyCondition[] = ["normal", "mild_soreness", "significant_soreness", "pain_concern", "illness"];
 const painLocations: PainLocation[] = ["unspecified", "knee", "back", "neck_shoulders", "hands_wrists", "hips", "saddle_contact", "other"];
 
 export async function POST(request: Request) {
@@ -47,6 +48,9 @@ export async function POST(request: Request) {
   const painSeverity = bodyCondition === "pain_concern"
     ? bounded(payload.painSeverity, 1, 10, 1)
     : 0;
+  const illnessSeverity = bodyCondition === "illness"
+    ? bounded(payload.illnessSeverity, 1, 10, 1)
+    : 0;
   const recovery = {
     id: crypto.randomUUID(),
     riderId: rider.id,
@@ -57,6 +61,7 @@ export async function POST(request: Request) {
     bodyCondition,
     painLocation,
     painSeverity,
+    illnessSeverity,
     // Retain legacy values so older app builds can still open new check-ins.
     generalSoreness: bodyCondition === "mild_soreness" ? 3 : bodyCondition === "significant_soreness" ? 7 : 0,
     kneePain: bodyCondition === "pain_concern" && painLocation === "knee" ? painSeverity : 0,
