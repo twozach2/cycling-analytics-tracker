@@ -10,7 +10,9 @@ Hard-session advice is withheld or downgraded when pain or illness is reported, 
 
 Workload is presented as an explicit comparison: total load from the last seven days divided by the 28-day total normalized to a weekly average. A stable baseline requires at least four rides spanning 14 days. The ratio is a review signal for sudden workload change, not an injury prediction.
 
-After a same-day ride is imported, Coach Mode compares its completed stimulus with an inferred pre-ride recommendation, marks it as matched, lighter, or harder, and regenerates tomorrow around the resulting load. The inference uses the current saved check-in and pre-ride history because older daily recommendations were not persisted.
+Route suggestions pair several time commitments with a flexible ride focus, terrain-aware cues, a power guide, and an explicitly optional stretch idea. These are invitations to explore—not workouts to pass—and riders are encouraged to change the effort, shorten the route, or simply enjoy the scenery.
+
+After a same-day ride is imported, Coach Mode describes what the ride contributed—easy movement, aerobic endurance, or quality work—celebrates the time spent riding, and adapts the next suggestions around the resulting load. It never assigns adherence scores or treats a useful ride as a failure.
 
 Trend claims use genuinely comparable Zone 2 rides: the same indoor/outdoor environment, non-low classification and data quality, usable power plus heart rate, and intensity within 0.05 IF of the cohort median. Two rides create a possible signal, three or four a likely signal, and an established trend requires at least five rides spanning three weeks. Outdoor trends remain capped because wind, traffic, surface, and drafting are not observed.
 

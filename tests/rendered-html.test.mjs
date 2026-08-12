@@ -48,13 +48,15 @@ test("keeps the dashboard features while removing hosted runtime dependencies", 
   assert.match(dashboard, /label: "Coach"/);
   assert.match(dashboard, /Coach Mode ·/);
   assert.match(dashboard, /Every input stays visible/);
-  assert.match(dashboard, /Today’s feedback loop/);
-  assert.match(dashboard, /Inferred pre-ride plan/);
+  assert.match(dashboard, /What today’s riding contributed/);
+  assert.match(dashboard, /never to a pass\/fail score/);
+  assert.match(dashboard, /Choose what makes you want to ride/);
+  assert.match(dashboard, /Optional stretch:/);
   assert.match(dashboard, /28-day weekly baseline/);
   assert.match(dashboard, /Claims grow with the evidence/);
   assert.match(dashboard, /Data quality \+ provenance/);
   assert.match(dashboard, /Future days are low-confidence placeholders/);
-  assert.match(dashboard, /Zwift route match/);
+  assert.match(dashboard, /Route ideas for today/);
   assert.match(dashboard, /Shuffle routes/);
   assert.match(dashboard, /Export \.md/);
   assert.match(dashboard, /Export this ride/);
@@ -72,7 +74,8 @@ test("keeps the dashboard features while removing hosted runtime dependencies", 
   assert.match(styles, /select:disabled \{ color: var\(--muted\); -webkit-text-fill-color: var\(--muted\); opacity: 1; \}/);
   assert.match(styles, /\.environment-tag, \.workout-tag .*color: var\(--tag-text\)/);
   assert.match(styles, /\.environment-tag\.environment-virtual \{ background: var\(--tag-zone-bg\); \}/);
-  assert.match(styles, /\.coach-completion-grid, \.coach-load-equation/);
+  assert.match(styles, /\.coach-reflection-grid/);
+  assert.match(styles, /\.route-intention/);
   assert.match(styles, /\.workload-equation/);
   assert.match(manifest, /"display": "standalone"/);
   await access(new URL("../public/cycling-analytics-icon-192.png", import.meta.url));

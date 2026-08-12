@@ -1,7 +1,7 @@
 import { dataQualityRank, type EvidenceLevel } from "./data-quality";
 import type { SubjectiveRecovery } from "./metrics";
 
-export const COACH_ALGORITHM_VERSION = "coach-v2";
+export const COACH_ALGORITHM_VERSION = "coach-v3";
 export const TREND_ALGORITHM_VERSION = "trend-v1";
 
 export type CoachRide = {
@@ -51,18 +51,17 @@ export type PersonalBaseline = {
 
 export type CoachMode = "rest" | "recovery" | "endurance" | "tempo";
 export type CoachConfidence = "low" | "moderate" | "high";
-export type CoachCompletionStatus = "not_started" | "matched" | "lighter" | "harder";
+export type RideContribution = "awaiting_ride" | "easy_movement" | "aerobic_endurance" | "quality_work";
 
-export type CoachCompletionAssessment = {
-  status: CoachCompletionStatus;
-  plannedMode: CoachMode;
-  actualMode: Exclude<CoachMode, "rest"> | null;
+export type CoachRideReflection = {
+  contribution: RideContribution;
   completedRideCount: number;
   completedMinutes: number;
   completedLoad: number;
   headline: string;
   detail: string;
-  inferredPlan: boolean;
+  encouragement: string;
+  nextSuggestion: string;
 };
 
 
@@ -87,7 +86,7 @@ export type CoachReport = {
   avoid: string;
   nextQualitySession: string;
   recommendationWithheld: boolean;
-  completion: CoachCompletionAssessment;
+  rideReflection: CoachRideReflection;
   positives: string[];
   cautions: string[];
   guardrails: string[];
@@ -115,7 +114,6 @@ export type CoachReport = {
 export type BuildCoachReportInput = {
   rides: readonly CoachRide[];
   readinessScore: number;
-  preRideReadinessScore?: number;
   subjective: SubjectiveRecovery;
   checkInRecorded: boolean;
   referenceDate?: string | Date;
@@ -265,10 +263,10 @@ export function detectEnduranceTrend(rides: readonly CoachRide[]): CoachTrend {
 }
 
 function formatSession(mode: CoachMode, duration: number) {
-  if (mode === "rest") return "Rest and reassess";
-  if (mode === "recovery") return `Recovery spin · ${Math.max(20, Math.min(40, duration))} min`;
-  if (mode === "endurance") return `Easy Zone 2 · ${Math.max(35, Math.min(90, duration))} min`;
-  return `Tempo development · ${Math.max(40, Math.min(75, duration))} min`;
+  if (mode === "rest") return "Rest—or gentle movement if it feels good";
+  if (mode === "recovery") return `Easy spin option · ${Math.max(20, Math.min(40, duration))} min`;
+  if (mode === "endurance") return `Aerobic route option · ${Math.max(35, Math.min(90, duration))} min`;
+  return `Tempo route option · ${Math.max(40, Math.min(75, duration))} min`;
 }
 
 function calendarDay(date: Date) {
@@ -310,8 +308,8 @@ function decideCoachSession(input: CoachDecisionInput): CoachDecision {
   let state: CoachReport["state"] = "caution";
   let recommendationWithheld = false;
   let primary = formatSession("endurance", input.typicalEnduranceMinutes);
-  let detail = "Keep the effort conversational and finish with energy in reserve.";
-  let avoid = "Adding intensity because the first minutes feel easy";
+  let detail = "Choose a route that sounds enjoyable, settle into a conversational rhythm, and let the terrain add natural variety.";
+  let avoid = "Feeling obligated to turn the suggestion into a test";
 
   if (input.painSeverity >= 5 || input.illnessSeverity >= 4) {
     mode = "rest";
@@ -323,61 +321,84 @@ function decideCoachSession(input: CoachDecisionInput): CoachDecision {
   } else if (input.painSeverity >= 3 || input.illnessSeverity > 0 || input.legFreshness === "dead") {
     mode = "recovery";
     primary = formatSession("recovery", input.typicalEnduranceMinutes);
-    detail = "Use pain-free, very light movement only and stop if symptoms increase.";
-    avoid = "Intervals, forceful low-cadence work, and riding through symptoms";
+    detail = "If movement sounds good, keep it pain-free and very light; stopping early is always a good choice.";
+    avoid = "Riding through increasing symptoms";
   } else if (input.todayTrainingLoad >= 60 || input.todayStrenuous) {
     mode = "rest";
     primary = "Training complete for today";
-    detail = `Today's ${input.todayMinutes}-minute ride supplied ${input.todayTrainingLoad} load at up to IF ${input.todayMaxIntensityFactor.toFixed(2)}. Recovery is the remaining assignment.`;
-    avoid = "Adding a second training session after today's completed load";
+    detail = `Nice work—today's ${input.todayMinutes}-minute ride supplied ${input.todayTrainingLoad} load at up to IF ${input.todayMaxIntensityFactor.toFixed(2)}. Let that work settle in.`;
+    avoid = "Feeling like more riding is required today";
   } else if (input.todayTrainingLoad >= 30) {
     mode = "recovery";
     primary = "Meaningful training already completed";
-    detail = `Today's riding supplied ${input.todayTrainingLoad} load. Only optional, very light movement remains appropriate.`;
-    avoid = "Turning optional recovery movement into another workout";
+    detail = `Today's riding supplied ${input.todayTrainingLoad} load. That is meaningful work; anything else today can be purely for enjoyment.`;
+    avoid = "Chasing a number after already getting a worthwhile ride in";
   } else if (input.readinessScore < 40 || (input.loadRatio ?? 0) > 1.5) {
     mode = "rest";
-    primary = "Complete rest or gentle movement";
-    detail = "Let fatigue and recent load settle, then repeat the recovery check-in.";
-    avoid = "Adding load to rescue the week";
+    primary = "Rest—or choose gentle movement";
+    detail = "A quiet day can support the next good ride. If you want movement, keep it comfortable and pressure-free.";
+    avoid = "Trying to rescue the week with one hard ride";
   } else if (input.readinessScore < 55) {
     mode = "recovery";
     primary = formatSession("recovery", input.typicalEnduranceMinutes);
-    detail = "Keep this genuinely easy; the purpose is circulation, not fitness stress.";
-    avoid = "Threshold or VO2 work";
+    detail = "Choose an easy route and enjoy the movement; there is no need to hold an exact number.";
+    avoid = "Forcing intensity when your body is asking for easy riding";
   } else if (input.readinessScore < 70 || input.recentHardSessions >= 2 || input.hoursSinceLastHardRide < 36 || !input.checkInRecorded || input.recentEvidence === "low") {
     mode = "endurance";
     primary = formatSession("endurance", input.typicalEnduranceMinutes);
-    detail = "Build low-cost aerobic volume while preserving the option for a later quality session.";
-    avoid = "Unplanned surges and threshold work";
+    detail = "Explore a route at a mostly conversational effort. Briefly riding harder on hills is fine—return to your easy rhythm when the terrain allows.";
+    avoid = "Treating every rise or group surge like a requirement";
   } else {
     mode = "tempo";
     state = "ready";
     primary = formatSession("tempo", Math.max(45, Math.round(input.typicalEnduranceMinutes * 0.9)));
-    detail = "Complete three controlled 8-10 minute tempo efforts with five easy minutes between them.";
-    avoid = "Turning the final effort into a maximal test";
+    detail = "Use longer flats or climbs for a few controlled tempo stretches, then ride easy whenever you want. Accumulating some tempo is enough.";
+    avoid = "Turning a productive ride into a pass/fail test";
   }
 
   return { mode, state, recommendationWithheld, primary, detail, avoid };
 }
 
-function completedRideMode(rides: readonly CoachRide[], trainingLoad: number, minutes: number): Exclude<CoachMode, "rest"> | null {
-  if (!rides.length) return null;
-  if (rides.some(isObjectivelyHard)) return "tempo";
-  if (rides.some((ride) => ride.trainingType === "Zone 2") || trainingLoad >= 30 || (minutes >= 30 && Math.max(...rides.map((ride) => ride.intensityFactor)) >= 0.55)) return "endurance";
-  return "recovery";
-}
-
-const modeLabel = (mode: CoachMode) => mode === "tempo" ? "quality / tempo" : mode === "endurance" ? "Zone 2 / endurance" : mode;
-
-function assessCompletion(plannedMode: CoachMode, rides: readonly CoachRide[], trainingLoad: number, minutes: number): CoachCompletionAssessment {
-  const actualMode = completedRideMode(rides, trainingLoad, minutes);
-  if (actualMode === null) return { status: "not_started", plannedMode, actualMode, completedRideCount: 0, completedMinutes: 0, completedLoad: 0, headline: "No completed ride detected yet", detail: `Today's inferred plan is ${modeLabel(plannedMode)}.`, inferredPlan: true };
-  const rank: Record<CoachMode, number> = { rest: 0, recovery: 1, endurance: 2, tempo: 3 };
-  const status: CoachCompletionStatus = actualMode === plannedMode ? "matched" : rank[actualMode] < rank[plannedMode] ? "lighter" : "harder";
-  const headline = status === "matched" ? "Today's ride matched the planned stress" : status === "lighter" ? "Today's ride was lighter than planned" : plannedMode === "rest" ? "Training was completed on a planned rest day" : "Today's ride exceeded the planned stress";
-  const detail = `Inferred plan: ${modeLabel(plannedMode)}. Completed: ${modeLabel(actualMode)}, ${minutes} minutes and ${trainingLoad} load across ${rides.length} ${rides.length === 1 ? "ride" : "rides"}.`;
-  return { status, plannedMode, actualMode, completedRideCount: rides.length, completedMinutes: minutes, completedLoad: trainingLoad, headline, detail, inferredPlan: true };
+function reflectOnCompletedRide(rides: readonly CoachRide[], trainingLoad: number, minutes: number): CoachRideReflection {
+  const shared = { completedRideCount: rides.length, completedMinutes: minutes, completedLoad: trainingLoad };
+  if (!rides.length) {
+    return {
+      ...shared,
+      contribution: "awaiting_ride",
+      headline: "Your next ride is another chance to build momentum",
+      detail: "Choose the route and time that sound inviting today. The effort cues are suggestions, not rules.",
+      encouragement: "Showing up can mean riding, resting, or simply checking in with how you feel.",
+      nextSuggestion: "Pick the option that makes riding feel easiest to start.",
+    };
+  }
+  if (rides.some(isObjectivelyHard)) {
+    return {
+      ...shared,
+      contribution: "quality_work",
+      headline: "Strong work—you added a quality stimulus today",
+      detail: `${minutes} minutes and ${trainingLoad} load gave sustained power and fitness a meaningful challenge.`,
+      encouragement: "That work counts; it does not need to be repeated or made perfect.",
+      nextSuggestion: "An easier route next will give your legs room to absorb the work.",
+    };
+  }
+  if (rides.some((ride) => ride.trainingType === "Zone 2") || trainingLoad >= 30 || (minutes >= 30 && Math.max(...rides.map((ride) => ride.intensityFactor)) >= 0.55)) {
+    return {
+      ...shared,
+      contribution: "aerobic_endurance",
+      headline: `Nice work—you banked ${minutes} minutes of aerobic riding`,
+      detail: `The steady portions supported endurance, while naturally harder moments added useful variety across ${rides.length} ${rides.length === 1 ? "ride" : "rides"}.`,
+      encouragement: "A ride does not need to stay in one zone every minute to be productive.",
+      nextSuggestion: "Choose the next route by how recovered—and how excited to ride—you feel.",
+    };
+  }
+  return {
+    ...shared,
+    contribution: "easy_movement",
+    headline: "Easy movement still moves your riding forward",
+    detail: `${minutes} minutes of comfortable riding added circulation, practice, and consistency without demanding much recovery.`,
+    encouragement: "Short and easy rides are worthwhile; every ride does not need to prove fitness.",
+    nextSuggestion: "If you feel refreshed tomorrow, choose any route that sounds enjoyable.",
+  };
 }
 
 export function buildCoachReport(input: BuildCoachReportInput): CoachReport {
@@ -409,36 +430,7 @@ export function buildCoachReport(input: BuildCoachReportInput): CoachReport {
   const enduranceBaseline = baselines.find((baseline) => baseline.trainingType === "Zone 2");
   const typicalEnduranceMinutes = enduranceBaseline?.medianDurationMinutes || 50;
   const trend = detectEnduranceTrend(rides);
-  const beforeToday = rides.filter((ride) => localDayKey(ride.date) !== localDayKey(reference));
-  const preRecent = beforeToday.filter((ride) => inWindow(ride, now, 28));
-  const preAcute = beforeToday.filter((ride) => inWindow(ride, now, 7));
-  const preHard = beforeToday.filter(isObjectivelyHard);
-  const preRecentHard = preHard.filter((ride) => inWindow(ride, now, 7));
-  const preChronicWeeklyLoad = Math.round(preRecent.reduce((sum, ride) => sum + Math.max(0, ride.trainingLoad), 0) / 4);
-  const preRecentSpanDays = preRecent.length > 1 ? (timestamp(preRecent[0]) - timestamp(preRecent.at(-1)!)) / dayMs : 0;
-  const preLoadRatio = preRecent.length >= 4 && preRecentSpanDays >= 14 && preChronicWeeklyLoad > 0
-    ? Math.round((preAcute.reduce((sum, ride) => sum + Math.max(0, ride.trainingLoad), 0) / preChronicWeeklyLoad) * 100) / 100
-    : null;
-  const preHighQualityRides = preRecent.filter((ride) => ride.dataQualityLevel === "high").length;
-  const preModerateQualityRides = preRecent.filter((ride) => ride.dataQualityLevel === "moderate").length;
-  const preRecentEvidence: EvidenceLevel = preHighQualityRides >= 2 ? "high" : preHighQualityRides + preModerateQualityRides >= 2 ? "moderate" : "low";
-  const plannedDecision = decideCoachSession({
-    painSeverity,
-    illnessSeverity,
-    legFreshness: input.subjective.legFreshness,
-    todayTrainingLoad: 0,
-    todayStrenuous: false,
-    todayMinutes: 0,
-    todayMaxIntensityFactor: 0,
-    readinessScore: input.preRideReadinessScore ?? input.readinessScore,
-    loadRatio: preLoadRatio,
-    recentHardSessions: preRecentHard.length,
-    hoursSinceLastHardRide: Math.round(hoursSince(preHard[0]?.date, now)),
-    checkInRecorded: input.checkInRecorded,
-    recentEvidence: preRecentEvidence,
-    typicalEnduranceMinutes,
-  });
-  const completion = assessCompletion(plannedDecision.mode, todayRides, todayTrainingLoad, todayMinutes);
+  const rideReflection = reflectOnCompletedRide(todayRides, todayTrainingLoad, todayMinutes);
   const positives: string[] = [];
   const cautions: string[] = [];
   const guardrails: string[] = [];
@@ -502,7 +494,7 @@ export function buildCoachReport(input: BuildCoachReportInput): CoachReport {
       if (weekModes[index] === "tempo") weekModes[index] = "endurance";
     }
   }
-  if (!recommendationWithheld && painSeverity < 3 && illnessSeverity === 0 && todayRides.length && (completion.actualMode === "tempo" || todayTrainingLoad >= 30)) {
+  if (!recommendationWithheld && painSeverity < 3 && illnessSeverity === 0 && todayRides.length && (rideReflection.contribution === "quality_work" || todayTrainingLoad >= 30)) {
     weekModes[1] = "recovery";
   }
 
@@ -511,9 +503,11 @@ export function buildCoachReport(input: BuildCoachReportInput): CoachReport {
     date.setDate(reference.getDate() + index);
     const duration = dayMode === "endurance" ? typicalEnduranceMinutes : dayMode === "tempo" ? Math.max(45, Math.round(typicalEnduranceMinutes * 0.9)) : typicalEnduranceMinutes;
     const postRidePurpose = index === 1 && todayRides.length
-      ? completion.status === "harder" ? "Protect recovery after today exceeded the inferred plan."
-        : completion.status === "matched" ? "Absorb today's matched session before adding more stress."
-          : "Reassess after today's lighter-than-planned session; do not automatically make up the difference."
+      ? rideReflection.contribution === "quality_work"
+        ? "Let today's quality work settle in; an easy route is available if movement sounds good."
+        : rideReflection.contribution === "aerobic_endurance"
+          ? "Build from today's aerobic work with rest or another comfortable ride—choose what feels inviting."
+          : "If today's easy movement left you refreshed, choose any comfortable route that sounds fun."
       : null;
     return {
       ...calendarDay(date),
@@ -546,7 +540,7 @@ export function buildCoachReport(input: BuildCoachReportInput): CoachReport {
     nextQualitySession,
     recommendationWithheld,
     positives,
-    completion,
+    rideReflection,
     cautions,
     guardrails,
     evidenceSummary: {

@@ -328,28 +328,6 @@ const completedTrainingOnDate = (rides: readonly Ride[], reference: Date): Compl
     maximumIntensityFactor: Math.max(0, ...matching.map((ride) => ride.intensityFactor)),
   };
 };
-type TrainingLoadSnapshot = { acuteLoad: number; weeklyBaseline: number; ratio: number | null; latestHardRide: Ride | null };
-const trainingLoadSnapshot = (rides: readonly Ride[], reference: Date, includeReferenceDay = true): TrainingLoadSnapshot => {
-  const referenceMs = reference.getTime();
-  const referenceKey = localDateKey(reference);
-  const eligible = rides.filter((ride) => {
-    const startedAt = new Date(rideStartedAt(ride));
-    return Number.isFinite(startedAt.getTime()) && startedAt.getTime() <= referenceMs && (includeReferenceDay || localDateKey(startedAt) !== referenceKey);
-  });
-  const within = (days: number) => eligible.filter((ride) => Date.parse(rideStartedAt(ride)) >= referenceMs - (days * 86_400_000));
-  const acute = within(7);
-  const recent = within(28);
-  const acuteLoad = acute.reduce((sum, ride) => sum + Math.max(0, ride.trainingLoad), 0);
-  const weeklyBaseline = recent.reduce((sum, ride) => sum + Math.max(0, ride.trainingLoad), 0) / 4;
-  const spanDays = recent.length > 1 ? (Math.max(...recent.map((ride) => Date.parse(rideStartedAt(ride)))) - Math.min(...recent.map((ride) => Date.parse(rideStartedAt(ride))))) / 86_400_000 : 0;
-  const latestHardRide = eligible.filter(isObjectivelyHardRide).sort((a, b) => Date.parse(rideStartedAt(b)) - Date.parse(rideStartedAt(a)))[0] ?? null;
-  return {
-    acuteLoad,
-    weeklyBaseline,
-    ratio: recent.length >= 4 && spanDays >= 14 && weeklyBaseline > 0 ? acuteLoad / weeklyBaseline : null,
-    latestHardRide,
-  };
-};
 
 
 type SavedRideRow = {
@@ -1176,16 +1154,9 @@ export default function CyclingDashboard() {
       todayIntensityFactor: todayTraining.maximumIntensityFactor,
       todayMovingTimeSeconds: todayTraining.movingTimeSeconds,
     });
-    const preRideLoad = trainingLoadSnapshot(rides, generatedAt, false);
-    const preRideReadiness = calculateReadiness({
-      hoursSinceLastHardRide: elapsedHoursSince(preRideLoad.latestHardRide ? rideStartedAt(preRideLoad.latestHardRide) : null, referenceMs),
-      acuteChronicRatio: preRideLoad.ratio,
-      subjective: recovery,
-    });
     const coachReport = buildCoachReport({
       rides: rides.map(coachAnalyticsRide),
       readinessScore: snapshotReadiness.score,
-      preRideReadinessScore: preRideReadiness.score,
       subjective: recovery,
       checkInRecorded: recoverySaveState === "saved",
       referenceDate: generatedAt,
@@ -2241,16 +2212,9 @@ function PlanToday({ rides, recovery, setRecovery, recoverySaveState, saveRecove
     todayIntensityFactor: todayTraining.maximumIntensityFactor,
     todayMovingTimeSeconds: todayTraining.movingTimeSeconds,
   });
-  const preRideLoad = trainingLoadSnapshot(rides, referenceDate, false);
-  const preRideReadiness = calculateReadiness({
-    hoursSinceLastHardRide: elapsedHoursSince(preRideLoad.latestHardRide ? rideStartedAt(preRideLoad.latestHardRide) : null, referenceMs),
-    acuteChronicRatio: preRideLoad.ratio,
-    subjective: recovery,
-  });
   const coach = buildCoachReport({
     rides: rides.map(coachAnalyticsRide),
     readinessScore: readiness.score,
-    preRideReadinessScore: preRideReadiness.score,
     subjective: recovery,
     checkInRecorded: recoverySaveState === "saved",
     referenceDate,
@@ -2272,7 +2236,7 @@ function PlanToday({ rides, recovery, setRecovery, recoverySaveState, saveRecove
   const vo2Status = vo2?.status === "trend_ready" ? "trend ready" : vo2?.status === "provisional" ? "provisional" : "needs 5 min power";
   const change = (current: number, previous: number, suffix = "") => previous ? `${current >= previous ? "+" : ""}${(current - previous).toFixed(1)}${suffix}` : "—";
   const projectionDate = (date: string | null) => date ? new Date(`${date}T12:00:00Z`).toLocaleDateString("en-US", { month: "short", year: "numeric", timeZone: "UTC" }) : "—";
-  const coachModeName = (mode: typeof coach.mode | null) => mode === null ? "No ride detected" : mode === "tempo" ? "Quality / tempo" : mode === "endurance" ? "Zone 2 / endurance" : mode[0].toUpperCase() + mode.slice(1);
+  const contributionLabel = coach.rideReflection.contribution === "quality_work" ? "Quality work" : coach.rideReflection.contribution === "aerobic_endurance" ? "Aerobic endurance" : coach.rideReflection.contribution === "easy_movement" ? "Easy movement" : "Fresh suggestion";
   const coachLoadStatus = coach.evidenceSummary.acuteChronicRatio === null
     ? "Baseline not ready"
     : coach.evidenceSummary.acuteChronicRatio < 0.8
@@ -2294,16 +2258,12 @@ function PlanToday({ rides, recovery, setRecovery, recoverySaveState, saveRecove
 
       <RecoveryCheckIn recovery={recovery} setRecovery={setRecovery} recoverySaveState={recoverySaveState} saveRecovery={saveRecovery} readiness={readiness} />
 
-      <section className={`coach-completion panel full-width completion-${coach.completion.status}`}>
-        <div className="section-heading"><div><span className="eyebrow">Today’s feedback loop</span><h2>{coach.completion.headline}</h2><p>{coach.completion.detail}</p></div><span className={`completion-badge ${coach.completion.status}`}>{coach.completion.status === "not_started" ? "awaiting ride" : coach.completion.status}</span></div>
-        <div className="coach-completion-grid">
-          <article><span>Inferred pre-ride plan</span><strong>{coachModeName(coach.completion.plannedMode)}</strong><small>Current saved check-in + pre-ride history</small></article>
-          <b>→</b>
-          <article><span>Completed today</span><strong>{coachModeName(coach.completion.actualMode)}</strong><small>{coach.completion.completedRideCount ? `${coach.completion.completedMinutes} min · ${coach.completion.completedLoad} load` : "Import or sync today’s ride"}</small></article>
-          <b>→</b>
-          <article className="completion-result"><span>Plan response</span><strong>{coach.completion.status === "harder" ? "Protect recovery" : coach.completion.status === "matched" ? "Absorb the work" : coach.completion.status === "lighter" ? "Reassess; don’t chase load" : "Updates after your ride"}</strong><small>Tomorrow is regenerated from the completed load</small></article>
+      <section className={`coach-reflection panel full-width reflection-${coach.rideReflection.contribution}`}>
+        <div className="section-heading"><div><span className="eyebrow">What today’s riding contributed</span><h2>{coach.rideReflection.headline}</h2><p>{coach.rideReflection.detail}</p></div><span className={`reflection-badge ${coach.rideReflection.contribution}`}>{contributionLabel}</span></div>
+        <div className="coach-reflection-grid">
+          <article><span>Encouragement</span><strong>{coach.rideReflection.encouragement}</strong><small>{coach.rideReflection.completedRideCount ? `${coach.rideReflection.completedMinutes} min · ${coach.rideReflection.completedLoad} load today` : "No ride required to earn a fresh suggestion"}</small></article>
+          <article className="reflection-next"><span>A friendly next step</span><strong>{coach.rideReflection.nextSuggestion}</strong><small>The next suggestion adapts to your riding and recovery—never to a pass/fail score.</small></article>
         </div>
-        <p className="chart-note"><i /> The pre-ride plan is reconstructed because older daily recommendations were not stored. It uses today’s saved check-in and excludes today’s rides from the training history.</p>
       </section>
 
 
@@ -2336,7 +2296,7 @@ function PlanToday({ rides, recovery, setRecovery, recoverySaveState, saveRecove
 
       <section className="route-suite panel full-width">
         <div className="section-heading route-suite-heading">
-          <div><span className="eyebrow">Zwift route match</span><h2>Choose the time—and scenery—you want</h2><p>All 10 workout-accessible worlds are in the deck. Route windows: 30 min ±10, 60 min ±15, and 90 min ±15. Personal estimates use your weight, sustainable power, distance, and climbing.</p></div>
+          <div><span className="eyebrow">Route ideas for today</span><h2>Choose what makes you want to ride</h2><p>Each route includes a flexible focus, terrain cues, and an optional stretch idea. Change the effort, shorten the route, or ignore the numbers whenever that makes the ride better.</p></div>
           <span className={`small-badge ${workout.mode === "rest" ? "paused" : ""}`}>{workout.mode === "rest" ? "paused by rest guardrail" : "30 · 60 · 90 min"}</span>
         </div>
 
@@ -2382,8 +2342,15 @@ function PlanToday({ rides, recovery, setRecovery, recoverySaveState, saveRecove
                 </span>
 
                 <span className="route-prescription">
-                  <span><small>Target power</small><strong>{suggestion.targetWatts}</strong></span>
-                  <span><small>Heart-rate cue</small><strong>{suggestion.heartRateCue}</strong></span>
+                  <span><small>Power guide</small><strong>{suggestion.targetWatts}</strong></span>
+                  <span><small>Feel cue</small><strong>{suggestion.heartRateCue}</strong></span>
+                </span>
+                <span className="route-intention">
+                  <span><small>Today’s idea</small><strong>{suggestion.focus}</strong></span>
+                  <p>{suggestion.rideCue}</p>
+                  <p>{suggestion.terrainCue}</p>
+                  <em><strong>Optional stretch:</strong> {suggestion.optionalStretch}</em>
+                  <small>{suggestion.encouragement}</small>
                 </span>
                 <span className="route-reason">{suggestion.reason}</span>
                 <span className="route-time-cue">{suggestion.timingCue}</span>
@@ -2393,7 +2360,7 @@ function PlanToday({ rides, recovery, setRecovery, recoverySaveState, saveRecove
         </div>
 
         <div className="route-suite-footer">
-          <span>{workout.mode === "rest" ? "Rest remains today's recommendation." : <><strong>Selected:</strong> {selectedRoute.route.name} · {selectedRoute.estimatedMinimumMinutes}–{selectedRoute.estimatedMaximumMinutes} min · {selectedRoute.targetWatts}</>}</span>
+          <span>{workout.mode === "rest" ? "Rest is a useful option today; these routes will still be here later." : <><strong>Your current idea:</strong> {selectedRoute.route.name} · {selectedRoute.focus} · {selectedRoute.estimatedMinimumMinutes}–{selectedRoute.estimatedMaximumMinutes} min</>}</span>
           <span className="route-source-links"><a href="https://support.zwift.com/zwift-worlds-and-cycling-routes-rk3PMBUht" target="_blank" rel="noreferrer">Official route details ↗</a><a href={worldRotation?.sourceUrl ?? "https://zwiftinsider.com/schedule/"} target="_blank" rel="noreferrer">World calendar ↗</a></span>
         </div>
       </section>

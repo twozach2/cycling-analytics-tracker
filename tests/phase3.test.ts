@@ -190,6 +190,10 @@ test("Zwift route suite uses the requested time windows and FTP-based targets", 
   assert.equal(new Set(suite.map((suggestion) => suggestion.route.id)).size, 3);
   assert.deepEqual(suite.map((suggestion) => suggestion.targetWatts), ["125–145 W", "125–145 W", "125–145 W"]);
   assert.equal(suite.find((suggestion) => suggestion.recommended)?.commitment, 60);
+  assert.ok(suite.every((suggestion) => suggestion.focus === "Tempo exploration"));
+  assert.ok(suite.every((suggestion) => suggestion.rideCue.includes("comfortably strong tempo stretches")));
+  assert.ok(suite.every((suggestion) => suggestion.optionalStretch.includes("Skipping it is equally valid")));
+  assert.ok(suite.every((suggestion) => suggestion.encouragement.includes("not an assignment")));
   assert.equal(ZWIFT_ROUTE_COUNT, 75);
   assert.ok(suite.every((suggestion) => (
     suggestion.estimatedMinutes >= ROUTE_TIME_WINDOWS[suggestion.commitment].minimumMinutes
@@ -212,6 +216,8 @@ test("Zwift route suite can be limited to a supplied world pool", () => {
   const suite = recommendZwiftRoutes("endurance", 200, 80, ["Watopia", "Paris", "France"]);
   assert.ok(suite.every((suggestion) => ["Watopia", "Paris", "France"].includes(suggestion.route.world)));
   assert.ok(suite.every((suggestion) => suggestion.reason.includes("change of scenery")));
+  assert.ok(suite.every((suggestion) => suggestion.focus === "Aerobic endurance"));
+  assert.ok(suite.every((suggestion) => suggestion.terrainCue.includes("cue:")));
 });
 
 test("shuffling avoids recent routes while exposing the full world catalog", () => {

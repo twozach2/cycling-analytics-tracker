@@ -40,6 +40,11 @@ export type ZwiftRouteSuggestion = {
   estimatedMaximumMinutes: number;
   timeWindow: RouteTimeWindow;
   targetWatts: string;
+  focus: string;
+  rideCue: string;
+  terrainCue: string;
+  optionalStretch: string;
+  encouragement: string;
   heartRateCue: string;
   reason: string;
   timingCue: string;
@@ -175,26 +180,58 @@ const intensity: Record<WorkoutMode, { low: number; high: number; heartRateCue: 
 
 const modeReason: Record<WorkoutMode, Record<ZwiftRoute["profile"], string>> = {
   rest: {
-    flat: "Held in reserve only if the check-in improves and movement is pain-free.",
-    rolling: "Shown for planning ahead; do not let the terrain override today's rest guardrail.",
-    climb: "Shown for planning ahead; climbing is intentionally paused while the rest guardrail is active.",
+    flat: "Save this flat route for a day when easy movement sounds inviting.",
+    rolling: "Keep this scenic option in your pocket for another day; there is nothing to make up.",
+    climb: "This climbing route will still be here when your body is ready to enjoy it.",
   },
   recovery: {
-    flat: "Flat terrain keeps the focus on smooth, quiet pedaling and makes it easy to stop on time.",
-    rolling: "Gentle terrain variation without turning this into a workout; stay easy on every rise.",
-    climb: "Keep gearing light and turn around before the climb drives intensity above recovery effort.",
+    flat: "Flat terrain makes it easy to spin comfortably, look around, and stop whenever you have had enough.",
+    rolling: "Let the gentle rises change your cadence naturally; easing off is always part of the ride.",
+    climb: "Use light gearing and enjoy as much of the climb as feels good—turning around early still counts.",
   },
   endurance: {
-    flat: "Steady terrain makes it easier to hold an even aerobic effort without unnecessary surges.",
-    rolling: "Rolling terrain adds variety while still supporting a controlled endurance rhythm.",
-    climb: "Use easy gearing on the climbs and protect the endurance ceiling instead of chasing speed.",
+    flat: "Steady roads invite a comfortable aerobic rhythm, but small pace changes are completely fine.",
+    rolling: "The rollers add variety: ride the rises by feel and return to an easy rhythm on the other side.",
+    climb: "Settle into an easy climbing gear and let the route—not a strict power number—shape the day.",
   },
   tempo: {
-    flat: "The uninterrupted roads suit controlled tempo blocks with clean recoveries between them.",
-    rolling: "The rollers provide natural structure for tempo work without requiring a single long climb.",
-    climb: "The sustained climbing supports controlled tempo blocks; cap the effort before threshold.",
+    flat: "Long uninterrupted roads give you room for a few comfortably strong stretches whenever you feel ready.",
+    rolling: "Use selected rollers for tempo and enjoy easy riding between them; every hill does not need an effort.",
+    climb: "The longer climbs offer natural tempo opportunities, with full permission to ease off at any point.",
   },
 };
+
+const routeFocus: Record<WorkoutMode, string> = {
+  rest: "Save for a future ride",
+  recovery: "Easy movement",
+  endurance: "Aerobic endurance",
+  tempo: "Tempo exploration",
+};
+
+function rideCue(mode: WorkoutMode, commitment: RouteCommitment) {
+  if (mode === "rest") return "Today can be a rest day. Keep this route as something to look forward to.";
+  if (mode === "recovery") return "Ride as easily as feels good. Calm breathing and comfortable legs matter more than power.";
+  if (mode === "endurance") {
+    const steadyMinutes = commitment === 30 ? 20 : 30;
+    return `After an easy start, spend roughly ${steadyMinutes} minutes around Zone 2 when the terrain cooperates. Brief departures are normal.`;
+  }
+  return "Warm up easily, then use a few suitable flats or climbs for comfortably strong tempo stretches. Ride easy between them whenever you like.";
+}
+
+const terrainCue: Record<ZwiftRoute["profile"], string> = {
+  flat: "Flat cue: find a relaxed cadence and let speed be whatever it is today.",
+  rolling: "Rolling cue: allow power to rise gently uphill and settle again over the crest.",
+  climb: "Climbing cue: choose a light gear, ride by feel, and shorten the climb if that keeps the day enjoyable.",
+};
+
+function optionalStretch(mode: WorkoutMode, profile: ZwiftRoute["profile"]) {
+  if (mode === "rest") return "Optional: take a walk, stretch, or do nothing at all.";
+  if (mode === "recovery") return "If you finish feeling better than you started, add five relaxed minutes—or stop while it still feels good.";
+  if (mode === "endurance") return profile === "climb"
+    ? "If you feel smooth near the end, let one final climb drift into low tempo, then ease home."
+    : "If you feel smooth near the end, add 5–10 minutes of low tempo, then cool down.";
+  return "If you still feel smooth, add one more short tempo stretch. Skipping it is equally valid.";
+}
 
 const profilePenalty: Record<WorkoutMode, Record<ZwiftRoute["profile"], number>> = {
   rest: { flat: 0, rolling: 0.2, climb: 0.7 },
@@ -359,6 +396,11 @@ export function recommendZwiftRoutes(
       estimatedMaximumMinutes: routeEstimate.maximumMinutes,
       timeWindow: window,
       targetWatts: `${Math.round(ftpWatts * watts.low)}–${Math.round(ftpWatts * watts.high)} W`,
+      focus: routeFocus[mode],
+      rideCue: rideCue(mode, commitment),
+      terrainCue: terrainCue[selectedRoute.profile],
+      optionalStretch: optionalStretch(mode, selectedRoute.profile),
+      encouragement: "This is an idea, not an assignment—change the effort, shorten the route, or simply enjoy the scenery.",
       heartRateCue: watts.heartRateCue,
       reason: `${selectedRoute.world} brings a change of scenery. ${modeReason[mode][selectedRoute.profile]}`,
       timingCue: `Estimated ${routeEstimate.minimumMinutes}–${routeEstimate.maximumMinutes} min at ${ROUTE_ESTIMATE_WATTS_PER_KG.minimum.toFixed(1)}–${ROUTE_ESTIMATE_WATTS_PER_KG.maximum.toFixed(1)} W/kg · matched to the ${window.minimumMinutes}–${window.maximumMinutes} min route window.`,

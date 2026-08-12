@@ -84,7 +84,7 @@ test("coach exposes every recommendation input and creates an adaptive seven-day
   assert.ok(report.positives.length >= 3);
   assert.equal(report.weeklyPlan[0].adaptive, false);
   assert.ok(report.weeklyPlan.slice(1).every((day) => day.adaptive));
-  assert.equal(report.algorithmVersion, "coach-v2");
+  assert.equal(report.algorithmVersion, "coach-v3");
 });
 test("endurance trend excludes rides outside the comparable intensity band", () => {
   const trend = detectEnduranceTrend([
@@ -122,7 +122,7 @@ test("an objectively hard ride completed today closes the plan even when labeled
   assert.ok(report.cautions.some((reason) => reason.includes("closes the intensity window")));
 });
 
-test("matches today’s completed stimulus against the inferred pre-ride recommendation", () => {
+test("celebrates quality work without grading the rider against a plan", () => {
   const history = Array.from({ length: 5 }, (_, index) => ride({
     id: `history-${index}`,
     date: new Date(Date.UTC(2026, 6, 15 + index * 5, 12)).toISOString(),
@@ -133,35 +133,29 @@ test("matches today’s completed stimulus against the inferred pre-ride recomme
       ...history,
     ],
     readinessScore: 54,
-    preRideReadinessScore: 84,
     subjective: { bodyCondition: "normal", sleepQuality: 5, legFreshness: "fresh", motivation: 5 },
     checkInRecorded: true,
     referenceDate: "2026-08-10T21:15:00Z",
   });
 
-  assert.equal(report.completion.plannedMode, "tempo");
-  assert.equal(report.completion.actualMode, "tempo");
-  assert.equal(report.completion.status, "matched");
-  assert.equal(report.weeklyPlan[1].session, "Recovery spin · 40 min");
-  assert.match(report.weeklyPlan[1].purpose, /matched session/i);
+  assert.equal(report.rideReflection.contribution, "quality_work");
+  assert.match(report.rideReflection.headline, /Strong work/i);
+  assert.doesNotMatch(`${report.rideReflection.headline} ${report.rideReflection.detail}`, /pass|fail|matched|exceeded/i);
+  assert.equal(report.weeklyPlan[1].session, "Easy spin option · 40 min");
+  assert.match(report.weeklyPlan[1].purpose, /quality work settle/i);
 });
 
-test("flags a harder completed ride without prescribing make-up work tomorrow", () => {
-  const history = Array.from({ length: 5 }, (_, index) => ride({
-    id: `steady-${index}`,
-    date: new Date(Date.UTC(2026, 6, 15 + index * 5, 12)).toISOString(),
-  }));
+test("describes aerobic riding as useful even when effort naturally varies", () => {
   const report = buildCoachReport({
-    rides: [ride({ id: "today-hard", date: "2026-08-10T18:00:00Z", trainingType: "Threshold", trainingLoad: 75, intensityFactor: 0.9 }), ...history],
-    readinessScore: 54,
-    preRideReadinessScore: 65,
+    rides: [ride({ id: "today-aerobic", date: "2026-08-10T18:00:00Z", trainingType: "Zone 2", trainingLoad: 42, intensityFactor: 0.68 })],
+    readinessScore: 64,
     subjective: { bodyCondition: "normal", sleepQuality: 4, legFreshness: "normal", motivation: 4 },
     checkInRecorded: true,
     referenceDate: "2026-08-10T21:15:00Z",
   });
 
-  assert.equal(report.completion.plannedMode, "endurance");
-  assert.equal(report.completion.status, "harder");
-  assert.match(report.completion.headline, /exceeded/i);
-  assert.match(report.weeklyPlan[1].purpose, /Protect recovery/i);
+  assert.equal(report.rideReflection.contribution, "aerobic_endurance");
+  assert.match(report.rideReflection.headline, /Nice work/i);
+  assert.match(report.rideReflection.encouragement, /does not need to stay in one zone/i);
+  assert.match(report.weeklyPlan[1].purpose, /aerobic work/i);
 });
