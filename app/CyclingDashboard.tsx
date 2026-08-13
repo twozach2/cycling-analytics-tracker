@@ -4,6 +4,7 @@ import { buildCadenceOverview, hasCadenceDistribution, type CadenceAnalyticsRide
 import { buildComparableRouteCohorts, buildZone2BenchmarkCohort, COMPARABILITY_VERSION, ZONE2_BENCHMARK_PROTOCOL, ZONE2_BENCHMARK_VERSION } from "@/lib/comparability";
 import { buildCoachReport, type CoachRide } from "@/lib/coach";
 import { assessRideDataQuality, type RideDataQuality } from "@/lib/data-quality";
+import { HEART_RATE_ZONES, aggregateHeartRateZones, describeHeartRateDistribution, heartRateZoneRange, type HeartRateZoneDistribution } from "@/lib/heart-rate";
 import {
   calculateReadiness,
   deriveRideMetrics,
@@ -16,7 +17,7 @@ import {
 import { projectFtpGoal } from "@/lib/phase3";
 import { AUTOMATIC_SYNC_INTERVAL_MS, classifyRide, type ClassificationConfidence, type RideContext, type RideTrainingType } from "@/lib/strava-sync";
 import { buildCyclingMarkdown, cyclingMarkdownFilename, cyclingRideMarkdownFilename, METHOD_DEFINITIONS } from "@/lib/markdown-export";
-import { recommendZwiftRoutes, ROUTE_ESTIMATE_WATTS_PER_KG, ZWIFT_ROUTE_COUNT, ZWIFT_WORLDS } from "@/lib/zwift-routes";
+import { recommendZwiftRoutes, ROUTE_INTENSITY_BANDS, ZWIFT_ROUTE_COUNT, ZWIFT_WORLDS } from "@/lib/zwift-routes";
 import type { ZwiftRotation } from "@/lib/zwift-world-rotation";
 
 type View = "dashboard" | "plan" | "rides" | "import" | "method";
@@ -76,6 +77,7 @@ type Ride = {
   cadenceHighPercent?: number | null;
   first15HeartRate?: number | null;
   final15HeartRate?: number | null;
+  heartRateZones?: HeartRateZoneDistribution | null;
   note: string;
   dataQuality?: RideDataQuality;
 };
@@ -380,6 +382,13 @@ type SavedRideRow = {
     cadenceHighPercent: number | null;
     first15HeartRateBpm: number | null;
     final15HeartRateBpm: number | null;
+    heartRateThresholdBpm: number | null;
+    heartRateSampleCount: number;
+    heartRateZone1Percent: number | null;
+    heartRateZone2Percent: number | null;
+    heartRateZone3Percent: number | null;
+    heartRateZone4Percent: number | null;
+    heartRateZone5Percent: number | null;
     algorithmVersion: string;
     dataQuality: "high" | "medium" | "low";
   } | null;
@@ -526,6 +535,15 @@ function mapSavedRide({ ride, metrics, stream, sourceFile }: SavedRideRow): Ride
     first15HeartRate: metrics?.first15HeartRateBpm ?? null,
     dataQuality,
     final15HeartRate: metrics?.final15HeartRateBpm ?? null,
+    heartRateZones: metrics?.heartRateThresholdBpm && metrics.heartRateSampleCount > 0 && metrics.heartRateZone1Percent !== null && metrics.heartRateZone2Percent !== null && metrics.heartRateZone3Percent !== null && metrics.heartRateZone4Percent !== null && metrics.heartRateZone5Percent !== null ? {
+      thresholdBpm: metrics.heartRateThresholdBpm,
+      sampleCount: metrics.heartRateSampleCount,
+      zone1Percent: metrics.heartRateZone1Percent,
+      zone2Percent: metrics.heartRateZone2Percent,
+      zone3Percent: metrics.heartRateZone3Percent,
+      zone4Percent: metrics.heartRateZone4Percent,
+      zone5Percent: metrics.heartRateZone5Percent,
+    } : null,
     note: ride.notes || (ride.normalizedPowerWatts === null
       ? "Saved from the original activity file. Intensity and load are estimated where recorded power data is unavailable."
       : "Saved from the original activity file with recorded normalized power."),
@@ -550,6 +568,7 @@ export default function CyclingDashboard() {
   const [dataMode, setDataMode] = useState<DataMode>("loading");
   const [currentFtp, setCurrentFtp] = useState<number | null>(null);
   const [currentWeightKg, setCurrentWeightKg] = useState<number | null>(null);
+  const [currentLthr, setCurrentLthr] = useState<number | null>(null);
   const [profileStatus, setProfileStatus] = useState<"loading" | "ready" | "error">("loading");
   const [syncNote, setSyncNote] = useState("");
   const [showStravaSettings, setShowStravaSettings] = useState(false);
@@ -565,8 +584,10 @@ export default function CyclingDashboard() {
     painSeverity: 0,
     illnessSeverity: 0,
     motivation: 3,
+    restingHeartRate: null,
   });
   const [recoverySaveState, setRecoverySaveState] = useState<"idle" | "saving" | "saved" | "error">("idle");
+  const [restingHeartRateBaseline, setRestingHeartRateBaseline] = useState<number | null>(null);
   const [detected, setDetected] = useState<DetectedActivity | null>(null);
   const [importName, setImportName] = useState("");
   const [importError, setImportError] = useState("");
@@ -639,12 +660,13 @@ export default function CyclingDashboard() {
   useEffect(() => {
     let active = true;
     void fetch("/api/phase3", { cache: "no-store" })
-      .then(async (response) => ({ response, payload: await response.json() as { currentFtpWatts?: number | null; weightKg?: number | null; error?: string } }))
+      .then(async (response) => ({ response, payload: await response.json() as { currentFtpWatts?: number | null; weightKg?: number | null; lthrBpm?: number | null; error?: string } }))
       .then(({ response, payload }) => {
         if (!active) return;
         if (!response.ok) throw new Error(payload.error ?? "Rider profile could not be loaded.");
         setCurrentFtp(payload.currentFtpWatts ?? null);
         setCurrentWeightKg(payload.weightKg ?? null);
+        setCurrentLthr(payload.lthrBpm ?? null);
         setProfileStatus("ready");
       })
       .catch(() => { if (active) setProfileStatus("error"); });
@@ -735,9 +757,18 @@ export default function CyclingDashboard() {
   useEffect(() => {
     let active = true;
     void fetch("/api/recovery", { cache: "no-store" })
-      .then(async (response) => ({ response, payload: await response.json() as { recovery?: { sleepQuality?: number; legFreshness?: SubjectiveRecovery["legFreshness"]; motivation?: number; bodyCondition?: BodyCondition | null; painLocation?: PainLocation | null; painSeverity?: number | null; illnessSeverity?: number | null; generalSoreness?: number; kneePain?: number } | null } }))
+      .then(async (response) => ({
+        response,
+        payload: await response.json() as {
+          recovery?: { sleepQuality?: number; legFreshness?: SubjectiveRecovery["legFreshness"]; motivation?: number; bodyCondition?: BodyCondition | null; painLocation?: PainLocation | null; painSeverity?: number | null; illnessSeverity?: number | null; restingHeartRate?: number | null; generalSoreness?: number; kneePain?: number } | null;
+          recordedToday?: boolean;
+          restingHeartRateBaseline?: number | null;
+        },
+      }))
       .then(({ response, payload }) => {
-        if (!active || !response.ok || !payload.recovery) return;
+        if (!active || !response.ok) return;
+        setRestingHeartRateBaseline(payload.restingHeartRateBaseline ?? null);
+        if (!payload.recordedToday || !payload.recovery) return;
         const legacyBodyCondition: BodyCondition = (payload.recovery.kneePain ?? 0) > 0
           ? "pain_concern"
           : (payload.recovery.generalSoreness ?? 0) >= 6
@@ -754,12 +785,9 @@ export default function CyclingDashboard() {
           painLocation: bodyCondition === "pain_concern"
             ? payload.recovery.painLocation ?? ((payload.recovery.kneePain ?? 0) > 0 ? "knee" : "unspecified")
             : "unspecified",
-          painSeverity: bodyCondition === "pain_concern"
-            ? payload.recovery.painSeverity ?? payload.recovery.kneePain ?? 1
-            : 0,
-          illnessSeverity: bodyCondition === "illness"
-            ? payload.recovery.illnessSeverity ?? 1
-            : 0,
+          painSeverity: bodyCondition === "pain_concern" ? payload.recovery.painSeverity ?? payload.recovery.kneePain ?? 1 : 0,
+          illnessSeverity: bodyCondition === "illness" ? payload.recovery.illnessSeverity ?? 1 : 0,
+          restingHeartRate: payload.recovery.restingHeartRate ?? null,
         });
         setRecoverySaveState("saved");
       })
@@ -775,13 +803,14 @@ export default function CyclingDashboard() {
         headers: { "content-type": "application/json" },
         body: JSON.stringify(recovery),
       });
-      if (!response.ok) throw new Error("Recovery check-in could not be saved.");
+      const payload = await response.json() as { restingHeartRateBaseline?: number | null; error?: string };
+      if (!response.ok) throw new Error(payload.error ?? "Recovery check-in could not be saved.");
+      setRestingHeartRateBaseline(payload.restingHeartRateBaseline ?? restingHeartRateBaseline);
       setRecoverySaveState("saved");
     } catch {
       setRecoverySaveState("error");
     }
   };
-
   const selectedRide = rides.find((ride) => ride.id === selectedRideId) ?? rides[0];
   const filteredRides = rides.filter((ride) => {
     const matchesType = rideFilter === "All rides" || ride.type === rideFilter;
@@ -864,7 +893,7 @@ export default function CyclingDashboard() {
     setRouteName(file.name.replace(/\.(fit|tcx|gpx)$/i, "").replace(/[_-]+/g, " "));
     setIsReading(true);
     try {
-      const parsed = await parseActivityFile(file);
+      const parsed = await parseActivityFile(file, currentLthr);
       setDetected(parsed);
       setImportEnvironment(parsed.environment);
       setImportWorkoutSubtype(parsed.workoutSubtype);
@@ -918,6 +947,7 @@ export default function CyclingDashboard() {
       averagePower: 112,
       maximumPower: 148,
       normalizedPower: 114,
+      normalizedPowerSource: "recorded",
       sourceTrainingLoad: 48,
       aerobicDecouplingPercent: 2.4,
       pairedSampleCount: 3672,
@@ -930,6 +960,7 @@ export default function CyclingDashboard() {
       cadenceHighPercent: 1,
       first15HeartRate: 128,
       final15HeartRate: 135,
+      heartRateZones: null,
       powerDuration: [
         { durationSeconds: 300, bestPowerWatts: 128 },
         { durationSeconds: 1200, bestPowerWatts: 118 },
@@ -1014,8 +1045,11 @@ export default function CyclingDashboard() {
       cadenceHighPercent: detected.cadenceHighPercent,
       first15HeartRate: detected.first15HeartRate,
       final15HeartRate: detected.final15HeartRate,
+      heartRateZones: detected.heartRateZones,
       note: detected.normalizedPower
-        ? "Imported from original activity data with recorded normalized power."
+        ? detected.normalizedPowerSource === "computed"
+          ? "Imported with normalized power computed from the detailed power stream."
+          : "Imported from original activity data with recorded normalized power."
         : "Imported from activity data. Intensity and load are explicitly estimated from average power.",
     };
     try {
@@ -1058,6 +1092,7 @@ export default function CyclingDashboard() {
             averagePowerWatts: detected.averagePower,
             maximumPowerWatts: detected.maximumPower,
             normalizedPowerWatts: detected.normalizedPower,
+            normalizedPowerSource: detected.normalizedPowerSource,
             ftpAtRideWatts: ftpWatts,
             weightAtRideKg: weightKg,
             sourceTrainingLoad: detected.sourceTrainingLoad,
@@ -1070,6 +1105,7 @@ export default function CyclingDashboard() {
             cadenceHighPercent: detected.cadenceHighPercent,
             first15HeartRateBpm: detected.first15HeartRate,
             final15HeartRateBpm: detected.final15HeartRate,
+            heartRateZones: detected.heartRateZones,
             pairedSampleCount: detected.pairedSampleCount,
             pairedCoveragePercent: detected.pairedCoveragePercent,
             sampleCount: detected.sampleCount,
@@ -1078,15 +1114,15 @@ export default function CyclingDashboard() {
             powerDuration: detected.powerDuration,
           }),
         });
-        const saved = await saveResponse.json() as { duplicate?: boolean; error?: string };
+        const saved = await saveResponse.json() as { rideId?: string; duplicate?: boolean; refreshed?: boolean; error?: string };
         if (!saveResponse.ok) throw new Error(saved.error ?? "The ride could not be added to your log.");
 
         const savedRides = await fetchSavedRides();
         if (!savedRides.length) throw new Error("The ride was saved, but the refreshed log was empty.");
         setRides(savedRides);
-        setSelectedRideId(savedRides[0].id);
+        setSelectedRideId(saved.rideId ?? savedRides[0].id);
         setDataMode("saved");
-        setSyncNote(saved.duplicate ? "Already imported · Duplicate skipped" : "Saved just now · Private");
+        setSyncNote(saved.refreshed ? "Existing ride found · Analytics refreshed" : "Saved just now · Private");
       }
       setView("dashboard");
       resetImport();
@@ -1153,6 +1189,8 @@ export default function CyclingDashboard() {
       todayTrainingLoad: todayTraining.trainingLoad,
       todayIntensityFactor: todayTraining.maximumIntensityFactor,
       todayMovingTimeSeconds: todayTraining.movingTimeSeconds,
+      restingHeartRateBaseline,
+      checkInRecorded: recoverySaveState === "saved",
     });
     const coachReport = buildCoachReport({
       rides: rides.map(coachAnalyticsRide),
@@ -1165,6 +1203,7 @@ export default function CyclingDashboard() {
     const markdown = buildCyclingMarkdown(exportRides, {
       ftpWatts: currentFtp,
       bodyWeightKg: currentWeightKg,
+      lthrBpm: currentLthr,
       dataMode,
       coachReport,
     }, generatedAt);
@@ -1216,9 +1255,11 @@ export default function CyclingDashboard() {
     return <RiderSetup
       initialFtp={currentFtp}
       initialWeightKg={currentWeightKg}
-      onSaved={(ftpWatts, weightKg) => {
+      initialLthr={currentLthr}
+      onSaved={(ftpWatts, weightKg, lthrBpm) => {
         setCurrentFtp(ftpWatts);
         setCurrentWeightKg(weightKg);
+        setCurrentLthr(lthrBpm);
       }}
     />;
   }
@@ -1245,7 +1286,7 @@ export default function CyclingDashboard() {
         </nav>
         <div className="athlete-card">
           <div className="athlete-avatar">ZT</div>
-          <div><strong>Personal profile</strong><span>FTP {currentFtp} W</span></div>
+          <div><strong>Personal profile</strong><span>FTP {currentFtp} W{currentLthr ? ` · LTHR ${currentLthr} bpm` : ""}</span></div>
         </div>
       </aside>
 
@@ -1270,10 +1311,10 @@ export default function CyclingDashboard() {
         )}
 
         {view === "dashboard" && <div className="dashboard-stack">
-          <Overview selectedRide={selectedRide} rides={rides} openRide={openRide} exportRide={exportRideMarkdown} changeRideType={changeRideType} changeRideContext={changeRideContext} rideTypeSaving={rideTypeSavingId === selectedRide.id} setView={setView} isDemo={dataMode !== "saved"} currentFtp={currentFtp} />
+          <Overview selectedRide={selectedRide} rides={rides} openRide={openRide} exportRide={exportRideMarkdown} changeRideType={changeRideType} changeRideContext={changeRideContext} rideTypeSaving={rideTypeSavingId === selectedRide.id} setView={setView} isDemo={dataMode !== "saved"} currentFtp={currentFtp} currentLthr={currentLthr} />
           <details className="performance-drawer">
             <summary><span><strong>Performance details</strong><small>Route comparisons, benchmarks, cadence, and workload</small></span><i>+</i></summary>
-            <PerformanceDetails rides={rides} currentFtp={currentFtp} />
+            <PerformanceDetails rides={rides} currentFtp={currentFtp} currentLthr={currentLthr} />
           </details>
         </div>}
         {view === "plan" && <PlanToday
@@ -1286,6 +1327,9 @@ export default function CyclingDashboard() {
           setCurrentFtp={setCurrentFtp}
           currentWeightKg={currentWeightKg}
           setCurrentWeightKg={setCurrentWeightKg}
+          currentLthr={currentLthr}
+          setCurrentLthr={setCurrentLthr}
+          restingHeartRateBaseline={restingHeartRateBaseline}
         />}
         {view === "rides" && (
           <RideLog
@@ -1335,6 +1379,7 @@ export default function CyclingDashboard() {
         {view === "method" && <Methodology
           currentFtp={currentFtp}
           currentWeightKg={currentWeightKg}
+          currentLthr={currentLthr}
           theme={theme}
           setTheme={setTheme}
           installPromptAvailable={installPrompt !== null}
@@ -1355,13 +1400,15 @@ function ProfileGate({ children }: { children: React.ReactNode }) {
   );
 }
 
-function RiderSetup({ initialFtp, initialWeightKg, onSaved }: {
+function RiderSetup({ initialFtp, initialWeightKg, initialLthr, onSaved }: {
   initialFtp: number | null;
   initialWeightKg: number | null;
-  onSaved: (ftpWatts: number, weightKg: number) => void;
+  initialLthr: number | null;
+  onSaved: (ftpWatts: number, weightKg: number, lthrBpm: number | null) => void;
 }) {
   const [ftpValue, setFtpValue] = useState(initialFtp === null ? "" : String(initialFtp));
   const [weightValue, setWeightValue] = useState(initialWeightKg === null ? "" : String(Math.round(initialWeightKg * 2.2046226218)));
+  const [lthrValue, setLthrValue] = useState(initialLthr === null ? "" : String(initialLthr));
   const [saveState, setSaveState] = useState<"idle" | "saving" | "error">("idle");
   const [message, setMessage] = useState("");
   const [stravaClientId, setStravaClientId] = useState("");
@@ -1371,6 +1418,7 @@ function RiderSetup({ initialFtp, initialWeightKg, onSaved }: {
     event.preventDefault();
     const ftpWatts = Number(ftpValue);
     const weightPounds = Number(weightValue);
+    const lthrBpm = lthrValue.trim() ? Math.round(Number(lthrValue)) : null;
     if (!Number.isFinite(ftpWatts) || ftpWatts < 50 || ftpWatts > 500) {
       setSaveState("error");
       setMessage("Enter an FTP between 50 and 500 watts.");
@@ -1379,6 +1427,11 @@ function RiderSetup({ initialFtp, initialWeightKg, onSaved }: {
     if (!Number.isFinite(weightPounds) || weightPounds < 80 || weightPounds > 500) {
       setSaveState("error");
       setMessage("Enter a body weight between 80 and 500 pounds.");
+      return;
+    }
+    if (lthrBpm !== null && (!Number.isFinite(lthrBpm) || lthrBpm < 80 || lthrBpm > 220)) {
+      setSaveState("error");
+      setMessage("Enter an LTHR between 80 and 220 bpm, or leave it blank.");
       return;
     }
     if ((stravaClientId.trim() && !stravaClientSecret.trim()) || (!stravaClientId.trim() && stravaClientSecret.trim())) {
@@ -1401,13 +1454,13 @@ function RiderSetup({ initialFtp, initialWeightKg, onSaved }: {
       const response = await fetch("/api/phase3", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ action: "record_profile", ftpWatts, weightPounds }),
+        body: JSON.stringify({ action: "record_profile", ftpWatts, weightPounds, lthrBpm }),
       });
-      const payload = await response.json() as { ftpWatts?: number; weightKg?: number; error?: string };
+      const payload = await response.json() as { ftpWatts?: number; weightKg?: number; lthrBpm?: number | null; error?: string };
       if (!response.ok || payload.ftpWatts === undefined || payload.weightKg === undefined) {
         throw new Error(payload.error ?? "Your rider profile could not be saved.");
       }
-      onSaved(payload.ftpWatts, payload.weightKg);
+      onSaved(payload.ftpWatts, payload.weightKg, payload.lthrBpm ?? null);
     } catch (error) {
       setSaveState("error");
       setMessage(error instanceof Error ? error.message : "Your rider profile could not be saved.");
@@ -1418,10 +1471,11 @@ function RiderSetup({ initialFtp, initialWeightKg, onSaved }: {
     <ProfileGate>
       <span className="eyebrow">Required rider setup</span>
       <h1>Set your training baseline.</h1>
-      <p>FTP and body weight are required before the dashboard can calculate training load, power targets, or realistic Zwift route times. Nothing is prefilled with a generic rider.</p>
+      <p>FTP and body weight are required before the dashboard can calculate training load, power targets, or realistic Zwift route times. LTHR is optional and unlocks personalized heart-rate zones.</p>
       <form className="profile-setup-form" onSubmit={saveProfile}>
         <label><span>Functional threshold power</span><span className="profile-input"><input type="number" min="50" max="500" required value={ftpValue} onChange={(event) => setFtpValue(event.target.value)} /><small>watts</small></span><em>Your current sustainable one-hour power estimate.</em></label>
         <label><span>Body weight</span><span className="profile-input"><input type="number" min="80" max="500" step="1" required value={weightValue} onChange={(event) => setWeightValue(event.target.value)} /><small>lb</small></span><em>Used with FTP for W/kg and climbing estimates.</em></label>
+        <label><span>Lactate-threshold heart rate <small>(optional)</small></span><span className="profile-input"><input type="number" min="80" max="220" value={lthrValue} onChange={(event) => setLthrValue(event.target.value)} /><small>bpm</small></span><em>Use a tested or carefully observed LTHR. Leave blank rather than estimating.</em></label>
         <div className="profile-strava-setup">
           <div><strong>Optional Strava setup</strong><span>Create an API application, set its callback domain to <code>127.0.0.1</code>, then paste both values. You can also do this later from Import.</span></div>
           <label><span>Client ID</span><input type="text" autoComplete="off" value={stravaClientId} onChange={(event) => setStravaClientId(event.target.value)} /></label>
@@ -1434,7 +1488,7 @@ function RiderSetup({ initialFtp, initialWeightKg, onSaved }: {
   );
 }
 
-function Overview({ selectedRide, rides, openRide, exportRide, changeRideType, changeRideContext, rideTypeSaving, setView, isDemo, currentFtp }: {
+function Overview({ selectedRide, rides, openRide, exportRide, changeRideType, changeRideContext, rideTypeSaving, setView, isDemo, currentFtp, currentLthr }: {
   selectedRide: Ride;
   rides: Ride[];
   openRide: (ride: Ride) => void;
@@ -1445,6 +1499,7 @@ function Overview({ selectedRide, rides, openRide, exportRide, changeRideType, c
   setView: (view: View) => void;
   isDemo: boolean;
   currentFtp: number;
+  currentLthr: number | null;
 }) {
   const dayMs = 24 * 60 * 60 * 1000;
   const rideTimestamps = rides.map((ride) => Date.parse(ride.date)).filter(Number.isFinite);
@@ -1487,6 +1542,7 @@ function Overview({ selectedRide, rides, openRide, exportRide, changeRideType, c
   const powerScale = Math.max(100, ...selectedPowerData.map((entry) => entry.watts));
   const classificationSource = selectedRide.rideTypeSource === "manual" || selectedRide.rideContextSource === "manual" ? "Manual override" : "Automatic";
   const selectedQuality = qualityForRide(selectedRide);
+  const selectedHeartRateContext = describeHeartRateDistribution(selectedRide.type, selectedRide.heartRateZones);
 
   return (
     <div className="dashboard-grid">
@@ -1585,6 +1641,11 @@ function Overview({ selectedRide, rides, openRide, exportRide, changeRideType, c
           <div className="selected-cadence-heading"><div><span className="eyebrow">Selected ride cadence</span><h3>Pedaling distribution</h3></div><span className="small-badge">{selectedRide.dateLabel}</span></div>
           <CadenceDistributionPanel ride={selectedRide} />
         </section>
+        <section className="selected-heart-rate-panel" aria-label={`Heart-rate zones for ${selectedRide.name}`}>
+          <div className="selected-cadence-heading"><div><span className="eyebrow">Selected ride heart rate</span><h3>Time in heart-rate zones</h3></div><span className="small-badge">{selectedRide.heartRateZones?.sampleCount.toLocaleString() ?? 0} samples</span></div>
+          <HeartRateDistributionPanel distribution={selectedRide.heartRateZones} currentLthr={currentLthr} />
+          <div className="heart-rate-context"><strong>{selectedHeartRateContext.title}</strong><span>{selectedHeartRateContext.detail}</span></div>
+        </section>
         <blockquote>{selectedRide.note}</blockquote>
       </section>
 
@@ -1601,12 +1662,13 @@ function Overview({ selectedRide, rides, openRide, exportRide, changeRideType, c
   );
 }
 
-function RecoveryCheckIn({ recovery, setRecovery, recoverySaveState, saveRecovery, readiness }: {
+function RecoveryCheckIn({ recovery, setRecovery, recoverySaveState, saveRecovery, readiness, restingHeartRateBaseline }: {
   recovery: SubjectiveRecovery;
   setRecovery: (value: SubjectiveRecovery) => void;
   recoverySaveState: "idle" | "saving" | "saved" | "error";
   saveRecovery: () => Promise<void>;
   readiness: ReturnType<typeof calculateReadiness>;
+  restingHeartRateBaseline: number | null;
 }) {
   const bodyCondition = recovery.bodyCondition ?? "normal";
   const illnessSeverity = bodyCondition === "illness" ? recovery.illnessSeverity ?? 1 : 0;
@@ -1630,13 +1692,14 @@ function RecoveryCheckIn({ recovery, setRecovery, recoverySaveState, saveRecover
   ];
   return (
     <section className="checkin-card panel">
-      <div className="section-heading compact"><div><span className="eyebrow">{readiness.postRideAdjusted ? "Post-ride readiness" : "Recovery check-in"}</span><h2>How are you feeling?</h2></div><span className={`readiness-score tone-${readiness.tone}`}>{readiness.score}</span></div>
+      <div className="section-heading compact"><div><span className="eyebrow">{readiness.postRideAdjusted ? "Post-ride readiness" : "Recovery check-in"}</span><h2>How are you feeling?</h2><small>{readiness.confidence} confidence{readiness.estimated ? " · estimated inputs remain" : " · complete current evidence"}</small></div><span className={`readiness-score tone-${readiness.tone}`}>{readiness.score}</span></div>
       <span className="checkin-label">Leg freshness</span>
       <div className="segmented-control" role="group" aria-label="Leg freshness">
         {(["fresh", "normal", "heavy", "dead"] as const).map((value) => <button key={value} className={recovery.legFreshness === value ? "selected" : ""} onClick={() => setRecovery({ ...recovery, legFreshness: value })}>{value}</button>)}
       </div>
       <div className="range-row"><span><strong>Sleep</strong><small>{recovery.sleepQuality}/5</small></span><input aria-label="Sleep quality" type="range" min="1" max="5" value={recovery.sleepQuality} onChange={(event) => setRecovery({ ...recovery, sleepQuality: Number(event.target.value) })} /></div>
       <div className="range-row"><span><strong>Motivation</strong><small>{recovery.motivation}/5</small></span><input aria-label="Motivation" type="range" min="1" max="5" value={recovery.motivation} onChange={(event) => setRecovery({ ...recovery, motivation: Number(event.target.value) })} /></div>
+      <label className="resting-heart-rate-input"><span><strong>Resting heart rate <small>(optional)</small></strong><small>{restingHeartRateBaseline === null ? "Baseline needs 3 prior readings" : `Recent baseline ${restingHeartRateBaseline} bpm`}</small></span><span><input aria-label="Resting heart rate" type="number" min="30" max="120" placeholder="bpm" value={recovery.restingHeartRate ?? ""} onChange={(event) => setRecovery({ ...recovery, restingHeartRate: event.target.value ? Number(event.target.value) : null })} /><em>bpm</em></span></label>
       <fieldset className="body-condition-fieldset">
         <legend>Body condition today</legend>
         <div className="body-condition-control">
@@ -1675,8 +1738,9 @@ function RecoveryCheckIn({ recovery, setRecovery, recoverySaveState, saveRecover
       {bodyCondition === "illness" && (
         <div className="pain-details illness-details"><div className="range-row compact"><span><strong>Symptom severity</strong><small>{illnessSeverity}/10</small></span><input aria-label="Illness symptom severity" type="range" min="1" max="10" value={illnessSeverity} onChange={(event) => setRecovery({ ...recovery, illnessSeverity: Number(event.target.value) })} /></div><p className={`pain-guidance ${illnessSeverity >= 4 ? "urgent" : ""}`}>{illnessSeverity >= 4 ? "Training guidance will be withheld. Rest and use appropriate medical guidance for concerning symptoms." : "Intensity will be removed. Reassess symptoms before any easy movement."}</p></div>
       )}
-      {readiness.adjustments.map((reason) => <div className="post-ride-adjustment" key={reason}><strong>Today&apos;s training is included</strong><span>{reason}</span></div>)}
+      {readiness.adjustments.map((reason) => <div className="post-ride-adjustment" key={reason}><strong>Readiness adjustment</strong><span>{reason}</span></div>)}
       <div className="readiness-summary"><div><strong>{readiness.label}</strong><span>{recoverySaveState === "saved" ? "Private check-in saved" : recoverySaveState === "error" ? "Save failed · try again" : "0–100 · updates with current time and check-in"}</span></div><button className="text-button" onClick={() => void saveRecovery()} disabled={recoverySaveState === "saving"}>{recoverySaveState === "saving" ? "Saving…" : "Save check-in"}</button></div>
+      <details className="readiness-evidence"><summary>Why {readiness.score}? · {readiness.confidence} confidence</summary><div className="readiness-component-list">{readiness.components.map((component) => <p key={component.label}><span><strong>{component.label}</strong><small>{component.detail}</small></span><em>{component.contribution >= 0 ? "+" : ""}{component.contribution.toFixed(1)}</em></p>)}</div>{readiness.assumptions.length > 0 && <div className="readiness-assumptions"><strong>Current assumptions</strong>{readiness.assumptions.map((assumption) => <p key={assumption}>{assumption}</p>)}</div>}</details>
     </section>
   );
 }
@@ -1723,7 +1787,7 @@ function RideLog({ rides, allRides, filter, setFilter, search, setSearch, openRi
   );
 }
 
-function PerformanceDetails({ rides, currentFtp }: { rides: Ride[]; currentFtp: number }) {
+function PerformanceDetails({ rides, currentFtp, currentLthr }: { rides: Ride[]; currentFtp: number; currentLthr: number | null }) {
   const dayMs = 24 * 60 * 60 * 1000;
   const timestamps = rides.map((ride) => Date.parse(ride.date)).filter(Number.isFinite);
   const anchorMs = timestamps.length ? Math.max(...timestamps) : 0;
@@ -1732,6 +1796,8 @@ function PerformanceDetails({ rides, currentFtp }: { rides: Ride[]; currentFtp: 
     return Number.isFinite(timestamp) && timestamp > anchorMs - (days * dayMs) && timestamp <= anchorMs + dayMs;
   });
   const acuteRides = withinDays(7);
+  const weeklyHeartRate = currentLthr === null ? null : aggregateHeartRateZones(acuteRides.map((ride) => ride.heartRateZones?.thresholdBpm === currentLthr ? ride.heartRateZones : null));
+  const weeklyHeartRateRideCount = acuteRides.filter((ride) => ride.heartRateZones?.thresholdBpm === currentLthr).length;
   const load7 = acuteRides.reduce((sum, ride) => sum + ride.trainingLoad, 0);
   const baselineRides = withinDays(28);
   const load28 = baselineRides.reduce((sum, ride) => sum + ride.trainingLoad, 0) / 4;
@@ -1859,6 +1925,12 @@ function PerformanceDetails({ rides, currentFtp }: { rides: Ride[]; currentFtp: 
         </> : <div className="analysis-empty"><strong>No ride has a cadence stream yet.</strong><span>Strava detailed streams, FIT, or TCX can provide cadence when the recording device captured it.</span></div>}
       </section>
 
+      <section className="heart-rate-week-card panel full-width">
+        <div className="section-heading"><div><span className="eyebrow">Heart rate · last 7 days</span><h2>Weekly time in zones</h2><p>Recorded samples are combined only when they use your current LTHR.</p></div><span className="small-badge">{weeklyHeartRateRideCount} {weeklyHeartRateRideCount === 1 ? "ride" : "rides"}</span></div>
+        <HeartRateDistributionPanel distribution={weeklyHeartRate} currentLthr={currentLthr} />
+        <p className="chart-note"><i /> This is sample-weighted training distribution, not a target or a score. Run a six-month Strava sync or re-import files after changing LTHR so older rides use the same boundaries.</p>
+      </section>
+
       <section className="workload-card panel full-width">
         <div className="section-heading"><div><span className="eyebrow">Weekly volume</span><h2>Load with context</h2></div><span className={`load-flag ${acuteChronicRatio !== null && acuteChronicRatio > 1.3 ? "alert" : ""}`}>{loadStatus}</span></div>
         <div className="workload-equation" aria-label="Seven-day load divided by the 28-day weekly baseline"><article><span>Last 7 days</span><strong>{Math.round(load7)}</strong><small>total load</small></article><b>÷</b><article><span>28-day weekly baseline</span><strong>{baselineReady ? Math.round(load28) : "—"}</strong><small>28-day total ÷ 4</small></article><b>=</b><article className="workload-result"><span>Current comparison</span><strong>{acuteChronicRatio === null ? "—" : `${acuteChronicRatio.toFixed(2)}×`}</strong><small>{loadStatus}</small></article></div>
@@ -1891,6 +1963,25 @@ function CadenceDistributionPanel({ ride }: { ride: Ride }) {
   </div>;
 }
 
+function HeartRateDistributionPanel({ distribution, currentLthr }: { distribution: HeartRateZoneDistribution | null | undefined; currentLthr: number | null }) {
+  if (currentLthr === null) {
+    return <div className="analysis-empty compact"><strong>Add an LTHR to unlock heart-rate zones.</strong><span>Use a tested or carefully observed threshold heart rate. The app will not estimate one from maximum heart rate.</span></div>;
+  }
+  if (!distribution) {
+    return <div className="analysis-empty compact"><strong>No zone distribution stored yet.</strong><span>Run a six-month Strava sync or re-import the original FIT/TCX file to analyze recorded heart-rate samples with your {currentLthr} bpm LTHR.</span></div>;
+  }
+  return <div className="heart-rate-distribution">
+    <div className="heart-rate-zone-list">
+      {HEART_RATE_ZONES.map((zone, index) => <DistributionRow
+        key={zone.key}
+        label={`${zone.shortLabel} ${zone.label} · ${heartRateZoneRange(distribution.thresholdBpm, index)}`}
+        value={distribution[zone.key]}
+        tone={`heart-zone-${index + 1}`}
+      />)}
+    </div>
+    <p className="cadence-sample-note">{distribution.sampleCount.toLocaleString()} recorded heart-rate samples · calculated from {distribution.thresholdBpm} bpm LTHR{distribution.thresholdBpm === currentLthr ? "" : ` · current LTHR is ${currentLthr} bpm; reprocess this ride for matching zones`}.</p>
+  </div>;
+}
 function CadenceCohortCard({ summary }: { summary: CadenceCohortSummary }) {
   return <article className="cadence-cohort-card"><span>{summary.label}</span><strong>{summary.medianAverageCadence.toFixed(0)} <small>rpm</small></strong><p>{summary.medianAcceptablePercent.toFixed(0)}% median in 80-95 rpm</p><small>{summary.rideCount} {summary.rideCount === 1 ? "ride" : "rides"}{summary.medianCadenceStddev === null ? "" : ` - ${summary.medianCadenceStddev.toFixed(1)} rpm median sigma`}</small></article>;
 }
@@ -1933,6 +2024,7 @@ type PowerRecordHistoryView = {
 type PhaseThreeInsights = {
   currentFtpWatts: number | null;
   weightKg: number | null;
+  lthrBpm: number | null;
   profileComplete: boolean;
   ftpHistory: Array<{ effectiveAt: string; ftpWatts: number; source: string }>;
   prediction: { minimumWatts: number | null; maximumWatts: number | null; midpointWatts: number | null; confidence: string; signals: string[] };
@@ -2004,7 +2096,7 @@ function PowerRecordsCard({ history }: { history: PowerRecordHistoryView | null 
   );
 }
 
-function PlanToday({ rides, recovery, setRecovery, recoverySaveState, saveRecovery, currentFtp, setCurrentFtp, currentWeightKg, setCurrentWeightKg }: {
+function PlanToday({ rides, recovery, setRecovery, recoverySaveState, saveRecovery, currentFtp, setCurrentFtp, currentWeightKg, setCurrentWeightKg, currentLthr, setCurrentLthr, restingHeartRateBaseline }: {
   rides: Ride[];
   recovery: SubjectiveRecovery;
   setRecovery: (value: SubjectiveRecovery) => void;
@@ -2014,6 +2106,9 @@ function PlanToday({ rides, recovery, setRecovery, recoverySaveState, saveRecove
   setCurrentFtp: (value: number) => void;
   currentWeightKg: number;
   setCurrentWeightKg: (value: number) => void;
+  currentLthr: number | null;
+  setCurrentLthr: (value: number | null) => void;
+  restingHeartRateBaseline: number | null;
 }) {
   const [insights, setInsights] = useState<PhaseThreeInsights | null>(null);
   const [goalTarget, setGoalTarget] = useState(200);
@@ -2023,6 +2118,9 @@ function PlanToday({ rides, recovery, setRecovery, recoverySaveState, saveRecove
   const [weightInputPounds, setWeightInputPounds] = useState(Math.round(currentWeightKg * 2.2046226218));
   const [weightSaveMessage, setWeightSaveMessage] = useState("");
   const [weightSaveState, setWeightSaveState] = useState<"idle" | "working" | "success" | "error">("idle");
+  const [lthrInput, setLthrInput] = useState(currentLthr === null ? "" : String(currentLthr));
+  const [lthrSaveMessage, setLthrSaveMessage] = useState("");
+  const [lthrSaveState, setLthrSaveState] = useState<"idle" | "working" | "success" | "error">("idle");
   const [actionState, setActionState] = useState<"idle" | "working" | "success" | "error">("idle");
   const [actionMessage, setActionMessage] = useState("");
   const [selectedRouteId, setSelectedRouteId] = useState<string | null>(null);
@@ -2044,6 +2142,8 @@ function PlanToday({ rides, recovery, setRecovery, recoverySaveState, saveRecove
       setCurrentWeightKg(payload.weightKg);
       setWeightInputPounds(Math.round(payload.weightKg * 2.2046226218));
     }
+    setCurrentLthr(payload.lthrBpm);
+    setLthrInput(payload.lthrBpm === null ? "" : String(payload.lthrBpm));
     if (payload.goal) setGoalTarget(payload.goal.targetFtpWatts);
   };
 
@@ -2063,11 +2163,13 @@ function PlanToday({ rides, recovery, setRecovery, recoverySaveState, saveRecove
           setCurrentWeightKg(payload.weightKg);
           setWeightInputPounds(Math.round(payload.weightKg * 2.2046226218));
         }
+        setCurrentLthr(payload.lthrBpm);
+        setLthrInput(payload.lthrBpm === null ? "" : String(payload.lthrBpm));
         if (payload.goal) setGoalTarget(payload.goal.targetFtpWatts);
       })
       .catch(() => { if (active) setActionMessage("Saved insights are temporarily unavailable."); });
     return () => { active = false; };
-  }, [setCurrentFtp, setCurrentWeightKg]);
+  }, [setCurrentFtp, setCurrentLthr, setCurrentWeightKg]);
 
   useEffect(() => {
     let active = true;
@@ -2173,6 +2275,34 @@ function PlanToday({ rides, recovery, setRecovery, recoverySaveState, saveRecove
     }
   };
 
+  const saveLthr = async () => {
+    const lthrBpm = lthrInput.trim() ? Math.round(Number(lthrInput)) : null;
+    if (lthrBpm !== null && (!Number.isFinite(lthrBpm) || lthrBpm < 80 || lthrBpm > 220)) {
+      setLthrSaveState("error");
+      setLthrSaveMessage("Enter an LTHR between 80 and 220 bpm, or leave it blank.");
+      return;
+    }
+    setLthrSaveState("working");
+    setLthrSaveMessage("Saving heart-rate threshold…");
+    try {
+      const response = await fetch("/api/phase3", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ action: "record_lthr", lthrBpm }),
+      });
+      const payload = await response.json() as { lthrBpm?: number | null; error?: string };
+      if (!response.ok) throw new Error(payload.error ?? "LTHR could not be saved.");
+      const savedLthr = payload.lthrBpm ?? null;
+      setCurrentLthr(savedLthr);
+      setLthrInput(savedLthr === null ? "" : String(savedLthr));
+      setLthrSaveState("success");
+      setLthrSaveMessage(savedLthr === null ? "LTHR cleared. Heart-rate zones are withheld." : `Saved ${savedLthr} bpm. Run a six-month Strava sync or re-import older rides to calculate their zones.`);
+    } catch (error) {
+      setLthrSaveState("error");
+      setLthrSaveMessage(error instanceof Error ? error.message : "LTHR could not be saved.");
+    }
+  };
+
   const dayMs = 24 * 60 * 60 * 1000;
   const timestamps = rides.map((ride) => Date.parse(ride.date)).filter(Number.isFinite);
   const anchorMs = timestamps.length ? Math.max(...timestamps) : Date.parse("2026-08-07");
@@ -2211,6 +2341,8 @@ function PlanToday({ rides, recovery, setRecovery, recoverySaveState, saveRecove
     todayTrainingLoad: todayTraining.trainingLoad,
     todayIntensityFactor: todayTraining.maximumIntensityFactor,
     todayMovingTimeSeconds: todayTraining.movingTimeSeconds,
+    restingHeartRateBaseline,
+    checkInRecorded: recoverySaveState === "saved",
   });
   const coach = buildCoachReport({
     rides: rides.map(coachAnalyticsRide),
@@ -2222,9 +2354,10 @@ function PlanToday({ rides, recovery, setRecovery, recoverySaveState, saveRecove
   const workout = coach;
   const availableWorlds = worldRotation?.availableWorlds ?? ["Watopia"];
   const currentWeightPounds = Math.round(currentWeightKg * 2.2046226218);
-  const routePowerMinimum = Math.round(currentWeightKg * ROUTE_ESTIMATE_WATTS_PER_KG.minimum);
-  const routePowerMaximum = Math.round(Math.min(currentWeightKg * ROUTE_ESTIMATE_WATTS_PER_KG.maximum, currentFtp * 0.92));
-  const routeSuite = recommendZwiftRoutes(workout.mode, currentFtp, currentWeightKg, ZWIFT_WORLDS, routeShuffleIndex, recentRouteIds);
+  const routeSuite = recommendZwiftRoutes(workout.mode, currentFtp, currentWeightKg, ZWIFT_WORLDS, routeShuffleIndex, recentRouteIds, currentLthr);
+  const routeIntensity = ROUTE_INTENSITY_BANDS[workout.mode];
+  const routePowerMinimum = Math.round(currentFtp * routeIntensity.low);
+  const routePowerMaximum = Math.round(currentFtp * routeIntensity.high);
   const selectedRoute = routeSuite.find((suggestion) => suggestion.route.id === selectedRouteId)
     ?? routeSuite.find((suggestion) => suggestion.recommended)
     ?? routeSuite[0];
@@ -2256,7 +2389,7 @@ function PlanToday({ rides, recovery, setRecovery, recoverySaveState, saveRecove
 
       {actionMessage && <div className={`phase-action-message ${actionState}`}>{actionMessage}</div>}
 
-      <RecoveryCheckIn recovery={recovery} setRecovery={setRecovery} recoverySaveState={recoverySaveState} saveRecovery={saveRecovery} readiness={readiness} />
+      <RecoveryCheckIn recovery={recovery} setRecovery={setRecovery} recoverySaveState={recoverySaveState} saveRecovery={saveRecovery} readiness={readiness} restingHeartRateBaseline={restingHeartRateBaseline} />
 
       <section className={`coach-reflection panel full-width reflection-${coach.rideReflection.contribution}`}>
         <div className="section-heading"><div><span className="eyebrow">What today’s riding contributed</span><h2>{coach.rideReflection.headline}</h2><p>{coach.rideReflection.detail}</p></div><span className={`reflection-badge ${coach.rideReflection.contribution}`}>{contributionLabel}</span></div>
@@ -2301,7 +2434,7 @@ function PlanToday({ rides, recovery, setRecovery, recoverySaveState, saveRecove
         </div>
 
         <div className="route-deck" aria-live="polite">
-          <span className="route-deck-copy"><small>Any-world mode · Personal route model</small><strong>{currentWeightPounds} lb · {ROUTE_ESTIMATE_WATTS_PER_KG.minimum.toFixed(1)}–{ROUTE_ESTIMATE_WATTS_PER_KG.maximum.toFixed(1)} W/kg · about {routePowerMinimum}–{routePowerMaximum} W average</strong><em>{ZWIFT_WORLDS.length} workout-accessible worlds · {ZWIFT_ROUTE_COUNT} curated routes. In rotation now: {availableWorlds.join(" · ")}. Recent routes stay out of the next six deals.</em></span>
+          <span className="route-deck-copy"><small>Any-world mode · Personal route model</small><strong>{currentWeightPounds} lb · {Math.round(routeIntensity.low * 100)}–{Math.round(routeIntensity.high * 100)}% FTP · about {routePowerMinimum}–{routePowerMaximum} W average</strong><em>Times use today&apos;s suggested effort, your FTP, body weight, distance, and climbing. {ZWIFT_WORLDS.length} workout-accessible worlds · {ZWIFT_ROUTE_COUNT} curated routes. In rotation now: {availableWorlds.join(" · ")}.</em></span>
           <button type="button" className="route-shuffle" onClick={() => {
             const visibleRouteIds = routeSuite.map((suggestion) => suggestion.route.id);
             setRecentRouteIds((current) => [...new Set([...visibleRouteIds, ...current])].slice(0, 18));
@@ -2379,6 +2512,9 @@ function PlanToday({ rides, recovery, setRecovery, recoverySaveState, saveRecove
         <p className={`ftp-save-status ${ftpSaveState}`} aria-live="polite">{ftpSaveMessage || `Current saved FTP: ${currentFtp} W.`}</p>
         <div className="confirm-ftp"><label><span>Body weight (lb)</span><input type="number" min="80" max="500" value={weightInputPounds} onChange={(event) => { setWeightInputPounds(Number(event.target.value)); setWeightSaveMessage(""); setWeightSaveState("idle"); }} /></label><button className="primary-button" onClick={() => void saveWeight()} disabled={weightSaveState === "working"}>{weightSaveState === "working" ? "Saving…" : "Save weight"}</button></div>
         <p className={`ftp-save-status ${weightSaveState}`} aria-live="polite">{weightSaveMessage || `Current route-estimate weight: ${currentWeightPounds} lb.`}</p>
+        <div className="confirm-ftp"><label><span>LTHR (optional bpm)</span><input type="number" min="80" max="220" value={lthrInput} placeholder="Not set" onChange={(event) => { setLthrInput(event.target.value); setLthrSaveMessage(""); setLthrSaveState("idle"); }} /></label><button className="primary-button" onClick={() => void saveLthr()} disabled={lthrSaveState === "working"}>{lthrSaveState === "working" ? "Saving…" : currentLthr === null ? "Add LTHR" : "Save LTHR"}</button></div>
+        <p className={`ftp-save-status ${lthrSaveState}`} aria-live="polite">{lthrSaveMessage || (currentLthr === null ? "Optional: use a tested or carefully observed threshold; do not guess." : `Current LTHR: ${currentLthr} bpm.`)}</p>
+        {currentLthr !== null && <div className="lthr-zone-guide">{HEART_RATE_ZONES.map((zone, index) => <span key={zone.key}><strong>{zone.shortLabel}</strong><small>{heartRateZoneRange(currentLthr, index)}</small></span>)}</div>}
         <p className="chart-note"><i /> Predictions are advisory ranges. Your working FTP changes only after you confirm it.</p>
       </section>
 
@@ -2700,9 +2836,10 @@ function ReviewField({ label, value }: { label: string; value: string }) {
   return <label className="review-field"><span>{label}</span><input value={value} readOnly /></label>;
 }
 
-function Methodology({ currentFtp, currentWeightKg, theme, setTheme, installPromptAvailable, isStandaloneApp, installDesktopApp }: {
+function Methodology({ currentFtp, currentWeightKg, currentLthr, theme, setTheme, installPromptAvailable, isStandaloneApp, installDesktopApp }: {
   currentFtp: number;
   currentWeightKg: number;
+  currentLthr: number | null;
   theme: ThemeId;
   setTheme: (theme: ThemeId) => void;
   installPromptAvailable: boolean;
@@ -2746,6 +2883,6 @@ function Methodology({ currentFtp, currentWeightKg, theme, setTheme, installProm
     </section>
     <section className="method-hero panel-dark"><span className="eyebrow light">Explainable by design</span><h2>No mystery score.</h2><p>Every recommendation is assembled from visible inputs, conservative rules, and versioned calculations. Pain always overrides the number.</p><div className="version-stamp"><span>Current ruleset</span><strong>v3.5</strong></div></section>
     <section className="method-list panel"><div className="section-heading"><div><span className="eyebrow">Metric dictionary</span><h2>What the app calculates</h2></div></div>{METHOD_DEFINITIONS.map((method) => <article key={method.id} className="method-row"><span>{method.id}</span><div><strong>{method.title}</strong><code>{method.formula}</code><p>{method.note}</p></div></article>)}</section>
-    <section className="config-card panel"><div className="section-heading"><div><span className="eyebrow">Athlete configuration</span><h2>Current working values</h2></div></div><div className="config-grid"><Stat label="FTP" value={String(currentFtp)} unit="W" /><Stat label="Body weight" value={String(Math.round(currentWeightKg * 2.2046226218))} unit="lb" /><Stat label="FTP / weight" value={(currentFtp / currentWeightKg).toFixed(2)} unit="W/kg" /><Stat label="Zone 2 target" value={String(Math.round(currentFtp * 2 / 3))} unit="W" /></div><p className="chart-note"><i /> FTP and body weight can be updated from Plan Today. Every ride keeps its own FTP snapshot and source, so later FTP changes do not rewrite historical IF or load.</p></section>
+    <section className="config-card panel"><div className="section-heading"><div><span className="eyebrow">Athlete configuration</span><h2>Current working values</h2></div></div><div className="config-grid"><Stat label="FTP" value={String(currentFtp)} unit="W" /><Stat label="Body weight" value={String(Math.round(currentWeightKg * 2.2046226218))} unit="lb" /><Stat label="FTP / weight" value={(currentFtp / currentWeightKg).toFixed(2)} unit="W/kg" /><Stat label="LTHR" value={currentLthr === null ? "Not set" : String(currentLthr)} unit={currentLthr === null ? undefined : "bpm"} /><Stat label="Zone 2 target" value={String(Math.round(currentFtp * 2 / 3))} unit="W" /></div><p className="chart-note"><i /> FTP, body weight, and optional LTHR can be updated from Plan Today. Every ride keeps its own FTP snapshot; heart-rate distributions record the LTHR used and should be reprocessed after a threshold change.</p></section>
   </div>;
 }

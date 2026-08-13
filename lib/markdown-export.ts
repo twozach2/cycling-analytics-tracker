@@ -1,6 +1,7 @@
 import { buildComparableRouteCohorts, buildZone2BenchmarkCohort, COMPARABILITY_VERSION, evaluateZone2Benchmark, ZONE2_BENCHMARK_VERSION } from "./comparability";
 import type { CoachReport } from "./coach";
 import type { RideDataQuality } from "./data-quality";
+import type { HeartRateZoneDistribution } from "./heart-rate";
 export type MarkdownRide = {
   id: string;
   name: string;
@@ -44,6 +45,7 @@ export type MarkdownRide = {
   cadenceHighPercent?: number | null;
   first15HeartRate?: number | null;
   final15HeartRate?: number | null;
+  heartRateZones?: HeartRateZoneDistribution | null;
   dataQuality?: RideDataQuality;
   note: string;
 };
@@ -61,7 +63,7 @@ export const METHOD_DEFINITIONS: readonly MethodDefinition[] = [
   { id: "03", title: "Training load", formula: "hours × intensity² × 100", note: "A transparent TSS-like load, not a licensed physiological diagnosis." },
   { id: "04", title: "Aerobic decoupling", formula: "median central-interval efficiency · first half vs second half", note: "Ten equal-duration intervals are formed, with warm-up and cooldown edge buckets excluded. Interpretation requires ≥45 minutes, VI ≤1.08, ≤5% stopped time, a non-workout effort, sufficient paired power/HR samples, and no outsized warm-up signal." },
   { id: "05", title: "Load ratio", formula: "7-day load ÷ 28-day weekly average", note: "A review signal for abrupt changes, never an exact injury threshold." },
-  { id: "06", title: "Readiness", formula: "recovery time + load + check-in", note: "A weighted, explainable score. Pain caps the result and overrides hard-ride advice." },
+  { id: "06", title: "Readiness", formula: "recovery time + load + check-in + optional resting-HR trend", note: "A weighted, explainable score with visible components, assumptions, and confidence. Elevated resting HR adjusts conservatively; pain and illness remain safety overrides." },
   { id: "07", title: "FTP prediction", formula: "20–60 min best power × duration factor", note: "A conservative range from recorded efforts, with confidence tied to available evidence." },
   { id: "08", title: "Goal scenarios", formula: "watts remaining ÷ monthly scenario", note: "Multiple clearly labeled estimates; never a promised achievement date." },
   { id: "09", title: "Zwift route time", formula: "rider power vs gravity + rolling resistance + aerodynamic drag", note: "A planning range from rider weight, sustainable W/kg, route distance, and total climbing; drafting and exact gradient profiles can change the result." },
@@ -72,10 +74,13 @@ export const METHOD_DEFINITIONS: readonly MethodDefinition[] = [
   { id: "14", title: "Cadence distribution", formula: "positive cadence samples grouped by band; cohort medians use one result per ride", note: "Cadence is calculated for every ride with a detailed stream. Zero-rpm coasting is excluded; target and endurance bands overlap and are not expected to total 100%. Cross-ride summaries stay separated by environment and training type." },
   { id: "15", title: "Data quality and provenance", formula: "per-signal record counts + source metadata + metric basis", note: "Each signal reports the records actually received, a summary-only value, or unavailable data. The app does not copy the timeline total across signals or invent sample coverage." },
   { id: "16", title: "Coach Mode", formula: "readiness + safety guardrails + workload + evidence quality + mature trends + personal baselines", note: "Recommendations expose supporting and cautionary evidence, carry confidence, withhold training advice for substantial pain or illness, and label future days as conditional." },
+  { id: "17", title: "Heart-rate zones", formula: "recorded heart-rate samples ÷ rider LTHR", note: "Five non-overlapping LTHR bands are calculated only when the rider saves a tested or carefully observed threshold. Per-ride and weekly distributions are descriptive, not pass/fail scores." },
+  { id: "18", title: "Resting-HR trend", formula: "today resting HR − median of up to 7 prior daily readings", note: "At least three prior readings are required. A meaningfully elevated value lowers readiness conservatively; normal or lower values do not add bonus readiness." },
 ];
 type MarkdownExportConfig = {
   ftpWatts: number;
   bodyWeightKg: number;
+  lthrBpm?: number | null;
   dataMode: "loading" | "demo" | "saved" | "unavailable";
   coachReport?: CoachReport;
 };
@@ -131,8 +136,9 @@ export function buildCyclingMarkdown(
     `- Body weight: ${bodyWeightPounds.toFixed(0)} lb (${config.bodyWeightKg.toFixed(1)} kg)`,
     `- FTP power-to-weight: ${(config.ftpWatts / config.bodyWeightKg).toFixed(2)} W/kg`,
     `- Zone 2 reference: ${Math.round(config.ftpWatts * 2 / 3)} W`,
+    `- LTHR: ${config.lthrBpm === null || config.lthrBpm === undefined ? "Not configured" : `${config.lthrBpm} bpm`}`,
     "- Preferred cadence band: 85–90 rpm",
-    "- Zwift route-time assumption: approximately 1.0–1.2 W/kg average, capped below FTP",
+    "- Zwift route-time assumption: the day-specific suggested %FTP range, combined with rider weight, distance, and climbing",
     "",
     "## Export summary",
     "",
@@ -268,6 +274,12 @@ export function buildCyclingMarkdown(
       `- Cadence above band: ${finite(ride.cadenceHighPercent, 1, false)}%`,
       `- First 15-minute heart rate: ${finite(ride.first15HeartRate, 0)} bpm`,
       `- Final 15-minute heart rate: ${finite(ride.final15HeartRate, 0)} bpm`,
+      `- Heart-rate zone basis: ${ride.heartRateZones ? `${ride.heartRateZones.sampleCount} recorded samples at ${ride.heartRateZones.thresholdBpm} bpm LTHR` : "Not available"}`,
+      `- Heart-rate Z1: ${finite(ride.heartRateZones?.zone1Percent, 1, false)}%`,
+      `- Heart-rate Z2: ${finite(ride.heartRateZones?.zone2Percent, 1, false)}%`,
+      `- Heart-rate Z3: ${finite(ride.heartRateZones?.zone3Percent, 1, false)}%`,
+      `- Heart-rate Z4: ${finite(ride.heartRateZones?.zone4Percent, 1, false)}%`,
+      `- Heart-rate Z5: ${finite(ride.heartRateZones?.zone5Percent, 1, false)}%`,
       `- Notes: ${clean(ride.note)}`,
       "",
     );

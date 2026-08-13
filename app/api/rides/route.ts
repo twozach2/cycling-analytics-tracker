@@ -2,6 +2,7 @@ import { and, desc, eq } from "drizzle-orm";
 import { getDb } from "../../../db";
 import { activityStreams, ftpHistory, powerDuration, rideMetrics, riders, rides, sourceFiles } from "../../../db/schema";
 import { currentRider } from "../../../lib/current-rider";
+import type { HeartRateZoneDistribution } from "../../../lib/heart-rate";
 import { deriveRideMetrics, evaluateDecouplingEligibility, recommendRecovery } from "../../../lib/metrics";
 import { classifyRide, ftpSnapshotForRide, type ActivityEnvironment, type RideContext, type RideTrainingType, type WorkoutSubtype } from "../../../lib/strava-sync";
 import { countStravaStreamRecords, normalizeStreamRecordCounts, type StreamRecordCounts } from "../../../lib/stream-counts";
@@ -61,6 +62,7 @@ type RidePayload = {
   averagePowerWatts?: number | null;
   maximumPowerWatts?: number | null;
   normalizedPowerWatts?: number | null;
+  normalizedPowerSource?: "recorded" | "computed" | "unavailable";
   ftpAtRideWatts?: number | null;
   weightAtRideKg?: number | null;
   sourceTrainingLoad?: number | null;
@@ -76,6 +78,7 @@ type RidePayload = {
   cadenceHighPercent?: number | null;
   first15HeartRateBpm?: number | null;
   final15HeartRateBpm?: number | null;
+  heartRateZones?: HeartRateZoneDistribution | null;
   pairedSampleCount?: number;
   pairedCoveragePercent?: number;
   environment?: ActivityEnvironment;
@@ -85,6 +88,18 @@ type RidePayload = {
   workoutSubtype?: WorkoutSubtype;
   powerDuration?: Array<{ durationSeconds: number; bestPowerWatts: number }>;
 };
+
+function heartRateZoneValues(distribution: HeartRateZoneDistribution | null | undefined) {
+  return {
+    heartRateThresholdBpm: distribution?.thresholdBpm ?? null,
+    heartRateSampleCount: distribution?.sampleCount ?? 0,
+    heartRateZone1Percent: distribution?.zone1Percent ?? null,
+    heartRateZone2Percent: distribution?.zone2Percent ?? null,
+    heartRateZone3Percent: distribution?.zone3Percent ?? null,
+    heartRateZone4Percent: distribution?.zone4Percent ?? null,
+    heartRateZone5Percent: distribution?.zone5Percent ?? null,
+  };
+}
 
 export async function POST(request: Request) {
   const riderId = await riderIdFor(request);
@@ -116,7 +131,28 @@ export async function POST(request: Request) {
   const trainingLoad = payload.sourceTrainingLoad ?? metrics.trainingLoad;
   const finalMetrics = { ...metrics, trainingLoad, trainingLoadIsEstimated: payload.sourceTrainingLoad == null && metrics.trainingLoadIsEstimated };
   const recovery = recommendRecovery(finalMetrics, movingTimeS, 0);
+  const heartRateZones = heartRateZoneValues(payload.heartRateZones);
 
+  const legacyBenchmark = payload.rideType === "Zone 2 benchmark";
+  const rideType = legacyBenchmark ? "Zone 2" : payload.rideType && allowedRideTypes.has(payload.rideType) ? payload.rideType : "Free ride";
+  const rideContext = payload.rideContext && allowedRideContexts.has(payload.rideContext) ? payload.rideContext : legacyBenchmark ? "benchmark" : "ordinary";
+  const environment: ActivityEnvironment = ["virtual", "indoor", "outdoor"].includes(payload.environment ?? "") ? payload.environment! : "outdoor";
+  const workoutSubtype: WorkoutSubtype = payload.workoutSubtype === "trainer_workout" || payload.workoutSubtype === "race" ? payload.workoutSubtype : null;
+  const stoppedPercent = elapsedTimeS > 0 ? Math.max(0, ((elapsedTimeS - movingTimeS) / elapsedTimeS) * 100) : null;
+  const normalizedPowerSource = payload.normalizedPowerWatts == null
+    ? "unavailable" as const
+    : payload.normalizedPowerSource === "computed"
+      ? "computed" as const
+      : "recorded" as const;
+  const eligibility = evaluateDecouplingEligibility({
+    movingTimeSeconds: movingTimeS,
+    variabilityIndex: payload.variabilityIndex ?? null,
+    stoppedPercent,
+    pairedSampleCount: payload.pairedSampleCount ?? 0,
+    pairedCoveragePercent: payload.pairedCoveragePercent ?? 0,
+    aerobicDecouplingPercent: payload.aerobicDecouplingPercent ?? null,
+    isIntervalWorkout: workoutSubtype === "trainer_workout" || ["Sweet Spot", "Threshold", "VO2", "Sprint", "FTP Test"].includes(rideType),
+  });
   let ownedFile: { id: string; r2Key: string; fileType: string } | undefined;
   if (payload.sourceFileId) {
     [ownedFile] = await db
@@ -133,26 +169,59 @@ export async function POST(request: Request) {
       .where(and(eq(rides.riderId, riderId), eq(rides.sourceFileId, payload.sourceFileId)))
       .limit(1);
     if (existing) {
-      return Response.json({ rideId: existing.rideId, metrics: existing.metrics, duplicate: true });
+      const weightKg = profile?.weightKg ?? payload.weightAtRideKg ?? null;
+      await db.update(rides).set({
+        averagePowerWatts: payload.averagePowerWatts,
+        maximumPowerWatts: payload.maximumPowerWatts,
+        normalizedPowerWatts: payload.normalizedPowerWatts,
+        normalizedPowerSource,
+        updatedAt: new Date().toISOString(),
+      }).where(eq(rides.id, existing.rideId));
+      await db.update(rideMetrics).set({
+        powerHeartRateRatio: finalMetrics.powerHeartRateRatio,
+        powerToWeightRatio: payload.averagePowerWatts && weightKg ? payload.averagePowerWatts / weightKg : null,
+        intensityFactor: finalMetrics.intensityFactor,
+        intensityIsEstimated: finalMetrics.intensityIsEstimated,
+        trainingLoad: finalMetrics.trainingLoad,
+        trainingLoadIsEstimated: finalMetrics.trainingLoadIsEstimated,
+        variabilityIndex: payload.variabilityIndex,
+        aerobicDecouplingPercent: payload.aerobicDecouplingPercent,
+        decouplingEligible: eligibility.eligible,
+        decouplingEligibilityReason: eligibility.reason,
+        stoppedPercent,
+        cadenceStddev: payload.cadenceStddev,
+        cadenceTargetPercent: payload.cadenceTargetPercent,
+        cadenceAcceptablePercent: payload.cadenceAcceptablePercent,
+        cadenceLowPercent: payload.cadenceLowPercent,
+        cadenceHighPercent: payload.cadenceHighPercent,
+        first15HeartRateBpm: payload.first15HeartRateBpm,
+        final15HeartRateBpm: payload.final15HeartRateBpm,
+        ...heartRateZones,
+        algorithmVersion: "phase3.5",
+        dataQuality: payload.normalizedPowerWatts == null ? "medium" : "high",
+        calculatedAt: new Date().toISOString(),
+      }).where(eq(rideMetrics.rideId, existing.rideId));
+      for (const entry of payload.powerDuration ?? []) {
+        if (!Number.isFinite(entry.durationSeconds) || entry.durationSeconds <= 0 || !Number.isFinite(entry.bestPowerWatts) || entry.bestPowerWatts <= 0) continue;
+        await db.insert(powerDuration).values({
+          rideId: existing.rideId,
+          durationSeconds: Math.round(entry.durationSeconds),
+          bestPowerWatts: entry.bestPowerWatts,
+        }).onConflictDoUpdate({
+          target: [powerDuration.rideId, powerDuration.durationSeconds],
+          set: { bestPowerWatts: entry.bestPowerWatts },
+        });
+      }
+      return Response.json({
+        rideId: existing.rideId,
+        metrics: { ...existing.metrics, ...finalMetrics, variabilityIndex: payload.variabilityIndex },
+        duplicate: true,
+        refreshed: true,
+      });
     }
   }
 
   const id = crypto.randomUUID();
-  const legacyBenchmark = payload.rideType === "Zone 2 benchmark";
-  const rideType = legacyBenchmark ? "Zone 2" : payload.rideType && allowedRideTypes.has(payload.rideType) ? payload.rideType : "Free ride";
-  const rideContext = payload.rideContext && allowedRideContexts.has(payload.rideContext) ? payload.rideContext : legacyBenchmark ? "benchmark" : "ordinary";
-  const environment: ActivityEnvironment = ["virtual", "indoor", "outdoor"].includes(payload.environment ?? "") ? payload.environment! : "outdoor";
-  const workoutSubtype: WorkoutSubtype = payload.workoutSubtype === "trainer_workout" || payload.workoutSubtype === "race" ? payload.workoutSubtype : null;
-  const stoppedPercent = elapsedTimeS > 0 ? Math.max(0, ((elapsedTimeS - movingTimeS) / elapsedTimeS) * 100) : null;
-  const eligibility = evaluateDecouplingEligibility({
-    movingTimeSeconds: movingTimeS,
-    variabilityIndex: payload.variabilityIndex ?? null,
-    stoppedPercent,
-    pairedSampleCount: payload.pairedSampleCount ?? 0,
-    pairedCoveragePercent: payload.pairedCoveragePercent ?? 0,
-    aerobicDecouplingPercent: payload.aerobicDecouplingPercent ?? null,
-    isIntervalWorkout: workoutSubtype === "trainer_workout" || ["Sweet Spot", "Threshold", "VO2", "Sprint", "FTP Test"].includes(rideType),
-  });
   await db.insert(rides).values({
     id,
     riderId,
@@ -182,7 +251,7 @@ export async function POST(request: Request) {
     averagePowerWatts: payload.averagePowerWatts,
     maximumPowerWatts: payload.maximumPowerWatts,
     normalizedPowerWatts: payload.normalizedPowerWatts,
-    normalizedPowerSource: payload.normalizedPowerWatts == null ? "unavailable" : "recorded",
+    normalizedPowerSource,
     ftpAtRideWatts: ftpSnapshot.ftpWatts,
     ftpSnapshotSource: ftpSnapshot.source,
     weightAtRideKg: profile?.weightKg ?? payload.weightAtRideKg,
@@ -209,6 +278,8 @@ export async function POST(request: Request) {
     cadenceHighPercent: payload.cadenceHighPercent,
     first15HeartRateBpm: payload.first15HeartRateBpm,
     final15HeartRateBpm: payload.final15HeartRateBpm,
+    ...heartRateZones,
+    algorithmVersion: "phase3.5",
     dataQuality: payload.normalizedPowerWatts == null ? "medium" : "high",
   });
   const durationRows = (payload.powerDuration ?? [])

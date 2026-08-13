@@ -442,8 +442,8 @@ export function buildCoachReport(input: BuildCoachReportInput): CoachReport {
   if (hoursSinceLastHardRide >= 36) positives.push(`${hoursSinceLastHardRide} hours since the last hard session.`);
   else cautions.push(`Only ${hoursSinceLastHardRide} hours since the last hard session.`);
   if (acuteChronicRatio === null) cautions.push("The 28-day weekly load baseline is not stable yet.");
-  else if (acuteChronicRatio <= 1.3) positives.push(`Seven-day load is ${acuteChronicRatio.toFixed(2)}? the 28-day weekly baseline.`);
-  else cautions.push(`Seven-day load is elevated at ${acuteChronicRatio.toFixed(2)}? the 28-day weekly baseline.`);
+  else if (acuteChronicRatio <= 1.3) positives.push(`Seven-day load is ${acuteChronicRatio.toFixed(2)}× the 28-day weekly baseline.`);
+  else cautions.push(`Seven-day load is elevated at ${acuteChronicRatio.toFixed(2)}× the 28-day weekly baseline.`);
   if (recentHard.length >= 2) cautions.push(`${recentHard.length} hard sessions already occurred in the last seven days.`);
   else positives.push(`${recentHard.length} hard ${recentHard.length === 1 ? "session" : "sessions"} in the last seven days.`);
   if (!input.checkInRecorded) cautions.push("Today's recovery check-in has not been saved.");

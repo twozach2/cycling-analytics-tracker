@@ -1,3 +1,4 @@
+import { deriveHeartRateZones, type HeartRateZoneDistribution } from "./heart-rate";
 import { countActivitySampleRecords, type StreamRecordCounts } from "./stream-counts";
 
 export type DetectedActivity = {
@@ -14,6 +15,7 @@ export type DetectedActivity = {
   averagePower: number | null;
   maximumPower: number | null;
   normalizedPower: number | null;
+  normalizedPowerSource: "recorded" | "computed" | "unavailable";
   sourceTrainingLoad: number | null;
   aerobicDecouplingPercent: number | null;
   pairedSampleCount: number;
@@ -26,6 +28,7 @@ export type DetectedActivity = {
   cadenceHighPercent: number | null;
   first15HeartRate: number | null;
   final15HeartRate: number | null;
+  heartRateZones: HeartRateZoneDistribution | null;
   powerDuration: Array<{ durationSeconds: number; bestPowerWatts: number }>;
   sampleCount: number;
   streamSampleCounts: StreamRecordCounts;
@@ -90,7 +93,61 @@ const round = (value: number, digits = 1) => {
   return Math.round(value * scale) / scale;
 };
 
-export function deriveStreamMetrics(samples: ActivitySample[]) {
+const NORMALIZED_POWER_WINDOW_SECONDS = 30;
+
+function derivePowerStatistics(samples: ActivitySample[]) {
+  const segments = continuousPowerSegments(normalizePowerSamples(samples));
+  let totalPower = 0;
+  let totalSeconds = 0;
+  let fourthPowerTotal = 0;
+  let rollingWindowCount = 0;
+
+  for (const segment of segments) {
+    const startTime = segment[0].time;
+    const endTime = segment.at(-1)!.time;
+    if (endTime <= startTime) continue;
+    let sampleIndex = 0;
+    let currentPower = Math.max(0, segment[0].power);
+    const rollingPower: number[] = [];
+    let rollingTotal = 0;
+
+    // Resample continuous power at one-second intervals. Holding the most recent
+    // sample preserves lower-frequency recordings without bridging pauses or
+    // device dropouts, which continuousPowerSegments has already separated.
+    for (let time = startTime; time < endTime; time += 1000) {
+      while (sampleIndex + 1 < segment.length && segment[sampleIndex + 1].time <= time) {
+        sampleIndex += 1;
+        currentPower = Math.max(0, segment[sampleIndex].power);
+      }
+      totalPower += currentPower;
+      totalSeconds += 1;
+      rollingPower.push(currentPower);
+      rollingTotal += currentPower;
+      if (rollingPower.length > NORMALIZED_POWER_WINDOW_SECONDS) rollingTotal -= rollingPower.shift()!;
+      if (rollingPower.length === NORMALIZED_POWER_WINDOW_SECONDS) {
+        fourthPowerTotal += (rollingTotal / NORMALIZED_POWER_WINDOW_SECONDS) ** 4;
+        rollingWindowCount += 1;
+      }
+    }
+  }
+
+  const fallbackPower = samples
+    .map((sample) => sample.power)
+    .filter((value): value is number => value !== null && value >= 0 && Number.isFinite(value));
+  const averagePower = totalSeconds
+    ? round(totalPower / totalSeconds)
+    : fallbackPower.length
+      ? round(fallbackPower.reduce((sum, value) => sum + value, 0) / fallbackPower.length)
+      : null;
+  const normalizedPower = rollingWindowCount ? round((fourthPowerTotal / rollingWindowCount) ** 0.25) : null;
+  const variabilityIndex = normalizedPower !== null && averagePower !== null && averagePower > 0
+    ? round(normalizedPower / averagePower, 3)
+    : null;
+  return { averagePower, normalizedPower, variabilityIndex };
+}
+
+export function deriveStreamMetrics(samples: ActivitySample[], lthrBpm?: number | null) {
+  const power = derivePowerStatistics(samples);
   const cadence = samples.map((sample) => sample.cadence).filter((value): value is number => value !== null && value > 0);
   const cadenceMean = cadence.length ? cadence.reduce((sum, value) => sum + value, 0) / cadence.length : null;
   const cadenceStddev = cadenceMean === null ? null : Math.sqrt(cadence.reduce((sum, value) => sum + ((value - cadenceMean) ** 2), 0) / cadence.length);
@@ -141,6 +198,7 @@ export function deriveStreamMetrics(samples: ActivitySample[]) {
   const final15HeartRate = lastTime === null ? null : average(timedHeartRate.filter((sample) => sample.time! >= lastTime - (15 * 60 * 1000)).map((sample) => sample.heartRate));
 
   return {
+    ...power,
     aerobicDecouplingPercent,
     pairedSampleCount: paired.length,
     pairedCoveragePercent: samples.length ? round((paired.length / samples.length) * 100) : 0,
@@ -151,6 +209,7 @@ export function deriveStreamMetrics(samples: ActivitySample[]) {
     cadenceHighPercent: cadencePercent((value) => value > 100),
     first15HeartRate: first15HeartRate === null ? null : round(first15HeartRate),
     final15HeartRate: final15HeartRate === null ? null : round(final15HeartRate),
+    heartRateZones: deriveHeartRateZones(samples.map((sample) => sample.heartRate), lthrBpm),
   };
 }
 
@@ -278,7 +337,7 @@ const haversineMeters = (a: ActivitySample, b: ActivitySample) => {
   return earthRadius * 2 * Math.atan2(Math.sqrt(h), Math.sqrt(1 - h));
 };
 
-export function parseXmlActivity(xmlText: string, filename: string): DetectedActivity {
+export function parseXmlActivity(xmlText: string, filename: string, lthrBpm?: number | null): DetectedActivity {
   const document = new DOMParser().parseFromString(xmlText, "application/xml");
   if (document.querySelector("parsererror")) throw new Error("This XML file could not be read.");
 
@@ -332,7 +391,7 @@ export function parseXmlActivity(xmlText: string, filename: string): DetectedAct
   if (!distance) warnings.push("Distance could not be detected");
 
   const fileBase = filename.replace(/\.(gpx|tcx)$/i, "").replace(/[_-]+/g, " ");
-  const streams = deriveStreamMetrics(samples);
+  const streams = deriveStreamMetrics(samples, lthrBpm);
   const virtual = /\bzwift\b/i.test(xmlText);
   return {
     name: fileBase || "Imported ride",
@@ -345,12 +404,10 @@ export function parseXmlActivity(xmlText: string, filename: string): DetectedAct
     maximumHeartRate: maximum(samples.map((sample) => sample.heartRate)),
     averageCadence: average(samples.map((sample) => sample.cadence)),
     maximumCadence: maximum(samples.map((sample) => sample.cadence)),
-    averagePower: average(samples.map((sample) => sample.power)),
     maximumPower: maximum(samples.map((sample) => sample.power)),
-    normalizedPower: null,
+    normalizedPowerSource: streams.normalizedPower === null ? "unavailable" : "computed",
     sourceTrainingLoad: null,
     ...streams,
-    variabilityIndex: null,
     powerDuration: derivePowerDuration(samples),
     sampleCount: samples.length,
     streamSampleCounts: countActivitySampleRecords(samples),
@@ -374,7 +431,7 @@ const fitDate = (value: unknown) => {
   return null;
 };
 
-export async function parseFitActivity(buffer: ArrayBuffer, filename: string): Promise<DetectedActivity> {
+export async function parseFitActivity(buffer: ArrayBuffer, filename: string, lthrBpm?: number | null): Promise<DetectedActivity> {
   const { Decoder, Stream } = await import("@garmin/fitsdk");
   const validationStream = Stream.fromArrayBuffer(buffer);
   if (!Decoder.isFIT(validationStream)) throw new Error("This file does not contain a valid FIT header.");
@@ -428,8 +485,9 @@ export async function parseFitActivity(buffer: ArrayBuffer, filename: string): P
 
   const fileBase = filename.replace(/\.fit$/i, "").replace(/[_-]+/g, " ");
   const averagePower = fitNumber(session?.avgPower) ?? average(powerValues);
-  const normalizedPower = fitNumber(session?.normalizedPower);
-  const streams = deriveStreamMetrics(recordSamples);
+  const recordedNormalizedPower = fitNumber(session?.normalizedPower);
+  const streams = deriveStreamMetrics(recordSamples, lthrBpm);
+  const normalizedPower = recordedNormalizedPower ?? streams.normalizedPower;
   const subSport = String(session?.subSport ?? "").toLowerCase().replace(/[^a-z]/g, "");
   const virtual = subSport.includes("virtual");
   const indoor = virtual || subSport.includes("indoor");
@@ -444,12 +502,15 @@ export async function parseFitActivity(buffer: ArrayBuffer, filename: string): P
     maximumHeartRate: fitNumber(session?.maxHeartRate) ?? maximum(heartRateValues),
     averageCadence: fitNumber(session?.avgCadence) ?? average(cadenceValues),
     maximumCadence: fitNumber(session?.maxCadence) ?? maximum(cadenceValues),
-    averagePower,
     maximumPower: fitNumber(session?.maxPower) ?? maximum(powerValues),
-    normalizedPower,
     sourceTrainingLoad: fitNumber(session?.trainingStressScore),
     ...streams,
-    variabilityIndex: normalizedPower !== null && averagePower !== null && averagePower > 0 ? round(normalizedPower / averagePower, 2) : null,
+    averagePower,
+    normalizedPower,
+    normalizedPowerSource: recordedNormalizedPower !== null ? "recorded" : normalizedPower !== null ? "computed" : "unavailable",
+    variabilityIndex: normalizedPower !== null && averagePower !== null && averagePower > 0
+      ? round(normalizedPower / averagePower, 3)
+      : streams.variabilityIndex,
     powerDuration: derivePowerDuration(recordSamples),
     sampleCount: records.length,
     streamSampleCounts: countActivitySampleRecords(recordSamples),
@@ -459,9 +520,9 @@ export async function parseFitActivity(buffer: ArrayBuffer, filename: string): P
   };
 }
 
-export async function parseActivityFile(file: File): Promise<DetectedActivity> {
+export async function parseActivityFile(file: File, lthrBpm?: number | null): Promise<DetectedActivity> {
   const extension = file.name.split(".").at(-1)?.toLowerCase();
-  if (extension === "fit") return parseFitActivity(await file.arrayBuffer(), file.name);
-  if (extension === "gpx" || extension === "tcx") return parseXmlActivity(await file.text(), file.name);
+  if (extension === "fit") return parseFitActivity(await file.arrayBuffer(), file.name, lthrBpm);
+  if (extension === "gpx" || extension === "tcx") return parseXmlActivity(await file.text(), file.name, lthrBpm);
   throw new Error("Choose an original FIT file, TCX export, or GPX activity file.");
 }

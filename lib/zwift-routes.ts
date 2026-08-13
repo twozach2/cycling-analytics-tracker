@@ -1,3 +1,4 @@
+import { heartRateCueForMode } from "./heart-rate";
 import type { WorkoutMode } from "./phase3";
 
 export type RouteCommitment = 30 | 60 | 90;
@@ -60,7 +61,6 @@ export type ZwiftRouteEstimate = {
   maximumPowerWatts: number;
 };
 
-export const ROUTE_ESTIMATE_WATTS_PER_KG = { minimum: 1, maximum: 1.2 } as const;
 
 export const ROUTE_TIME_WINDOWS: Record<RouteCommitment, RouteTimeWindow> = {
   30: { minimumMinutes: 20, maximumMinutes: 40 },
@@ -171,7 +171,7 @@ export const ZWIFT_ROUTE_COUNT = routeList.length;
 
 const commitments: RouteCommitment[] = [30, 60, 90];
 
-const intensity: Record<WorkoutMode, { low: number; high: number; heartRateCue: string }> = {
+export const ROUTE_INTENSITY_BANDS: Record<WorkoutMode, { low: number; high: number; heartRateCue: string }> = {
   rest: { low: 0.45, high: 0.55, heartRateCue: "Optional only · RPE 1–2" },
   recovery: { low: 0.5, high: 0.6, heartRateCue: "Easy breathing · RPE 2–3" },
   endurance: { low: 0.6, high: 0.72, heartRateCue: "Conversational · RPE 3–4" },
@@ -276,14 +276,13 @@ export function estimateZwiftRouteTime(
   routeValue: ZwiftRoute,
   ftpWatts: number,
   bodyWeightKg: number,
+  mode: WorkoutMode = "endurance",
 ): ZwiftRouteEstimate {
   if (!Number.isFinite(ftpWatts) || ftpWatts <= 0) throw new Error("A saved FTP is required for route estimates.");
   if (!Number.isFinite(bodyWeightKg) || bodyWeightKg <= 0) throw new Error("A saved body weight is required for route estimates.");
-  const preferredMinimumPower = bodyWeightKg * ROUTE_ESTIMATE_WATTS_PER_KG.minimum;
-  const preferredMaximumPower = bodyWeightKg * ROUTE_ESTIMATE_WATTS_PER_KG.maximum;
-  const sustainableCeiling = ftpWatts * 0.92;
-  const maximumPowerWatts = Math.max(40, Math.min(preferredMaximumPower, sustainableCeiling));
-  const minimumPowerWatts = Math.max(35, Math.min(preferredMinimumPower, maximumPowerWatts * 0.9));
+  const effort = ROUTE_INTENSITY_BANDS[mode];
+  const maximumPowerWatts = ftpWatts * effort.high;
+  const minimumPowerWatts = ftpWatts * effort.low;
   const distanceMeters = Math.max(1, routeValue.distanceMiles * 1609.344);
   const elevationMeters = Math.max(0, routeValue.elevationFeet * 0.3048);
   const systemWeightKg = bodyWeightKg + 10;
@@ -305,8 +304,9 @@ export function estimateZwiftRouteMinutes(
   routeValue: ZwiftRoute,
   ftpWatts: number,
   bodyWeightKg: number,
+  mode: WorkoutMode = "endurance",
 ): number {
-  return estimateZwiftRouteTime(routeValue, ftpWatts, bodyWeightKg).midpointMinutes;
+  return estimateZwiftRouteTime(routeValue, ftpWatts, bodyWeightKg, mode).midpointMinutes;
 }
 
 function seededUnit(value: string): number {
@@ -328,7 +328,7 @@ function rankRoute(
   bodyWeightKg: number,
 ): number {
   const window = ROUTE_TIME_WINDOWS[commitment];
-  const estimate = estimateZwiftRouteMinutes(routeValue, ftpWatts, bodyWeightKg);
+  const estimate = estimateZwiftRouteMinutes(routeValue, ftpWatts, bodyWeightKg, mode);
   const center = (window.minimumMinutes + window.maximumMinutes) / 2;
   const distancePenalty = Math.abs(estimate - center) / (window.maximumMinutes - window.minimumMinutes);
   const recentWorldPenalty = Math.min(3, recentWorldCounts.get(routeValue.world) ?? 0) * 0.24;
@@ -345,10 +345,11 @@ export function recommendZwiftRoutes(
   worldPool: readonly string[] = ZWIFT_WORLDS,
   shuffleIndex = 0,
   recentRouteIds: readonly string[] = [],
+  lthrBpm: number | null = null,
 ): ZwiftRouteSuggestion[] {
   if (!Number.isFinite(ftpWatts) || ftpWatts <= 0) throw new Error("A saved FTP is required for route recommendations.");
   if (!Number.isFinite(bodyWeightKg) || bodyWeightKg <= 0) throw new Error("A saved body weight is required for route recommendations.");
-  const watts = intensity[mode];
+  const watts = ROUTE_INTENSITY_BANDS[mode];
   const recommendedCommitment: RouteCommitment = mode === "recovery" || mode === "rest" ? 30 : 60;
   const allowedWorlds = new Set(worldPool.filter(isZwiftWorld));
   if (!allowedWorlds.size) ZWIFT_WORLDS.forEach((world) => allowedWorlds.add(world));
@@ -364,7 +365,7 @@ export function recommendZwiftRoutes(
   return commitments.map((commitment) => {
     const window = ROUTE_TIME_WINDOWS[commitment];
     const inWindow = routeList.filter((routeValue) => {
-      const estimate = estimateZwiftRouteMinutes(routeValue, ftpWatts, bodyWeightKg);
+      const estimate = estimateZwiftRouteMinutes(routeValue, ftpWatts, bodyWeightKg, mode);
       return allowedWorlds.has(routeValue.world)
         && estimate >= window.minimumMinutes
         && estimate <= window.maximumMinutes;
@@ -383,7 +384,7 @@ export function recommendZwiftRoutes(
         rankRoute(a, mode, commitment, shuffleIndex, recentWorldCounts, ftpWatts, bodyWeightKg)
           - rankRoute(b, mode, commitment, shuffleIndex, recentWorldCounts, ftpWatts, bodyWeightKg)
       ))[0];
-    const routeEstimate = estimateZwiftRouteTime(selectedRoute, ftpWatts, bodyWeightKg);
+    const routeEstimate = estimateZwiftRouteTime(selectedRoute, ftpWatts, bodyWeightKg, mode);
     const estimatedMinutes = routeEstimate.midpointMinutes;
     selectedRouteIds.add(selectedRoute.id);
     selectedWorlds.add(selectedRoute.world);
@@ -401,9 +402,9 @@ export function recommendZwiftRoutes(
       terrainCue: terrainCue[selectedRoute.profile],
       optionalStretch: optionalStretch(mode, selectedRoute.profile),
       encouragement: "This is an idea, not an assignment—change the effort, shorten the route, or simply enjoy the scenery.",
-      heartRateCue: watts.heartRateCue,
+      heartRateCue: heartRateCueForMode(mode, lthrBpm) ?? watts.heartRateCue,
       reason: `${selectedRoute.world} brings a change of scenery. ${modeReason[mode][selectedRoute.profile]}`,
-      timingCue: `Estimated ${routeEstimate.minimumMinutes}–${routeEstimate.maximumMinutes} min at ${ROUTE_ESTIMATE_WATTS_PER_KG.minimum.toFixed(1)}–${ROUTE_ESTIMATE_WATTS_PER_KG.maximum.toFixed(1)} W/kg · matched to the ${window.minimumMinutes}–${window.maximumMinutes} min route window.`,
+      timingCue: `Estimated ${routeEstimate.minimumMinutes}–${routeEstimate.maximumMinutes} min near ${routeEstimate.minimumPowerWatts}–${routeEstimate.maximumPowerWatts} W for today's ${routeFocus[mode].toLowerCase()} idea · matched to the ${window.minimumMinutes}–${window.maximumMinutes} min route window.`,
       recommended: commitment === recommendedCommitment,
       disabled: mode === "rest",
     };

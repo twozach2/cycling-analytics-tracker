@@ -18,14 +18,27 @@ export type SubjectiveRecovery = {
   painSeverity?: number;
   motivation?: number;
   illnessSeverity?: number;
+  restingHeartRate?: number | null;
+};
+
+export type ReadinessComponent = {
+  label: string;
+  value: number;
+  contribution: number;
+  detail: string;
 };
 
 export type ReadinessResult = {
   score: number;
   label: "Ready for hard work" | "Good to train" | "Moderate fatigue" | "Easy ride preferred" | "Rest / recovery recommended";
   tone: "green" | "yellow" | "orange" | "red";
+  confidence: "high" | "moderate" | "low";
+  estimated: boolean;
   postRideAdjusted: boolean;
   adjustments: string[];
+  assumptions: string[];
+  components: ReadinessComponent[];
+  restingHeartRateDelta: number | null;
 };
 
 export type RecoveryRecommendation = {
@@ -73,6 +86,8 @@ export function calculateReadiness(input: {
   todayTrainingLoad?: number;
   todayIntensityFactor?: number;
   todayMovingTimeSeconds?: number;
+  restingHeartRateBaseline?: number | null;
+  checkInRecorded?: boolean;
 }): ReadinessResult {
   const legScores = { fresh: 100, normal: 78, heavy: 45, dead: 10 } as const;
   const bodyScores = { normal: 100, mild_soreness: 75, significant_soreness: 35, pain_concern: 70, illness: 25 } as const;
@@ -93,15 +108,38 @@ export function calculateReadiness(input: {
   const todayIntensityFactor = Math.max(0, input.todayIntensityFactor ?? 0);
   const todayMinutes = Math.max(0, (input.todayMovingTimeSeconds ?? 0) / 60);
   const adjustments: string[] = [];
+  const assumptions: string[] = [];
+  const components: ReadinessComponent[] = [
+    { label: "Time since hard ride", value: Math.round(hoursScore), contribution: round(hoursScore * 0.25), detail: `${Math.round(input.hoursSinceLastHardRide)} hours available for recovery` },
+    { label: "Training load balance", value: Math.round(loadScore), contribution: round(loadScore * 0.20), detail: input.acuteChronicRatio === null ? "No acute/chronic ratio; a neutral load value is used" : `Acute/chronic ratio ${input.acuteChronicRatio.toFixed(2)}` },
+    { label: "Sleep", value: Math.round(sleepScore), contribution: round(sleepScore * 0.20), detail: `${input.subjective.sleepQuality ?? 3}/5 check-in` },
+    { label: "Leg freshness", value: Math.round(legScore), contribution: round(legScore * 0.15), detail: input.subjective.legFreshness ?? "normal" },
+    { label: "Body condition", value: Math.round(bodyScore), contribution: round(bodyScore * 0.15), detail: bodyCondition.replaceAll("_", " ") },
+    { label: "Motivation", value: Math.round(motivationScore), contribution: round(motivationScore * 0.05), detail: `${input.subjective.motivation ?? 3}/5 check-in` },
+  ];
 
-  let score = Math.round(
-    (hoursScore * 0.25) +
-    (loadScore * 0.20) +
-    (sleepScore * 0.20) +
-    (legScore * 0.15) +
-    (bodyScore * 0.15) +
-    (motivationScore * 0.05),
-  );
+  if (input.acuteChronicRatio === null) assumptions.push("Training-load balance is using a neutral value until enough ride history is available.");
+  if (input.checkInRecorded === false) assumptions.push("Today's recovery check-in has not been saved; neutral questionnaire values are shown.");
+
+  let score = Math.round(components.reduce((sum, component) => sum + component.contribution, 0));
+  const currentRestingHeartRate = input.subjective.restingHeartRate;
+  const baseline = input.restingHeartRateBaseline;
+  const hasRestingHeartRateEvidence = Number.isFinite(currentRestingHeartRate) && Number.isFinite(baseline);
+  const restingHeartRateDelta = hasRestingHeartRateEvidence ? Math.round(currentRestingHeartRate! - baseline!) : null;
+  if (restingHeartRateDelta !== null) {
+    const penalty = restingHeartRateDelta >= 10 ? 12 : restingHeartRateDelta >= 7 ? 8 : restingHeartRateDelta >= 4 ? 4 : 0;
+    score -= penalty;
+    components.push({
+      label: "Resting heart rate",
+      value: Math.max(0, 100 - (penalty * 5)),
+      contribution: -penalty,
+      detail: `${currentRestingHeartRate} bpm today; ${restingHeartRateDelta >= 0 ? "+" : ""}${restingHeartRateDelta} vs ${baseline} bpm baseline`,
+    });
+    if (penalty > 0) adjustments.push(`Resting heart rate is ${restingHeartRateDelta} bpm above baseline; readiness is adjusted conservatively.`);
+  } else if (input.checkInRecorded) {
+    assumptions.push("A resting-heart-rate trend needs today's reading and at least three prior readings.");
+  }
+
   if (painSeverity >= 7) score = Math.min(score, 20);
   else if (painSeverity >= 5) score = Math.min(score, 39);
   else if (painSeverity >= 3) score = Math.min(score, 54);
@@ -120,6 +158,7 @@ export function calculateReadiness(input: {
     adjustments.push(`Today's completed easy training is included: ${Math.round(todayTrainingLoad)} load across ${Math.round(todayMinutes)} minutes.`);
   }
 
+  score = Math.round(clamp(score));
   const result = score >= 85
     ? { label: "Ready for hard work" as const, tone: "green" as const }
     : score >= 70
@@ -129,9 +168,23 @@ export function calculateReadiness(input: {
         : score >= 40
           ? { label: "Easy ride preferred" as const, tone: "orange" as const }
           : { label: "Rest / recovery recommended" as const, tone: "red" as const };
-  return { score, ...result, postRideAdjusted: adjustments.length > 0, adjustments };
+  const confidence = input.checkInRecorded === true && input.acuteChronicRatio !== null && hasRestingHeartRateEvidence
+    ? "high" as const
+    : (input.checkInRecorded === true || input.acuteChronicRatio !== null)
+      ? "moderate" as const
+      : "low" as const;
+  return {
+    score,
+    ...result,
+    confidence,
+    estimated: assumptions.length > 0 || confidence === "low",
+    postRideAdjusted: todayTrainingLoad > 0 || todayMinutes > 0,
+    adjustments,
+    assumptions,
+    components,
+    restingHeartRateDelta,
+  };
 }
-
 export function elapsedHoursSince(activityStartedAt: string | null, referenceTimeMs = Date.now(), fallbackHours = 72) {
   if (!activityStartedAt) return fallbackHours;
   const activityTimeMs = Date.parse(activityStartedAt);

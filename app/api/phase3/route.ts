@@ -58,6 +58,7 @@ export async function GET(request: Request) {
   return Response.json({
     currentFtpWatts,
     weightKg,
+    lthrBpm: profile?.lthrBpm ?? null,
     profileComplete: currentFtpWatts !== null && weightKg !== null,
     ftpHistory: ftpRows.map((row) => ({ effectiveAt: row.effectiveAt, ftpWatts: row.ftpWatts, source: row.source })),
     prediction,
@@ -83,7 +84,8 @@ type PhaseThreeAction =
   | { action: "set_goal"; targetFtpWatts: number }
   | { action: "record_ftp"; ftpWatts: number }
   | { action: "record_weight"; weightPounds: number }
-  | { action: "record_profile"; ftpWatts: number; weightPounds: number };
+  | { action: "record_lthr"; lthrBpm: number | null }
+  | { action: "record_profile"; ftpWatts: number; weightPounds: number; lthrBpm?: number | null };
 
 export async function POST(request: Request) {
   const rider = await currentRider(request);
@@ -101,15 +103,28 @@ export async function POST(request: Request) {
     if (!Number.isFinite(weightPounds) || weightPounds < 80 || weightPounds > 500) {
       return Response.json({ error: "Weight must be between 80 and 500 pounds." }, { status: 400 });
     }
+    const lthrBpm = payload.lthrBpm == null ? null : Math.round(Number(payload.lthrBpm));
+    if (lthrBpm !== null && (!Number.isFinite(lthrBpm) || lthrBpm < 80 || lthrBpm > 220)) {
+      return Response.json({ error: "LTHR must be between 80 and 220 bpm, or left blank." }, { status: 400 });
+    }
     const weightKg = Math.round((weightPounds / 2.2046226218) * 10) / 10;
     const [existing] = await db.select({ ftpWatts: riders.defaultFtpWatts }).from(riders).where(eq(riders.id, rider.id)).limit(1);
-    await db.update(riders).set({ defaultFtpWatts: ftpWatts, defaultWeightKg: weightKg }).where(eq(riders.id, rider.id));
+    await db.update(riders).set({ defaultFtpWatts: ftpWatts, defaultWeightKg: weightKg, lthrBpm }).where(eq(riders.id, rider.id));
     if (existing?.ftpWatts !== ftpWatts) {
       const effectiveAt = new Date().toISOString();
       await db.insert(ftpHistory).values({ id: crypto.randomUUID(), riderId: rider.id, effectiveAt, ftpWatts, source: "rider setup", notes: "Saved with required rider profile." });
       await db.update(riderGoals).set({ status: "achieved", achievedAt: effectiveAt }).where(and(eq(riderGoals.riderId, rider.id), eq(riderGoals.status, "active"), lte(riderGoals.targetFtpWatts, ftpWatts)));
     }
-    return Response.json({ ftpWatts, weightKg, weightPounds: Math.round(weightPounds), profileComplete: true }, { status: 201 });
+    return Response.json({ ftpWatts, weightKg, weightPounds: Math.round(weightPounds), lthrBpm, profileComplete: true }, { status: 201 });
+  }
+
+  if (payload.action === "record_lthr") {
+    const lthrBpm = payload.lthrBpm == null ? null : Math.round(Number(payload.lthrBpm));
+    if (lthrBpm !== null && (!Number.isFinite(lthrBpm) || lthrBpm < 80 || lthrBpm > 220)) {
+      return Response.json({ error: "LTHR must be between 80 and 220 bpm, or left blank." }, { status: 400 });
+    }
+    await db.update(riders).set({ lthrBpm }).where(eq(riders.id, rider.id));
+    return Response.json({ lthrBpm }, { status: 201 });
   }
 
   if (payload.action === "set_goal") {

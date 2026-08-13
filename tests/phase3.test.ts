@@ -117,6 +117,60 @@ test("derives interval-smoothed durability from a variable ride", () => {
   assert.equal(metrics.aerobicDecouplingPercent, 6.7);
 });
 
+test("computes normalized power and VI from a detailed power stream", () => {
+  const samples: ActivitySample[] = Array.from({ length: 600 }, (_, second) => ({
+    time: second * 1000,
+    power: Math.floor(second / 60) % 2 === 0 ? 100 : 200,
+    heartRate: 140,
+    cadence: 88,
+    distance: second * 8,
+    elevation: null,
+    latitude: null,
+    longitude: null,
+  }));
+  const metrics = deriveStreamMetrics(samples);
+  assert.ok(metrics.averagePower! >= 149 && metrics.averagePower! <= 151);
+  assert.ok(metrics.normalizedPower! > metrics.averagePower!);
+  assert.ok(metrics.variabilityIndex! > 1.05);
+});
+
+test("normalized power does not bridge pauses or power-stream dropouts", () => {
+  const sample = (time: number, power: number): ActivitySample => ({
+    time,
+    power,
+    heartRate: 140,
+    cadence: 88,
+    distance: null,
+    elevation: null,
+    latitude: null,
+    longitude: null,
+  });
+  const samples = [
+    ...Array.from({ length: 90 }, (_, second) => sample(second * 1000, 100)),
+    ...Array.from({ length: 90 }, (_, second) => sample((150 + second) * 1000, 200)),
+  ];
+  const metrics = deriveStreamMetrics(samples);
+  assert.equal(metrics.averagePower, 150);
+  assert.ok(metrics.normalizedPower! >= 170 && metrics.normalizedPower! <= 171);
+  assert.ok(metrics.variabilityIndex! >= 1.13 && metrics.variabilityIndex! <= 1.15);
+});
+
+test("withholds normalized power when a continuous 30-second window is unavailable", () => {
+  const samples: ActivitySample[] = Array.from({ length: 20 }, (_, second) => ({
+    time: second * 1000,
+    power: 150,
+    heartRate: null,
+    cadence: null,
+    distance: null,
+    elevation: null,
+    latitude: null,
+    longitude: null,
+  }));
+  const metrics = deriveStreamMetrics(samples);
+  assert.equal(metrics.averagePower, 150);
+  assert.equal(metrics.normalizedPower, null);
+  assert.equal(metrics.variabilityIndex, null);
+});
 test("requires enough paired intervals for durability", () => {
   const samples: ActivitySample[] = Array.from({ length: 20 }, (_, second) => ({
     time: second * 1000,
@@ -194,6 +248,7 @@ test("Zwift route suite uses the requested time windows and FTP-based targets", 
   assert.ok(suite.every((suggestion) => suggestion.rideCue.includes("comfortably strong tempo stretches")));
   assert.ok(suite.every((suggestion) => suggestion.optionalStretch.includes("Skipping it is equally valid")));
   assert.ok(suite.every((suggestion) => suggestion.encouragement.includes("not an assignment")));
+  assert.ok(suite.every((suggestion) => suggestion.timingCue.includes("125–145 W")));
   assert.equal(ZWIFT_ROUTE_COUNT, 75);
   assert.ok(suite.every((suggestion) => (
     suggestion.estimatedMinutes >= ROUTE_TIME_WINDOWS[suggestion.commitment].minimumMinutes
@@ -201,13 +256,19 @@ test("Zwift route suite uses the requested time windows and FTP-based targets", 
   )));
 });
 
-test("Zwift route timing accounts for rider weight and sustainable W/kg", () => {
+test("Zwift route timing uses the suggested mode's FTP range", () => {
   const laReine = ZWIFT_ROUTE_CATALOG.find((route) => route.id === "france-la-reine")!;
-  const estimate = estimateZwiftRouteTime(laReine, 165, 275 / 2.2046226218);
-  assert.ok(estimate.minimumPowerWatts >= 124 && estimate.minimumPowerWatts <= 126);
-  assert.ok(estimate.maximumPowerWatts >= 149 && estimate.maximumPowerWatts <= 151);
-  assert.ok(estimate.minimumMinutes > 180);
-  assert.ok(estimate.maximumMinutes > estimate.minimumMinutes);
+  const endurance = estimateZwiftRouteTime(laReine, 165, 275 / 2.2046226218, "endurance");
+  const tempo = estimateZwiftRouteTime(laReine, 165, 275 / 2.2046226218, "tempo");
+  const recovery = estimateZwiftRouteTime(laReine, 165, 275 / 2.2046226218, "recovery");
+  assert.equal(endurance.minimumPowerWatts, 99);
+  assert.equal(endurance.maximumPowerWatts, 119);
+  assert.equal(tempo.minimumPowerWatts, 125);
+  assert.equal(tempo.maximumPowerWatts, 145);
+  assert.ok(recovery.midpointMinutes > endurance.midpointMinutes);
+  assert.ok(endurance.midpointMinutes > tempo.midpointMinutes);
+  assert.ok(endurance.minimumMinutes > 180);
+  assert.ok(endurance.maximumMinutes > endurance.minimumMinutes);
   assert.throws(() => estimateZwiftRouteTime(laReine, Number.NaN, 80), /saved FTP/i);
   assert.throws(() => estimateZwiftRouteTime(laReine, 200, Number.NaN), /saved body weight/i);
 });
@@ -261,4 +322,9 @@ test("rest guardrail pauses every route choice", () => {
   const suite = recommendZwiftRoutes("rest", 165, 275 / 2.2046226218);
   assert.ok(suite.every((suggestion) => suggestion.disabled));
   assert.equal(suite.find((suggestion) => suggestion.recommended)?.commitment, 30);
+});
+
+test("Zwift route suite uses personalized LTHR cues when configured", () => {
+  const suite = recommendZwiftRoutes("endurance", 165, 275 / 2.2046226218, undefined, 0, [], 150);
+  assert.ok(suite.every((suggestion) => suggestion.heartRateCue === "Mostly Z2 · 122–134 bpm · brief Z3 hills are fine"));
 });

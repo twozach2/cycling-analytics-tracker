@@ -157,3 +157,40 @@ test("completed training today lowers remaining readiness with an auditable reas
   assert.equal(after.postRideAdjusted, true);
   assert.match(after.adjustments[0], /81 load/);
 });
+
+test("resting heart rate makes a conservative, explainable readiness adjustment", () => {
+  const baseline = calculateReadiness({
+    hoursSinceLastHardRide: 48,
+    acuteChronicRatio: 1,
+    subjective: { sleepQuality: 4, legFreshness: "normal", bodyCondition: "normal", motivation: 4, restingHeartRate: 60 },
+    restingHeartRateBaseline: 60,
+    checkInRecorded: true,
+  });
+  const elevated = calculateReadiness({
+    hoursSinceLastHardRide: 48,
+    acuteChronicRatio: 1,
+    subjective: { sleepQuality: 4, legFreshness: "normal", bodyCondition: "normal", motivation: 4, restingHeartRate: 68 },
+    restingHeartRateBaseline: 60,
+    checkInRecorded: true,
+  });
+
+  assert.equal(elevated.score, baseline.score - 8);
+  assert.equal(elevated.restingHeartRateDelta, 8);
+  assert.equal(elevated.confidence, "high");
+  assert.match(elevated.adjustments[0], /above baseline/);
+  assert.ok(elevated.components.some((component) => component.label === "Resting heart rate"));
+});
+
+test("readiness labels missing check-in inputs and lowers confidence", () => {
+  const readiness = calculateReadiness({
+    hoursSinceLastHardRide: 48,
+    acuteChronicRatio: null,
+    subjective: {},
+    checkInRecorded: false,
+  });
+
+  assert.equal(readiness.confidence, "low");
+  assert.equal(readiness.estimated, true);
+  assert.ok(readiness.assumptions.some((assumption) => assumption.includes("check-in")));
+  assert.ok(readiness.assumptions.some((assumption) => assumption.includes("Training-load")));
+});

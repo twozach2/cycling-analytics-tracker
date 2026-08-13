@@ -49,8 +49,8 @@ export type RideDataQuality = {
   recommendationEligible: boolean;
   metricsAlgorithmVersion: string;
   normalizedPowerStatus: SignalStatus;
-  intensityStatus: "recorded_basis" | "estimated" | "unavailable";
-  trainingLoadStatus: "recorded_basis" | "estimated" | "unavailable";
+  intensityStatus: "recorded_basis" | "computed_basis" | "estimated" | "unavailable";
+  trainingLoadStatus: "recorded_basis" | "computed_basis" | "estimated" | "unavailable";
 };
 
 const streamAliases: Record<DataSignal["id"], readonly string[]> = {
@@ -137,8 +137,20 @@ export function assessRideDataQuality(input: RideDataQualityInput): RideDataQual
     : input.normalizedPowerSource === "computed"
       ? "derived"
       : "unavailable";
-  const intensityStatus = power.status === "unavailable" ? "unavailable" as const : input.intensityIsEstimated ? "estimated" as const : "recorded_basis" as const;
-  const trainingLoadStatus = power.status === "unavailable" ? "unavailable" as const : input.trainingLoadIsEstimated ? "estimated" as const : "recorded_basis" as const;
+  const intensityStatus = power.status === "unavailable"
+    ? "unavailable" as const
+    : input.intensityIsEstimated
+      ? "estimated" as const
+      : input.normalizedPowerSource === "computed"
+        ? "computed_basis" as const
+        : "recorded_basis" as const;
+  const trainingLoadStatus = power.status === "unavailable"
+    ? "unavailable" as const
+    : input.trainingLoadIsEstimated
+      ? "estimated" as const
+      : input.normalizedPowerSource === "computed"
+        ? "computed_basis" as const
+        : "recorded_basis" as const;
 
   return {
     version: DATA_QUALITY_VERSION,

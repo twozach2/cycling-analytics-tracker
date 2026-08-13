@@ -12,6 +12,14 @@ Workload is presented as an explicit comparison: total load from the last seven 
 
 Route suggestions pair several time commitments with a flexible ride focus, terrain-aware cues, a power guide, and an explicitly optional stretch idea. These are invitations to explore—not workouts to pass—and riders are encouraged to change the effort, shorten the route, or simply enjoy the scenery.
 
+Normalized power and variability index are computed from detailed timestamped power streams when an activity source does not provide recorded NP. Recorded values remain preferred; computed values are labeled separately and drive recalculated IF, load, and decoupling eligibility. Re-importing an existing FIT/TCX/GPX file refreshes its analytics without creating a duplicate, and Strava stored streams are reprocessed during sync.
+
+Optional lactate-threshold heart rate (LTHR) unlocks five non-overlapping heart-rate zones for every detailed heart-rate stream, per-ride and seven-day time-in-zone views, neutral ride-intensity context, and personalized Coach route cues. The app never guesses LTHR from maximum heart rate; after changing it, re-sync Strava or re-import source files to recalculate older rides.
+
+Recovery check-ins can include resting heart rate. Once three prior daily readings exist, readiness compares today's value with a rolling seven-reading median, applies only conservative upward-HR penalties, and exposes its full component breakdown, assumptions, and confidence level.
+
+Zwift route-time estimates use the current ride idea's FTP-relative effort range rather than a fixed W/kg assumption, so recovery, endurance, and tempo suggestions produce different personalized time windows.
+
 After a same-day ride is imported, Coach Mode describes what the ride contributed—easy movement, aerobic endurance, or quality work—celebrates the time spent riding, and adapts the next suggestions around the resulting load. It never assigns adherence scores or treats a useful ride as a failure.
 
 Trend claims use genuinely comparable Zone 2 rides: the same indoor/outdoor environment, non-low classification and data quality, usable power plus heart rate, and intensity within 0.05 IF of the cohort median. Two rides create a possible signal, three or four a likely signal, and an established trend requires at least five rides spanning three weeks. Outdoor trends remain capped because wind, traffic, surface, and drafting are not observed.

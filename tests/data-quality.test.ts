@@ -51,6 +51,17 @@ test("distinguishes summary-only evidence from missing evidence", () => {
   assert.equal(quality.intensityStatus, "estimated");
 });
 
+test("labels stream-derived normalized power and downstream metrics as computed", () => {
+  const quality = assessRideDataQuality({
+    ...completeRide,
+    normalizedPowerSource: "computed",
+    intensityIsEstimated: false,
+    trainingLoadIsEstimated: false,
+  });
+  assert.equal(quality.normalizedPowerStatus, "derived");
+  assert.equal(quality.intensityStatus, "computed_basis");
+  assert.equal(quality.trainingLoadStatus, "computed_basis");
+});
 test("marks power-free rides as ineligible for analytical recommendations", () => {
   const quality = assessRideDataQuality({
     source: "gpx",
