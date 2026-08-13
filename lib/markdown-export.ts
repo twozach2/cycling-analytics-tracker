@@ -76,6 +76,7 @@ export const METHOD_DEFINITIONS: readonly MethodDefinition[] = [
   { id: "16", title: "Coach Mode", formula: "readiness + safety guardrails + workload + evidence quality + mature trends + personal baselines", note: "Recommendations expose supporting and cautionary evidence, carry confidence, withhold training advice for substantial pain or illness, and label future days as conditional." },
   { id: "17", title: "Heart-rate zones", formula: "recorded heart-rate samples ÷ rider LTHR", note: "Five non-overlapping LTHR bands are calculated only when the rider saves a tested or carefully observed threshold. Per-ride and weekly distributions are descriptive, not pass/fail scores." },
   { id: "18", title: "Resting-HR trend", formula: "today resting HR − median of up to 7 prior daily readings", note: "At least three prior readings are required. A meaningfully elevated value lowers readiness conservatively; normal or lower values do not add bonus readiness." },
+  { id: "19", title: "LTHR candidate review", formula: "best qualifying 20-minute threshold-like window from aligned power + heart-rate streams", note: "Candidates require at least 95% sample coverage, 90-115% of ride-day FTP, limited coasting and power variation, and a stable heart-rate response. High confidence additionally requires a 30-minute activity explicitly recorded as a field test. Every estimate shows its evidence and limitations and never overwrites the rider profile without confirmation." },
 ];
 type MarkdownExportConfig = {
   ftpWatts: number;

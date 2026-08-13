@@ -15,6 +15,10 @@ export const riders = sqliteTable("riders", {
   defaultFtpWatts: integer("default_ftp_watts"),
   defaultWeightKg: real("default_weight_kg"),
   lthrBpm: integer("lthr_bpm"),
+  lthrSource: text("lthr_source"),
+  lthrConfidence: text("lthr_confidence", { enum: ["low", "moderate", "high"] }),
+  lthrSourceRideId: text("lthr_source_ride_id"),
+  lthrEffectiveAt: text("lthr_effective_at"),
   preferredCadenceLow: integer("preferred_cadence_low").notNull().default(85),
   preferredCadenceHigh: integer("preferred_cadence_high").notNull().default(90),
   createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
@@ -105,6 +109,23 @@ export const rides = sqliteTable(
     uniqueIndex("idx_rides_rider_external").on(table.riderId, table.externalId),
     index("idx_rides_rider_type_started").on(table.riderId, table.rideType, table.startedAt),
   ],
+);
+
+export const lthrHistory = sqliteTable(
+  "lthr_history",
+  {
+    id: text("id").primaryKey(),
+    riderId: text("rider_id").notNull().references(() => riders.id, { onDelete: "cascade" }),
+    effectiveAt: text("effective_at").notNull(),
+    lthrBpm: integer("lthr_bpm").notNull(),
+    source: text("source", { enum: ["manual", "ride_candidate", "field_test"] }).notNull(),
+    sourceRideId: text("source_ride_id").references(() => rides.id, { onDelete: "set null" }),
+    confidence: text("confidence", { enum: ["low", "moderate", "high"] }).notNull(),
+    algorithmVersion: text("algorithm_version"),
+    notes: text("notes").notNull().default(""),
+    createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+  },
+  (table) => [index("idx_lthr_history_rider_effective").on(table.riderId, table.effectiveAt)],
 );
 
 export const activityStreams = sqliteTable("activity_streams", {

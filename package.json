@@ -29,7 +29,7 @@
     "dist:mac:unsigned": "npm run build:desktop && electron-builder --mac --publish never -c.mac.identity=null -c.mac.hardenedRuntime=false -c.mac.notarize=false",
     "dist:linux": "npm run build:desktop && electron-builder --linux AppImage deb --publish never",
     "start": "tsx server/index.ts",
-    "test": "npm run build && node --import tsx --test tests/coach.test.ts tests/heart-rate.test.ts tests/data-quality.test.ts tests/cadence.test.ts tests/comparability.test.ts tests/markdown-export.test.ts tests/metrics.test.ts tests/recovery.test.ts tests/phase3.test.ts tests/strava-sync.test.ts tests/secret-store.test.ts tests/safe-storage-secret-store.test.ts tests/strava-settings.test.ts tests/electron-security.test.ts tests/electron-oauth.test.ts tests/distribution.test.ts tests/local-server.test.ts tests/rendered-html.test.mjs",
+    "test": "npm run build && node --import tsx --test tests/coach.test.ts tests/heart-rate.test.ts tests/lthr.test.ts tests/data-quality.test.ts tests/cadence.test.ts tests/comparability.test.ts tests/markdown-export.test.ts tests/metrics.test.ts tests/recovery.test.ts tests/phase3.test.ts tests/strava-sync.test.ts tests/secret-store.test.ts tests/safe-storage-secret-store.test.ts tests/strava-settings.test.ts tests/electron-security.test.ts tests/electron-oauth.test.ts tests/distribution.test.ts tests/local-server.test.ts tests/rendered-html.test.mjs",
     "lint": "eslint . --ignore-pattern dist",
     "db:generate": "drizzle-kit generate"
   },

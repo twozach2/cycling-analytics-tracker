@@ -2025,6 +2025,24 @@ type PhaseThreeInsights = {
   currentFtpWatts: number | null;
   weightKg: number | null;
   lthrBpm: number | null;
+  lthrProfile: {
+    bpm: number;
+    source: string;
+    confidence: "low" | "moderate" | "high" | null;
+    sourceRideId: string | null;
+    sourceRideName: string | null;
+    effectiveAt: string | null;
+  } | null;
+  lthrCandidates: Array<{
+    rideId: string; rideName: string; startedAt: string; lthrBpm: number;
+    confidence: "moderate" | "high"; algorithmVersion: string;
+    windowStartSeconds: number; windowEndSeconds: number; sampleCount: number;
+    coveragePercent: number; averagePowerWatts: number; powerPercentFtp: number;
+    powerVariationPercent: number; zeroPowerPercent: number; averageHeartRateBpm: number;
+    minimumHeartRateBpm: number; maximumHeartRateBpm: number; heartRateChangeBpm: number;
+    evidence: string[]; limitations: string[];
+  }>;
+  lthrHistory: Array<{ effectiveAt: string; lthrBpm: number; source: string; sourceRideId: string | null; confidence: "low" | "moderate" | "high"; algorithmVersion: string | null }>;
   profileComplete: boolean;
   ftpHistory: Array<{ effectiveAt: string; ftpWatts: number; source: string }>;
   prediction: { minimumWatts: number | null; maximumWatts: number | null; midpointWatts: number | null; confidence: string; signals: string[] };
@@ -2293,13 +2311,37 @@ function PlanToday({ rides, recovery, setRecovery, recoverySaveState, saveRecove
       const payload = await response.json() as { lthrBpm?: number | null; error?: string };
       if (!response.ok) throw new Error(payload.error ?? "LTHR could not be saved.");
       const savedLthr = payload.lthrBpm ?? null;
+      await loadInsights();
       setCurrentLthr(savedLthr);
       setLthrInput(savedLthr === null ? "" : String(savedLthr));
       setLthrSaveState("success");
-      setLthrSaveMessage(savedLthr === null ? "LTHR cleared. Heart-rate zones are withheld." : `Saved ${savedLthr} bpm. Run a six-month Strava sync or re-import older rides to calculate their zones.`);
+      setLthrSaveMessage(savedLthr === null ? "LTHR cleared. Heart-rate zones are withheld." : `Saved ${savedLthr} bpm. Manually entered values stay labeled until you attach supporting ride evidence.`);
     } catch (error) {
       setLthrSaveState("error");
       setLthrSaveMessage(error instanceof Error ? error.message : "LTHR could not be saved.");
+    }
+  };
+
+  const confirmLthrCandidate = async (rideId: string) => {
+    setLthrSaveState("working");
+    setLthrSaveMessage("Confirming the ride evidence...");
+    try {
+      const response = await fetch("/api/phase3", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ action: "confirm_lthr_candidate", rideId }),
+      });
+      const payload = await response.json() as { lthrBpm?: number; error?: string };
+      if (!response.ok) throw new Error(payload.error ?? "The LTHR candidate could not be confirmed.");
+      await loadInsights();
+      const savedLthr = payload.lthrBpm!;
+      setCurrentLthr(savedLthr);
+      setLthrInput(String(savedLthr));
+      setLthrSaveState("success");
+      setLthrSaveMessage(`Confirmed ${savedLthr} bpm with its source ride and confidence. Future candidates will require another review.`);
+    } catch (error) {
+      setLthrSaveState("error");
+      setLthrSaveMessage(error instanceof Error ? error.message : "The LTHR candidate could not be confirmed.");
     }
   };
 
@@ -2367,6 +2409,13 @@ function PlanToday({ rides, recovery, setRecovery, recoverySaveState, saveRecove
   const projection = projectFtpGoal(projectedFromFtp, goalTarget, referenceDate.toISOString());
   const vo2 = insights?.vo2Estimate;
   const vo2Status = vo2?.status === "trend_ready" ? "trend ready" : vo2?.status === "provisional" ? "provisional" : "needs 5 min power";
+  const lthrProfile = insights?.lthrProfile;
+  const lthrCandidate = insights?.lthrCandidates[0];
+  const lthrCandidateMatchesSavedValue = Boolean(lthrCandidate && currentLthr !== null && Math.abs(lthrCandidate.lthrBpm - currentLthr) <= 2);
+  const lthrEvidenceConfirmed = Boolean(lthrCandidate && lthrProfile?.sourceRideId === lthrCandidate.rideId);
+  const lthrSourceLabel = lthrProfile?.source === "ride_candidate"
+    ? `observed effort${lthrProfile.sourceRideName ? `: ${lthrProfile.sourceRideName}` : ""}`
+    : lthrProfile?.source === "field_test" ? "controlled field test" : "manually entered";
   const change = (current: number, previous: number, suffix = "") => previous ? `${current >= previous ? "+" : ""}${(current - previous).toFixed(1)}${suffix}` : "—";
   const projectionDate = (date: string | null) => date ? new Date(`${date}T12:00:00Z`).toLocaleDateString("en-US", { month: "short", year: "numeric", timeZone: "UTC" }) : "—";
   const contributionLabel = coach.rideReflection.contribution === "quality_work" ? "Quality work" : coach.rideReflection.contribution === "aerobic_endurance" ? "Aerobic endurance" : coach.rideReflection.contribution === "easy_movement" ? "Easy movement" : "Fresh suggestion";
@@ -2410,6 +2459,7 @@ function PlanToday({ rides, recovery, setRecovery, recoverySaveState, saveRecove
           <article className="coach-load-result"><span>Workload comparison</span><strong>{coach.evidenceSummary.acuteChronicRatio === null ? "—" : `${coach.evidenceSummary.acuteChronicRatio.toFixed(2)}×`}</strong><small>{coachLoadStatus}</small></article>
         </div>
         <p className="coach-load-note">1.00 means the last seven days equal your recent weekly average. The comparison informs caution; it does not predict injury.</p>
+        {currentLthr !== null && <p className="coach-lthr-note"><strong>Heart-rate guidance:</strong> Route cues use your {currentLthr} bpm LTHR ({lthrProfile?.confidence ?? "unrated"} confidence, {lthrSourceLabel}). Power, perceived effort, and symptoms still take precedence.</p>}
         <div className="coach-reason-grid">
           <article><span>Supports the choice</span>{coach.positives.length ? coach.positives.map((reason) => <p key={reason}><i>+</i>{reason}</p>) : <p><i>·</i>No positive signal changed the plan.</p>}</article>
           <article><span>Cautions</span>{coach.cautions.length ? coach.cautions.map((reason) => <p key={reason}><i>−</i>{reason}</p>) : <p><i>·</i>No caution changed the plan.</p>}</article>
@@ -2513,8 +2563,21 @@ function PlanToday({ rides, recovery, setRecovery, recoverySaveState, saveRecove
         <div className="confirm-ftp"><label><span>Body weight (lb)</span><input type="number" min="80" max="500" value={weightInputPounds} onChange={(event) => { setWeightInputPounds(Number(event.target.value)); setWeightSaveMessage(""); setWeightSaveState("idle"); }} /></label><button className="primary-button" onClick={() => void saveWeight()} disabled={weightSaveState === "working"}>{weightSaveState === "working" ? "Saving…" : "Save weight"}</button></div>
         <p className={`ftp-save-status ${weightSaveState}`} aria-live="polite">{weightSaveMessage || `Current route-estimate weight: ${currentWeightPounds} lb.`}</p>
         <div className="confirm-ftp"><label><span>LTHR (optional bpm)</span><input type="number" min="80" max="220" value={lthrInput} placeholder="Not set" onChange={(event) => { setLthrInput(event.target.value); setLthrSaveMessage(""); setLthrSaveState("idle"); }} /></label><button className="primary-button" onClick={() => void saveLthr()} disabled={lthrSaveState === "working"}>{lthrSaveState === "working" ? "Saving…" : currentLthr === null ? "Add LTHR" : "Save LTHR"}</button></div>
-        <p className={`ftp-save-status ${lthrSaveState}`} aria-live="polite">{lthrSaveMessage || (currentLthr === null ? "Optional: use a tested or carefully observed threshold; do not guess." : `Current LTHR: ${currentLthr} bpm.`)}</p>
+        <p className={`ftp-save-status ${lthrSaveState}`} aria-live="polite">{lthrSaveMessage || (currentLthr === null ? "Optional: confirm a qualifying ride below or enter a tested value." : `Current LTHR: ${currentLthr} bpm - ${lthrProfile?.confidence ?? "unrated"} confidence, ${lthrSourceLabel}.`)}</p>
         {currentLthr !== null && <div className="lthr-zone-guide">{HEART_RATE_ZONES.map((zone, index) => <span key={zone.key}><strong>{zone.shortLabel}</strong><small>{heartRateZoneRange(currentLthr, index)}</small></span>)}</div>}
+        {lthrCandidate ? <article className="lthr-candidate-card">
+          <div className="lthr-candidate-heading"><span><small>Reviewable threshold evidence</small><strong>{lthrEvidenceConfirmed && currentLthr !== null ? `${currentLthr} bpm confirmed` : `${lthrCandidate.lthrBpm} bpm candidate`}</strong><em>{lthrCandidate.rideName} - {new Date(lthrCandidate.startedAt).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })}</em></span><span className={`confidence-badge confidence-${lthrCandidate.confidence}`}>{lthrCandidate.confidence} confidence</span></div>
+          <div className="lthr-candidate-metrics">
+            <span><small>Clean window</small><strong>{Math.round(lthrCandidate.windowStartSeconds / 60)}-{Math.round(lthrCandidate.windowEndSeconds / 60)} min</strong></span>
+            <span><small>Power</small><strong>{Math.round(lthrCandidate.averagePowerWatts)} W</strong><em>{lthrCandidate.powerPercentFtp.toFixed(1)}% FTP</em></span>
+            <span><small>Heart rate</small><strong>{lthrCandidate.averageHeartRateBpm.toFixed(1)} bpm</strong><em>{lthrCandidate.minimumHeartRateBpm}-{lthrCandidate.maximumHeartRateBpm} bpm</em></span>
+            <span><small>Stability</small><strong>{lthrCandidate.heartRateChangeBpm >= 0 ? "+" : ""}{lthrCandidate.heartRateChangeBpm.toFixed(1)} bpm</strong><em>first vs final 5 min</em></span>
+          </div>
+          <div className="lthr-candidate-copy">{lthrCandidate.evidence.map((item) => <p key={item}>{item}</p>)}</div>
+          {lthrCandidate.limitations.length > 0 && <p className="lthr-limitations"><strong>Why it remains provisional:</strong> {lthrCandidate.limitations.join(" ")}</p>}
+          <div className="lthr-candidate-action"><span>{lthrEvidenceConfirmed ? "This evidence is attached to your saved LTHR." : lthrCandidateMatchesSavedValue ? `Your saved ${currentLthr} bpm is within the estimate's precision; confirmation attaches the evidence without changing it.` : "Your saved value changes only if you confirm this candidate."}</span><button className="secondary-button" type="button" disabled={lthrSaveState === "working" || lthrEvidenceConfirmed} onClick={() => void confirmLthrCandidate(lthrCandidate.rideId)}>{lthrEvidenceConfirmed ? "Evidence confirmed" : lthrCandidateMatchesSavedValue ? "Attach evidence" : `Use ${lthrCandidate.lthrBpm} bpm`}</button></div>
+          <small className="lthr-algorithm">{lthrCandidate.algorithmVersion} - estimates never overwrite your profile automatically</small>
+        </article> : <div className="lthr-candidate-empty"><strong>No qualifying threshold effort found yet.</strong><span>A future steady 25-30 minute effort near FTP with complete power and heart-rate samples can appear here for review.</span></div>}
         <p className="chart-note"><i /> Predictions are advisory ranges. Your working FTP changes only after you confirm it.</p>
       </section>
 

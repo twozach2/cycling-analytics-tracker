@@ -1,17 +1,19 @@
 import { and, desc, eq, lte } from "drizzle-orm";
 import { getDb } from "../../../db";
-import { externalConnections, ftpHistory, powerDuration, riderGoals, riders, rides } from "../../../db/schema";
+import { externalConnections, ftpHistory, lthrHistory, powerDuration, riderGoals, riders, rides } from "../../../db/schema";
 import { currentRider } from "../../../lib/current-rider";
 import { buildCyclingVo2Trend, buildPowerRecordHistory, predictFtp } from "../../../lib/phase3";
 import { getSecretStore, STRAVA_SECRETS } from "../../../server/platform/secret-store";
+import { loadLthrCandidates } from "../../../server/services/lthr-candidates";
 
 export async function GET(request: Request) {
   const rider = await currentRider(request);
   if (!rider) return Response.json({ error: "Sign in to view training insights." }, { status: 401 });
   const db = getDb();
-  const [[profile], ftpRows, [goal], connections, powerEfforts, fiveMinuteEfforts] = await Promise.all([
+  const [[profile], ftpRows, lthrRows, [goal], connections, powerEfforts, fiveMinuteEfforts] = await Promise.all([
     db.select().from(riders).where(eq(riders.id, rider.id)).limit(1),
     db.select().from(ftpHistory).where(eq(ftpHistory.riderId, rider.id)).orderBy(desc(ftpHistory.effectiveAt)).limit(24),
+    db.select().from(lthrHistory).where(eq(lthrHistory.riderId, rider.id)).orderBy(desc(lthrHistory.effectiveAt)).limit(12),
     db.select().from(riderGoals).where(and(eq(riderGoals.riderId, rider.id), eq(riderGoals.status, "active"))).orderBy(desc(riderGoals.createdAt)).limit(1),
     db.select({ provider: externalConnections.provider, displayName: externalConnections.displayName, lastSyncedAt: externalConnections.lastSyncedAt })
       .from(externalConnections)
@@ -54,11 +56,30 @@ export async function GET(request: Request) {
     fiveMinutePowerWatts: effort.fiveMinutePowerWatts,
     weightKg: effort.weightKg ?? weightKg ?? 0,
   })), currentFtpWatts);
+  const lthrCandidates = await loadLthrCandidates(rider.id);
+  const currentLthrCandidate = lthrCandidates.find((candidate) => candidate.rideId === profile?.lthrSourceRideId);
 
   return Response.json({
     currentFtpWatts,
     weightKg,
     lthrBpm: profile?.lthrBpm ?? null,
+    lthrProfile: profile?.lthrBpm ? {
+      bpm: profile.lthrBpm,
+      source: profile.lthrSource ?? "manual",
+      confidence: profile.lthrConfidence,
+      sourceRideId: profile.lthrSourceRideId,
+      sourceRideName: currentLthrCandidate?.rideName ?? null,
+      effectiveAt: profile.lthrEffectiveAt,
+    } : null,
+    lthrCandidates,
+    lthrHistory: lthrRows.map((row) => ({
+      effectiveAt: row.effectiveAt,
+      lthrBpm: row.lthrBpm,
+      source: row.source,
+      sourceRideId: row.sourceRideId,
+      confidence: row.confidence,
+      algorithmVersion: row.algorithmVersion,
+    })),
     profileComplete: currentFtpWatts !== null && weightKg !== null,
     ftpHistory: ftpRows.map((row) => ({ effectiveAt: row.effectiveAt, ftpWatts: row.ftpWatts, source: row.source })),
     prediction,
@@ -85,6 +106,7 @@ type PhaseThreeAction =
   | { action: "record_ftp"; ftpWatts: number }
   | { action: "record_weight"; weightPounds: number }
   | { action: "record_lthr"; lthrBpm: number | null }
+  | { action: "confirm_lthr_candidate"; rideId: string }
   | { action: "record_profile"; ftpWatts: number; weightPounds: number; lthrBpm?: number | null };
 
 export async function POST(request: Request) {
@@ -108,8 +130,23 @@ export async function POST(request: Request) {
       return Response.json({ error: "LTHR must be between 80 and 220 bpm, or left blank." }, { status: 400 });
     }
     const weightKg = Math.round((weightPounds / 2.2046226218) * 10) / 10;
-    const [existing] = await db.select({ ftpWatts: riders.defaultFtpWatts }).from(riders).where(eq(riders.id, rider.id)).limit(1);
-    await db.update(riders).set({ defaultFtpWatts: ftpWatts, defaultWeightKg: weightKg, lthrBpm }).where(eq(riders.id, rider.id));
+    const [existing] = await db.select({ ftpWatts: riders.defaultFtpWatts, lthrBpm: riders.lthrBpm }).from(riders).where(eq(riders.id, rider.id)).limit(1);
+    const lthrChanged = existing?.lthrBpm !== lthrBpm;
+    const lthrEffectiveAt = lthrChanged ? new Date().toISOString() : undefined;
+    await db.update(riders).set({
+      defaultFtpWatts: ftpWatts,
+      defaultWeightKg: weightKg,
+      lthrBpm,
+      ...(lthrChanged ? {
+        lthrSource: lthrBpm === null ? null : "manual",
+        lthrConfidence: lthrBpm === null ? null : "low" as const,
+        lthrSourceRideId: null,
+        lthrEffectiveAt: lthrBpm === null ? null : lthrEffectiveAt,
+      } : {}),
+    }).where(eq(riders.id, rider.id));
+    if (lthrChanged && lthrBpm !== null && lthrEffectiveAt) {
+      await db.insert(lthrHistory).values({ id: crypto.randomUUID(), riderId: rider.id, effectiveAt: lthrEffectiveAt, lthrBpm, source: "manual", confidence: "low", notes: "Entered during rider setup; no source effort was attached." });
+    }
     if (existing?.ftpWatts !== ftpWatts) {
       const effectiveAt = new Date().toISOString();
       await db.insert(ftpHistory).values({ id: crypto.randomUUID(), riderId: rider.id, effectiveAt, ftpWatts, source: "rider setup", notes: "Saved with required rider profile." });
@@ -123,8 +160,30 @@ export async function POST(request: Request) {
     if (lthrBpm !== null && (!Number.isFinite(lthrBpm) || lthrBpm < 80 || lthrBpm > 220)) {
       return Response.json({ error: "LTHR must be between 80 and 220 bpm, or left blank." }, { status: 400 });
     }
-    await db.update(riders).set({ lthrBpm }).where(eq(riders.id, rider.id));
-    return Response.json({ lthrBpm }, { status: 201 });
+    const [existing] = await db.select({ lthrBpm: riders.lthrBpm, source: riders.lthrSource, confidence: riders.lthrConfidence, sourceRideId: riders.lthrSourceRideId, effectiveAt: riders.lthrEffectiveAt }).from(riders).where(eq(riders.id, rider.id)).limit(1);
+    if (existing?.lthrBpm === lthrBpm) return Response.json({ lthrBpm, lthrProfile: lthrBpm === null ? null : { bpm: lthrBpm, source: existing.source ?? "manual", confidence: existing.confidence, sourceRideId: existing.sourceRideId, effectiveAt: existing.effectiveAt }, unchanged: true });
+    const effectiveAt = lthrBpm === null ? null : new Date().toISOString();
+    await db.update(riders).set({ lthrBpm, lthrSource: lthrBpm === null ? null : "manual", lthrConfidence: lthrBpm === null ? null : "low", lthrSourceRideId: null, lthrEffectiveAt: effectiveAt }).where(eq(riders.id, rider.id));
+    if (lthrBpm !== null && effectiveAt) {
+      await db.insert(lthrHistory).values({ id: crypto.randomUUID(), riderId: rider.id, effectiveAt, lthrBpm, source: "manual", confidence: "low", notes: "Manually entered; no source effort was attached." });
+    }
+    return Response.json({ lthrBpm, lthrProfile: lthrBpm === null ? null : { bpm: lthrBpm, source: "manual", confidence: "low", sourceRideId: null, effectiveAt } }, { status: 201 });
+  }
+
+  if (payload.action === "confirm_lthr_candidate") {
+    const candidates = await loadLthrCandidates(rider.id);
+    const candidate = candidates.find((value) => value.rideId === payload.rideId);
+    if (!candidate) return Response.json({ error: "That ride no longer meets the conservative LTHR candidate rules." }, { status: 400 });
+    const [currentProfile] = await db.select({ lthrBpm: riders.lthrBpm }).from(riders).where(eq(riders.id, rider.id)).limit(1);
+    const confirmedBpm = currentProfile?.lthrBpm && Math.abs(currentProfile.lthrBpm - candidate.lthrBpm) <= 2 ? currentProfile.lthrBpm : candidate.lthrBpm;
+    const effectiveAt = new Date().toISOString();
+    await db.update(riders).set({ lthrBpm: confirmedBpm, lthrSource: "ride_candidate", lthrConfidence: candidate.confidence, lthrSourceRideId: candidate.rideId, lthrEffectiveAt: effectiveAt }).where(eq(riders.id, rider.id));
+    await db.insert(lthrHistory).values({
+      id: crypto.randomUUID(), riderId: rider.id, effectiveAt, lthrBpm: confirmedBpm,
+      source: "ride_candidate", sourceRideId: candidate.rideId, confidence: candidate.confidence,
+      algorithmVersion: candidate.algorithmVersion, notes: [...candidate.evidence, ...candidate.limitations].join(" "),
+    });
+    return Response.json({ lthrBpm: confirmedBpm, lthrProfile: { bpm: confirmedBpm, source: "ride_candidate", confidence: candidate.confidence, sourceRideId: candidate.rideId, sourceRideName: candidate.rideName, effectiveAt }, candidate }, { status: 201 });
   }
 
   if (payload.action === "set_goal") {

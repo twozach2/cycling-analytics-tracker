@@ -16,6 +16,8 @@ Normalized power and variability index are computed from detailed timestamped po
 
 Optional lactate-threshold heart rate (LTHR) unlocks five non-overlapping heart-rate zones for every detailed heart-rate stream, per-ride and seven-day time-in-zone views, neutral ride-intensity context, and personalized Coach route cues. The app never guesses LTHR from maximum heart rate; after changing it, re-sync Strava or re-import source files to recalculate older rides.
 
+The app can also surface conservative LTHR candidates from a continuous 20-minute threshold-like window with detailed power and heart-rate evidence. Every candidate shows its source ride, confidence, qualifying metrics, and limitations. A candidate never changes the athlete profile until the rider explicitly confirms it, and confirmed values retain their provenance in LTHR history.
+
 Recovery check-ins can include resting heart rate. Once three prior daily readings exist, readiness compares today's value with a rolling seven-reading median, applies only conservative upward-HR penalties, and exposes its full component breakdown, assumptions, and confidence level.
 
 Zwift route-time estimates use the current ride idea's FTP-relative effort range rather than a fixed W/kg assumption, so recovery, endurance, and tempo suggestions produce different personalized time windows.
