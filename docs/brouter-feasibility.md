@@ -48,9 +48,9 @@ BRouter routes waypoint sequences; it does not provide a single native "make a r
 
 ## Cross-platform gate
 
-The route contract is OS-neutral Java. BRouter's official project provides launchers for Windows and for macOS/Linux, and the app now contains a manual GitHub Actions matrix that builds the pinned source, downloads a real regional tile, starts the sidecar, generates three loops, and validates the missing-tile failure on all three operating systems.
+The route contract is OS-neutral Java. BRouter's official project provides launchers for Windows and for macOS/Linux, and the app now contains a branch-scoped GitHub Actions matrix that builds the pinned source, downloads a real regional tile, starts the sidecar, generates three loops, and validates the missing-tile failure on all three operating systems. It runs automatically only when BRouter-related files change on `codex/coaching-product`, and it remains manually dispatchable.
 
-The matrix has not run from this local-only commit. Do not call Phase 2 complete until `.github/workflows/brouter-feasibility.yml` passes on `windows-latest`, `macos-latest`, and `ubuntu-latest`.
+Do not call Phase 2 complete until `.github/workflows/brouter-feasibility.yml` passes on `windows-latest`, `macos-latest`, and `ubuntu-latest`.
 
 ## Packaging plan if the matrix passes
 

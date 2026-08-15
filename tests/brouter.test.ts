@@ -164,9 +164,12 @@ test("sidecar launch contract is identical apart from each platform's Java filen
   assert.deepEqual(args.slice(-3), ["17777", "1", "127.0.0.1"]);
 });
 
-test("manual feasibility workflow covers all desktop operating systems and pins BRouter source", async () => {
+test("branch-scoped feasibility workflow covers all desktop operating systems and pins BRouter source", async () => {
   const workflow = await readFile(path.resolve(".github", "workflows", "brouter-feasibility.yml"), "utf8");
   assert.match(workflow, /workflow_dispatch:/);
+  assert.match(workflow, /push:/);
+  assert.match(workflow, /codex\/coaching-product/);
+  assert.match(workflow, /paths:/);
   assert.match(workflow, /windows-latest/);
   assert.match(workflow, /macos-latest/);
   assert.match(workflow, /ubuntu-latest/);

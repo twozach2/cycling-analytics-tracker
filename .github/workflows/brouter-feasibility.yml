@@ -2,6 +2,15 @@ name: BRouter feasibility
 
 on:
   workflow_dispatch:
+  push:
+    branches:
+      - codex/coaching-product
+    paths:
+      - .github/workflows/brouter-feasibility.yml
+      - lib/brouter.ts
+      - scripts/brouter-smoke.ts
+      - server/services/brouter.ts
+      - tests/brouter.test.ts
 
 permissions:
   contents: read
