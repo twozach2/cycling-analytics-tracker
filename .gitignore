@@ -40,6 +40,9 @@ yarn-error.log*
 /dist-electron/
 /dist-installers/
 /.wrangler/
+
+# downloaded BRouter regional data
+*.rd5
 /outputs/
 /work/
 /.local-data/

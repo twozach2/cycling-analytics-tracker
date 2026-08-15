@@ -1,0 +1,43 @@
+name: BRouter feasibility
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  smoke:
+    name: ${{ matrix.os }} local sidecar
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, macos-latest, ubuntu-latest]
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - run: npm ci
+      - name: Check out pinned BRouter
+        shell: bash
+        run: git clone --depth 1 --branch v1.7.10 https://github.com/abrensch/brouter.git "$RUNNER_TEMP/brouter"
+      - name: Verify pinned BRouter source commit
+        shell: bash
+        run: test "$(git -C "$RUNNER_TEMP/brouter" rev-parse HEAD)" = "4d2639af77ea5ed9c30d3e400764eb6f9e8522da"
+      - name: Build BRouter sidecar
+        shell: bash
+        working-directory: ${{ runner.temp }}/brouter
+        run: ./gradlew :brouter-server:fatJar --no-daemon
+      - name: Run regional-data and round-trip smoke benchmark
+        shell: bash
+        run: npm run spike:brouter -- --brouter-root "$RUNNER_TEMP/brouter" --data-dir "$RUNNER_TEMP/cycling-brouter-data"

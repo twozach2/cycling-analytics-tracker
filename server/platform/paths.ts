@@ -33,6 +33,18 @@ export function rideFilesDirectory() {
   return directory;
 }
 
+export function routingDataDirectory() {
+  const directory = path.join(dataDirectory(), "routing");
+  mkdirSync(directory, { recursive: true });
+  return directory;
+}
+
+export function brouterSegmentsDirectory() {
+  const directory = path.join(routingDataDirectory(), "brouter", "segments4");
+  mkdirSync(directory, { recursive: true });
+  return directory;
+}
+
 export function migrationsDirectory() {
   const configured = process.env.CYCLING_MIGRATIONS_DIR?.trim();
   if (configured) return path.resolve(configured);
