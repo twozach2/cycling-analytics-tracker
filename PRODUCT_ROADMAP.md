@@ -5,8 +5,7 @@
 
 - Phase 0 complete in `46a3cb9`.
 - Phase 1 complete in `a861224`.
-- Phase 2 is a conditional go on Windows: real routes, regional download behavior, startup, latency, and packaging size are measured.
-- Phase 2 remains open until the branch-scoped Windows/macOS/Linux smoke-test matrix passes.
+- Phase 2 complete in `9296337`; the real-sidecar matrix passed on Windows, macOS, and Linux in [Actions run 31913288748](https://github.com/twozach2/cycling-analytics-tracker/actions/runs/31913288748).
 - No route UI or production BRouter dependency is adopted yet.
 Branch: `codex/coaching-product`
 

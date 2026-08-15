@@ -6,7 +6,7 @@ Pinned engine: BRouter `v1.7.10`
 
 ## Decision
 
-**Conditional go.** BRouter is fast enough, small enough, local-first, elevation-aware, and exposes the route geometry and metadata the product needs. Keep it behind a server-side adapter and do not add route UI until the cross-platform matrix has run successfully.
+**Go.** BRouter is fast enough, small enough, local-first, elevation-aware, and exposes the route geometry and metadata the product needs. Keep it behind the server-side adapter while Phase 3 adds the route-and-intention experience.
 
 The product should bundle a minimal per-platform Java runtime instead of depending on a system Java installation. Regional `.rd5` data must remain outside the installer and download on demand, because tile size varies substantially by region.
 
@@ -50,7 +50,7 @@ BRouter routes waypoint sequences; it does not provide a single native "make a r
 
 The route contract is OS-neutral Java. BRouter's official project provides launchers for Windows and for macOS/Linux, and the app now contains a branch-scoped GitHub Actions matrix that builds the pinned source, downloads a real regional tile, starts the sidecar, generates three loops, and validates the missing-tile failure on all three operating systems. It runs automatically only when BRouter-related files change on `codex/coaching-product`, and it remains manually dispatchable.
 
-Do not call Phase 2 complete until `.github/workflows/brouter-feasibility.yml` passes on `windows-latest`, `macos-latest`, and `ubuntu-latest`.
+Phase 2's matrix passed on `windows-latest`, `macos-latest`, and `ubuntu-latest` on 2026-08-15. Evidence: https://github.com/twozach2/cycling-analytics-tracker/actions/runs/31913288748.
 
 ## Packaging plan if the matrix passes
 
