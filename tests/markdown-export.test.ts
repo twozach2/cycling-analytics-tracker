@@ -37,6 +37,7 @@ const ride: MarkdownRide = {
   powerHeartRateRatio: 0.97,
   decoupling: 3.2,
   decouplingEligible: true,
+  decouplingConfidence: "high",
   decouplingEligibilityReason: "Eligible steady ride.",
   stoppedPercent: 1.2,
   variabilityIndex: 1.047,
@@ -91,6 +92,7 @@ test("Markdown export contains rider configuration, methodology, and complete ri
   assert.match(markdown, /Morning endurance/);
   assert.match(markdown, /Normalized power: 134 W/);
   assert.match(markdown, /Aerobic decoupling: 3\.2%/);
+  assert.match(markdown, /Decoupling confidence: high/);
   assert.match(markdown, /Environment: Virtual \/ Indoor/);
   assert.match(markdown, /Context: Controlled benchmark/);
   assert.match(markdown, /Classification confidence: high/);

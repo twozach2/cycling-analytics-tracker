@@ -92,6 +92,13 @@
       "when": 1786596145645,
       "tag": "0012_low_mathemanic",
       "breakpoints": true
+    },
+    {
+      "idx": 13,
+      "version": "6",
+      "when": 1786769965455,
+      "tag": "0013_chemical_madripoor",
+      "breakpoints": true
     }
   ]
 }

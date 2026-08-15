@@ -85,7 +85,7 @@ export function buildComparableRouteCohorts<T extends ComparableRouteRide>(rides
       excluded.push({ rideId: ride.id, reason: failure });
       continue;
     }
-    const key = [normalizedRoute(ride.route), ride.environment, ride.trainingType, ride.context].join("::");
+    const key = [normalizedRoute(ride.route), ride.environment, ride.context].join("::");
     const group = baseGroups.get(key) ?? [];
     group.push(ride);
     baseGroups.set(key, group);
@@ -104,7 +104,7 @@ export function buildComparableRouteCohorts<T extends ComparableRouteRide>(rides
       if (cluster.length < 2) {
         excluded.push({
           rideId: cluster[0].id,
-          reason: `No second ride matched route, environment, training stimulus, context, and distance within ${ROUTE_DISTANCE_TOLERANCE_PERCENT}%.`,
+          reason: `No second ride matched route, environment, context, and distance within ${ROUTE_DISTANCE_TOLERANCE_PERCENT}%.`,
         });
         continue;
       }
@@ -113,11 +113,16 @@ export function buildComparableRouteCohorts<T extends ComparableRouteRide>(rides
       const maximumDistance = Math.max(...cluster.map((ride) => ride.distanceMiles));
       const distanceSpreadPercent = distanceMedian > 0 ? (maximumDistance - minimumDistance) / distanceMedian * 100 : 0;
       const hasLimitedClassification = cluster.some((ride) => ride.classificationConfidence !== "high");
-      const confidence: "high" | "moderate" = cluster[0].environment !== "outdoor" && distanceSpreadPercent <= 3 && !hasLimitedClassification ? "high" : "moderate";
+      const trainingTypes = [...new Set(cluster.map((ride) => ride.trainingType))];
+      const hasMixedTrainingStimulus = trainingTypes.length > 1;
+      const confidence: "high" | "moderate" = cluster[0].environment !== "outdoor" && distanceSpreadPercent <= 3 && !hasLimitedClassification && !hasMixedTrainingStimulus ? "high" : "moderate";
       const reasons = [
-        `Same route, ${cluster[0].environment} environment, ${cluster[0].trainingType} stimulus, and ${cluster[0].context.replaceAll("_", " ")} context.`,
+        hasMixedTrainingStimulus
+          ? `Same route, ${cluster[0].environment} environment, and ${cluster[0].context.replaceAll("_", " ")} context; training stimuli differ (${trainingTypes.join(", ")}).`
+          : `Same route, ${cluster[0].environment} environment, ${cluster[0].trainingType} stimulus, and ${cluster[0].context.replaceAll("_", " ")} context.`,
         `Distance spread is ${distanceSpreadPercent.toFixed(1)}% (limit ${ROUTE_DISTANCE_TOLERANCE_PERCENT}%).`,
       ];
+      if (hasMixedTrainingStimulus) reasons.push("Because training stimulus differs, changes are descriptive only and should not be treated as a fitness trend.");
       if (cluster[0].environment === "outdoor") reasons.push("Outdoor wind, surface, traffic, and drafting conditions are not available, so confidence is capped at moderate.");
       if (hasLimitedClassification) reasons.push("At least one ride has less than high classification confidence.");
       cohorts.push({
@@ -149,6 +154,7 @@ export type Zone2BenchmarkRide = {
   stoppedPercent: number | null;
   powerHeartRateRatio: number;
   decouplingEligible: boolean;
+  decouplingConfidence?: EvidenceConfidence;
   classificationConfidence?: EvidenceConfidence;
 };
 
@@ -183,9 +189,10 @@ export function evaluateZone2Benchmark(ride: Zone2BenchmarkRide): BenchmarkEligi
 
   if (failures.length) return { eligible: false, confidence: "low", reasons: [], failures };
 
-  const confidence: EvidenceConfidence = ride.classificationConfidence === "low"
+  const driftConfidence = ride.decouplingConfidence ?? (ride.movingTimeSeconds >= 60 * 60 ? "high" : ride.movingTimeSeconds >= 45 * 60 ? "moderate" : "low");
+  const confidence: EvidenceConfidence = ride.classificationConfidence === "low" || driftConfidence === "low"
     ? "low"
-    : ride.environment === "outdoor" || ride.classificationConfidence !== "high"
+    : ride.environment === "outdoor" || ride.classificationConfidence !== "high" || driftConfidence === "moderate"
       ? "moderate"
       : "high";
   const reasons = [
@@ -193,6 +200,7 @@ export function evaluateZone2Benchmark(ride: Zone2BenchmarkRide): BenchmarkEligi
     `Duration ${Math.round(ride.movingTimeSeconds / 60)} minutes, IF ${ride.intensityFactor.toFixed(2)}, VI ${ride.variabilityIndex!.toFixed(2)}, stopped time ${ride.stoppedPercent!.toFixed(1)}%.`,
     "Power, heart rate, cadence, and paired stream durability checks are complete.",
   ];
+  if (driftConfidence !== "high") reasons.push(`Aerobic durability carries ${driftConfidence} duration confidence.`);
   if (ride.environment === "outdoor") reasons.push("Outdoor conditions cap confidence at moderate.");
   return { eligible: true, confidence, reasons, failures: [] };
 }

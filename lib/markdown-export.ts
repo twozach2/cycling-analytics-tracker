@@ -35,6 +35,7 @@ export type MarkdownRide = {
   powerHeartRateRatio: number;
   decoupling: number | null;
   decouplingEligible?: boolean;
+  decouplingConfidence?: "none" | "low" | "moderate" | "high";
   decouplingEligibilityReason?: string;
   stoppedPercent?: number | null;
   variabilityIndex: number | null;
@@ -61,7 +62,7 @@ export const METHOD_DEFINITIONS: readonly MethodDefinition[] = [
   { id: "01", title: "Power / HR ratio", formula: "average power ÷ average heart rate", note: "Contextual efficiency signal for comparable steady rides." },
   { id: "02", title: "Intensity factor", formula: "normalized power ÷ FTP at ride date", note: "Every ride keeps its own FTP snapshot; changing today's FTP does not rewrite historical IF or load." },
   { id: "03", title: "Training load", formula: "hours × intensity² × 100", note: "A transparent TSS-like load, not a licensed physiological diagnosis." },
-  { id: "04", title: "Aerobic decoupling", formula: "median central-interval efficiency · first half vs second half", note: "Ten equal-duration intervals are formed, with warm-up and cooldown edge buckets excluded. Interpretation requires ≥45 minutes, VI ≤1.08, ≤5% stopped time, a non-workout effort, sufficient paired power/HR samples, and no outsized warm-up signal." },
+  { id: "04", title: "Aerobic decoupling", formula: "median central-interval efficiency · first half vs second half", note: "Ten equal-duration intervals are formed, with warm-up and cooldown edge buckets excluded. Duration confidence is tiered: under 30 minutes is withheld, 30-44 is low/provisional, 45-59 is moderate, and 60+ is high. VI ≤1.08, ≤5% stopped time, a non-workout effort, sufficient paired power/HR samples, and no outsized warm-up signal are still required." },
   { id: "05", title: "Load ratio", formula: "7-day load ÷ 28-day weekly average", note: "A review signal for abrupt changes, never an exact injury threshold." },
   { id: "06", title: "Readiness", formula: "recovery time + load + check-in + optional resting-HR trend", note: "A weighted, explainable score with visible components, assumptions, and confidence. Elevated resting HR adjusts conservatively; pain and illness remain safety overrides." },
   { id: "07", title: "FTP prediction", formula: "20–60 min best power × duration factor", note: "A conservative range from recorded efforts, with confidence tied to available evidence." },
@@ -69,7 +70,7 @@ export const METHOD_DEFINITIONS: readonly MethodDefinition[] = [
   { id: "09", title: "Zwift route time", formula: "rider power vs gravity + rolling resistance + aerodynamic drag", note: "A planning range from rider weight, sustainable W/kg, route distance, and total climbing; drafting and exact gradient profiles can change the result." },
   { id: "10", title: "Estimated cycling VO₂ max", formula: "16.6 + 8.87 × five-minute W/kg", note: "A rolling 90-day power-based trend proxy. It assumes the five-minute effort was maximal and is not a laboratory measurement or diagnosis." },
   { id: "11", title: "Ride classification", formula: "explicit intent + provider subtype + FTP-based IF bands", note: "Training stimulus is stored separately from benchmark, workout, race, or group context. Ambiguous summary-only classifications stay conservative, carry confidence and evidence, and never overwrite manual corrections." },
-  { id: "12", title: "Comparable ride cohorts", formula: "route + environment + stimulus + context + distance tolerance + complete power/HR", note: "Route changes are shown only inside matched cohorts. Distance must be within 8%; race, group, and structured-workout contexts are excluded. Unobserved outdoor conditions cap confidence at moderate." },
+  { id: "12", title: "Comparable ride cohorts", formula: "route + environment + context + distance tolerance + complete power/HR", note: "Route changes are shown only inside matched cohorts. Distance must be within 8%; a different training stimulus remains descriptive and caps confidence at moderate. Race, group, and structured-workout contexts are excluded. Unobserved outdoor conditions also cap confidence at moderate." },
   { id: "13", title: "Controlled Zone 2 benchmark", formula: "50-70 min + IF 0.60-0.75 + VI <= 1.05 + stopped time <= 2% + cadence 80-95 rpm + paired streams", note: "Each ride must pass the full protocol. Comparisons stay in one environment and a narrow IF cohort; a trend is withheld until at least three eligible rides exist." },
   { id: "14", title: "Cadence distribution", formula: "positive cadence samples grouped by band; cohort medians use one result per ride", note: "Cadence is calculated for every ride with a detailed stream. Zero-rpm coasting is excluded; target and endurance bands overlap and are not expected to total 100%. Cross-ride summaries stay separated by environment and training type." },
   { id: "15", title: "Data quality and provenance", formula: "per-signal record counts + source metadata + metric basis", note: "Each signal reports the records actually received, a summary-only value, or unavailable data. The app does not copy the timeline total across signals or invent sample coverage." },
@@ -123,6 +124,7 @@ export function buildCyclingMarkdown(
     ...ride,
     date: ride.date,
     decouplingEligible: ride.decouplingEligible ?? false,
+    decouplingConfidence: ride.decouplingConfidence === "none" ? undefined : ride.decouplingConfidence,
     stoppedPercent: ride.stoppedPercent ?? null,
   })));
   const lines = [
@@ -206,6 +208,9 @@ export function buildCyclingMarkdown(
     const decoupling = ride.decouplingEligible && ride.decoupling !== null
       ? `${finite(ride.decoupling, 1, false)}%`
       : "Not suitable for interpretation";
+    const decouplingConfidence = !ride.decouplingEligible
+      ? "none"
+      : ride.decouplingConfidence ?? (ride.movingTimeSeconds >= 60 * 60 ? "high" : ride.movingTimeSeconds >= 45 * 60 ? "moderate" : "low");
     const benchmarkEligibility = ride.context === "benchmark" ? evaluateZone2Benchmark({
       id: ride.id,
       date: ride.date,
@@ -221,6 +226,7 @@ export function buildCyclingMarkdown(
       stoppedPercent: ride.stoppedPercent ?? null,
       powerHeartRateRatio: ride.powerHeartRateRatio,
       decouplingEligible: ride.decouplingEligible ?? false,
+      decouplingConfidence: decouplingConfidence === "none" ? undefined : decouplingConfidence,
       classificationConfidence: ride.classificationConfidence,
     }) : null;
     const benchmarkStatus = benchmarkEligibility ? benchmarkEligibility.eligible ? `Eligible (${benchmarkEligibility.confidence} confidence)` : `Not eligible - ${benchmarkEligibility.failures.join(" ")}` : "Not designated";
@@ -265,7 +271,8 @@ export function buildCyclingMarkdown(
       `- FTP snapshot source: ${clean(ride.ftpSnapshotSource ?? "Not available")}`,
       `- Watts / heartbeat: ${finite(ride.powerHeartRateRatio, 3)}`,
       `- Aerobic decoupling: ${decoupling}`,
-      `- Decoupling eligibility: ${ride.decouplingEligible ? "Eligible" : `Not eligible — ${clean(ride.decouplingEligibilityReason ?? "Reason unavailable")}`}`,
+      `- Decoupling confidence: ${decouplingConfidence}`,
+      `- Decoupling eligibility: ${ride.decouplingEligible ? `Eligible — ${clean(ride.decouplingEligibilityReason ?? "Reason unavailable")}` : `Not eligible — ${clean(ride.decouplingEligibilityReason ?? "Reason unavailable")}`}`,
       `- Stopped time: ${finite(ride.stoppedPercent, 1, false)}%`,
       `- Variability index: ${finite(ride.variabilityIndex, 3)}`,
       `- Cadence standard deviation: ${finite(ride.cadenceStddev, 1)} rpm`,

@@ -150,6 +150,7 @@ export const rideMetrics = sqliteTable("ride_metrics", {
   variabilityIndex: real("variability_index"),
   aerobicDecouplingPercent: real("aerobic_decoupling_percent"),
   decouplingEligible: integer("decoupling_eligible", { mode: "boolean" }).notNull().default(false),
+  decouplingConfidence: text("decoupling_confidence", { enum: ["none", "low", "moderate", "high"] }).notNull().default("none"),
   decouplingEligibilityReason: text("decoupling_eligibility_reason").notNull().default("Detailed power and heart-rate streams are required."),
   stoppedPercent: real("stopped_percent"),
   cadenceStddev: real("cadence_stddev"),

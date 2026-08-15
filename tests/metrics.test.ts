@@ -110,7 +110,7 @@ test("ordinary soreness affects readiness without acting as an injury override",
   assert.equal(painConcern.label, "Easy ride preferred");
 });
 
-test("decoupling eligibility rejects short, variable, stopped, and warm-up-dominated rides", () => {
+test("decoupling eligibility tiers duration while rejecting unreliable ride evidence", () => {
   const steady = {
     movingTimeSeconds: 3600,
     variabilityIndex: 1.04,
@@ -120,8 +120,13 @@ test("decoupling eligibility rejects short, variable, stopped, and warm-up-domin
     aerobicDecouplingPercent: 3.2,
     isIntervalWorkout: false,
   };
-  assert.equal(evaluateDecouplingEligibility(steady).eligible, true);
-  assert.match(evaluateDecouplingEligibility({ ...steady, movingTimeSeconds: 2400 }).reason, /45 minutes/);
+  assert.deepEqual(evaluateDecouplingEligibility(steady).confidence, "high");
+  const provisional = evaluateDecouplingEligibility({ ...steady, movingTimeSeconds: 40 * 60 });
+  assert.equal(provisional.eligible, true);
+  assert.equal(provisional.confidence, "low");
+  assert.match(provisional.reason, /Provisional/);
+  assert.equal(evaluateDecouplingEligibility({ ...steady, movingTimeSeconds: 50 * 60 }).confidence, "moderate");
+  assert.match(evaluateDecouplingEligibility({ ...steady, movingTimeSeconds: 20 * 60 }).reason, /30 minutes/);
   assert.match(evaluateDecouplingEligibility({ ...steady, variabilityIndex: 1.12 }).reason, /1\.08 VI/);
   assert.match(evaluateDecouplingEligibility({ ...steady, stoppedPercent: 8 }).reason, /Stopped time/);
   assert.match(evaluateDecouplingEligibility({ ...steady, aerobicDecouplingPercent: -11.2 }).reason, /warm-up/i);

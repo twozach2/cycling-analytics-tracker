@@ -187,6 +187,7 @@ export async function POST(request: Request) {
         variabilityIndex: payload.variabilityIndex,
         aerobicDecouplingPercent: payload.aerobicDecouplingPercent,
         decouplingEligible: eligibility.eligible,
+        decouplingConfidence: eligibility.confidence,
         decouplingEligibilityReason: eligibility.reason,
         stoppedPercent,
         cadenceStddev: payload.cadenceStddev,
@@ -197,7 +198,7 @@ export async function POST(request: Request) {
         first15HeartRateBpm: payload.first15HeartRateBpm,
         final15HeartRateBpm: payload.final15HeartRateBpm,
         ...heartRateZones,
-        algorithmVersion: "phase3.5",
+        algorithmVersion: "phase3.6",
         dataQuality: payload.normalizedPowerWatts == null ? "medium" : "high",
         calculatedAt: new Date().toISOString(),
       }).where(eq(rideMetrics.rideId, existing.rideId));
@@ -269,6 +270,7 @@ export async function POST(request: Request) {
     variabilityIndex: payload.variabilityIndex,
     aerobicDecouplingPercent: payload.aerobicDecouplingPercent,
     decouplingEligible: eligibility.eligible,
+    decouplingConfidence: eligibility.confidence,
     decouplingEligibilityReason: eligibility.reason,
     stoppedPercent,
     cadenceStddev: payload.cadenceStddev,
@@ -279,7 +281,7 @@ export async function POST(request: Request) {
     first15HeartRateBpm: payload.first15HeartRateBpm,
     final15HeartRateBpm: payload.final15HeartRateBpm,
     ...heartRateZones,
-    algorithmVersion: "phase3.5",
+    algorithmVersion: "phase3.6",
     dataQuality: payload.normalizedPowerWatts == null ? "medium" : "high",
   });
   const durationRows = (payload.powerDuration ?? [])

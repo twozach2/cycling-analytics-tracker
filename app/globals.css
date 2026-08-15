@@ -555,7 +555,7 @@ blockquote { margin: 16px 0 0; padding: 14px 16px; border-left: 3px solid var(--
 .phase-two-hero h2 { margin: 9px 0 0; color: var(--lime); font-size: clamp(38px, 5vw, 66px); line-height: .95; letter-spacing: -.06em; font-weight: 560; }
 .phase-two-hero p { max-width: 500px; margin: 0; color: #c2c7be; font-size: 12px; line-height: 1.65; }
 .phase-kpis { grid-column: 1 / -1; display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; }
-.route-benchmarks, .benchmark-card, .durability-card, .cadence-card, .workload-card { padding: 26px; }
+.route-benchmarks, .benchmark-card, .durability-card, .cadence-card, .heart-rate-week-card, .workload-card { padding: 26px; }
 .route-comparison-list { display: flex; flex-direction: column; gap: 10px; }
 .route-comparison { padding: 15px; border: 1px solid var(--line); border-radius: 7px; background: var(--surface-muted); }
 .route-comparison > div:first-child { display: flex; align-items: baseline; justify-content: space-between; gap: 15px; }

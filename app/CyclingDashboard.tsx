@@ -7,10 +7,12 @@ import { assessRideDataQuality, type RideDataQuality } from "@/lib/data-quality"
 import { HEART_RATE_ZONES, aggregateHeartRateZones, describeHeartRateDistribution, heartRateZoneRange, type HeartRateZoneDistribution } from "@/lib/heart-rate";
 import {
   calculateReadiness,
+  evaluateDecouplingEligibility,
   deriveRideMetrics,
   elapsedHoursSince,
   formatDuration,
   type BodyCondition,
+  type DecouplingConfidence,
   type PainLocation,
   type SubjectiveRecovery,
 } from "@/lib/metrics";
@@ -67,6 +69,7 @@ type Ride = {
   powerHeartRateRatio: number;
   decoupling: number | null;
   decouplingEligible?: boolean;
+  decouplingConfidence?: DecouplingConfidence;
   decouplingEligibilityReason?: string;
   stoppedPercent?: number | null;
   variabilityIndex: number | null;
@@ -373,6 +376,7 @@ type SavedRideRow = {
     variabilityIndex: number | null;
     aerobicDecouplingPercent: number | null;
     decouplingEligible: boolean;
+    decouplingConfidence: DecouplingConfidence;
     decouplingEligibilityReason: string;
     stoppedPercent: number | null;
     cadenceStddev: number | null;
@@ -524,6 +528,7 @@ function mapSavedRide({ ride, metrics, stream, sourceFile }: SavedRideRow): Ride
     powerHeartRateRatio: metrics?.powerHeartRateRatio ?? 0,
     decoupling: metrics?.aerobicDecouplingPercent ?? null,
     decouplingEligible: metrics?.decouplingEligible ?? false,
+    decouplingConfidence: metrics?.decouplingConfidence ?? "none",
     decouplingEligibilityReason: metrics?.decouplingEligibilityReason ?? "Detailed power and heart-rate streams are required.",
     stoppedPercent: metrics?.stoppedPercent ?? null,
     variabilityIndex: metrics?.variabilityIndex ?? null,
@@ -1000,6 +1005,17 @@ export default function CyclingDashboard() {
       averageHeartRateBpm: detected.averageHeartRate,
       ftpWatts,
     });
+    const elapsedTimeSeconds = Math.max(movingTimeSeconds, Math.round(detected.elapsedTimeSeconds ?? movingTimeSeconds));
+    const stoppedPercent = elapsedTimeSeconds > 0 ? Math.max(0, ((elapsedTimeSeconds - movingTimeSeconds) / elapsedTimeSeconds) * 100) : null;
+    const driftEligibility = evaluateDecouplingEligibility({
+      movingTimeSeconds,
+      variabilityIndex: detected.variabilityIndex,
+      stoppedPercent,
+      pairedSampleCount: detected.pairedSampleCount,
+      pairedCoveragePercent: detected.pairedCoveragePercent,
+      aerobicDecouplingPercent: detected.aerobicDecouplingPercent,
+      isIntervalWorkout: importWorkoutSubtype === "trainer_workout" || ["Sweet Spot", "Threshold", "VO2", "Sprint", "FTP Test"].includes(rideType),
+    });
     const date = detected.startedAt ? new Date(detected.startedAt) : new Date();
     const ride: Ride = {
       id: `import-${Date.now()}`,
@@ -1035,8 +1051,10 @@ export default function CyclingDashboard() {
       ftpSnapshotSource: "current_at_import",
       powerHeartRateRatio: derived.powerHeartRateRatio ?? 0,
       decoupling: detected.aerobicDecouplingPercent,
-      decouplingEligible: detected.movingTimeSeconds !== null && detected.movingTimeSeconds >= 45 * 60 && detected.variabilityIndex !== null && detected.variabilityIndex <= 1.08 && detected.aerobicDecouplingPercent !== null && detected.aerobicDecouplingPercent >= -5 && importWorkoutSubtype !== "trainer_workout",
-      decouplingEligibilityReason: "Demo eligibility preview; saved rides are checked again on the server.",
+      decouplingEligible: driftEligibility.eligible,
+      decouplingConfidence: driftEligibility.confidence,
+      decouplingEligibilityReason: driftEligibility.reason,
+      stoppedPercent,
       variabilityIndex: detected.variabilityIndex,
       cadenceStddev: detected.cadenceStddev,
       cadenceTargetPercent: detected.cadenceTargetPercent,
@@ -1634,7 +1652,7 @@ function Overview({ selectedRide, rides, openRide, exportRide, changeRideType, c
 
         <div className="ride-analysis-grid">
           <div className="analysis-tile"><span>Intensity</span><strong>{selectedRide.intensityFactor.toFixed(2)} <small>IF</small></strong><p>{selectedRide.ftpAtRideWatts ? `FTP snapshot ${selectedRide.ftpAtRideWatts} W · ${ftpSnapshotLabel(selectedRide.ftpSnapshotSource)}` : "FTP at ride unavailable"}</p></div>
-          <div className="analysis-tile"><span>Aerobic durability</span><strong>{selectedRide.decouplingEligible && selectedRide.decoupling !== null ? `${selectedRide.decoupling.toFixed(1)}%` : "Not suitable"} <small>{selectedRide.decouplingEligible ? "drift" : ""}</small></strong><p>{selectedRide.decouplingEligible ? selectedRide.decoupling! < 5 ? "Good durability" : "Moderate drift" : selectedRide.decouplingEligibilityReason ?? "Needs detailed power + heart-rate data"}</p></div>
+          <div className="analysis-tile"><span>Aerobic durability</span><strong>{selectedRide.decoupling !== null ? `${selectedRide.decoupling.toFixed(1)}%` : "Not available"} <small>{selectedRide.decouplingEligible ? `${selectedRide.decouplingConfidence ?? "low"} confidence` : selectedRide.decoupling !== null ? "observed · withheld" : ""}</small></strong><p>{selectedRide.decouplingEligible ? selectedRide.decouplingConfidence === "low" ? "Provisional estimate; use as context, not a trend." : selectedRide.decoupling! < 5 ? "Good durability" : "Moderate drift" : selectedRide.decouplingEligibilityReason ?? "Needs detailed power + heart-rate data"}</p></div>
           <div className="analysis-tile"><span>Power variability</span><strong>{selectedRide.variabilityIndex?.toFixed(2) ?? "—"} <small>VI</small></strong><p>{selectedRide.variabilityIndex && selectedRide.variabilityIndex <= 1.05 ? "Very steady pacing" : "Variable effort"}</p></div>
         </div>
         <section className="selected-cadence-panel" aria-label={`Cadence distribution for ${selectedRide.name}`}>
@@ -1819,6 +1837,7 @@ function PerformanceDetails({ rides, currentFtp, currentLthr }: { rides: Ride[];
     context: ride.context ?? "ordinary",
     environment: ride.environment ?? (ride.indoor ? "indoor" : "outdoor"),
     decouplingEligible: ride.decouplingEligible ?? false,
+    decouplingConfidence: ride.decouplingConfidence === "none" ? undefined : ride.decouplingConfidence,
     stoppedPercent: ride.stoppedPercent ?? null,
   })));
   const benchmarkRides = benchmarkCohort.rides;
@@ -1842,9 +1861,12 @@ function PerformanceDetails({ rides, currentFtp, currentLthr }: { rides: Ride[];
         : acuteChronicRatio <= 1.3
           ? "Moderately above baseline"
           : "Review recent increase";
-  const driftLabel = !latestBenchmark?.decouplingEligible || latestBenchmark?.decoupling === null || latestBenchmark?.decoupling === undefined
-    ? "Not suitable for interpretation"
-    : latestBenchmark.decoupling < 3 ? "Excellent durability" : latestBenchmark.decoupling <= 5 ? "Good durability" : latestBenchmark.decoupling <= 8 ? "Moderate drift" : "Significant drift";
+  const latestDriftRide = rides
+    .filter((ride) => ride.decoupling !== null)
+    .sort((a, b) => Date.parse(b.startedAt ?? b.date) - Date.parse(a.startedAt ?? a.date))[0];
+  const driftLabel = !latestDriftRide
+    ? "No recorded estimate"
+    : !latestDriftRide.decouplingEligible ? "Not suitable for interpretation" : latestDriftRide.decouplingConfidence === "low" ? "Provisional estimate" : latestDriftRide.decoupling! < 3 ? "Excellent durability" : latestDriftRide.decoupling! <= 5 ? "Good durability" : latestDriftRide.decoupling! <= 8 ? "Moderate drift" : "Significant drift";
   const percentChange = (current: number, previous: number, invert = false) => {
     if (!previous) return "—";
     const delta = ((current - previous) / previous) * 100 * (invert ? -1 : 1);
@@ -1855,7 +1877,7 @@ function PerformanceDetails({ rides, currentFtp, currentLthr }: { rides: Ride[];
     <div className="phase-two-layout">
       <section className="phase-two-hero panel-dark">
         <div><span className="eyebrow light">Performance details</span><h2>Compare like with like.</h2></div>
-        <p>Comparisons now require matching environment, stimulus, context, distance, and complete power/heart-rate evidence. Trends remain withheld when the cohort is too small.</p>
+        <p>Comparisons require the same route, environment, context, similar distance, and complete power/heart-rate evidence. A different training stimulus lowers confidence and keeps the result descriptive.</p>
       </section>
 
       <section className="phase-kpis">
@@ -1876,8 +1898,8 @@ function PerformanceDetails({ rides, currentFtp, currentLthr }: { rides: Ride[];
             <dl><div><dt>Time</dt><dd>{percentChange(latest.movingTimeSeconds, first.movingTimeSeconds, true)}</dd></div><div><dt>Power</dt><dd>{percentChange(latest.averagePower, first.averagePower)}</dd></div><div><dt>Heart rate</dt><dd>{percentChange(latest.averageHeartRate, first.averageHeartRate, true)}</dd></div><div><dt>W / bpm</dt><dd>{percentChange(latest.powerHeartRateRatio, first.powerHeartRateRatio)}</dd></div></dl>
             <p className="comparison-reason">{cohort.reasons.join(" ")}</p>
           </article>;
-        })}</div> : <div className="analysis-empty"><strong>No genuinely comparable route cohort yet.</strong><span>{routeComparison.excluded.length ? `${routeComparison.excluded.length} rides were withheld because route, environment, stimulus, context, distance, or power/HR evidence did not match.` : "Import repeat efforts with the same route, environment, stimulus, and complete power/HR data."}</span></div>}
-        <p className="chart-note"><i /> Route cohorts require distance within 8%. Race, group-ride, and structured-workout contexts are excluded; outdoor conditions cap confidence at moderate. {COMPARABILITY_VERSION}</p>
+        })}</div> : <div className="analysis-empty"><strong>No genuinely comparable route cohort yet.</strong><span>{routeComparison.excluded.length ? `${routeComparison.excluded.length} rides were withheld because route, environment, context, distance, or power/HR evidence did not match.` : "Import repeat efforts with the same route, environment, and complete power/HR data."}</span></div>}
+        <p className="chart-note"><i /> Route cohorts require distance within 8%. Different training stimuli remain visible but are descriptive only and capped at moderate confidence. Race, group-ride, and structured-workout contexts are excluded; outdoor conditions also cap confidence at moderate. {COMPARABILITY_VERSION}</p>
         {routeComparison.excluded.length > 0 && <details className="benchmark-exclusions route-exclusions"><summary>{routeComparison.excluded.length} route ride{routeComparison.excluded.length === 1 ? "" : "s"} excluded · show reasons</summary><div>{routeComparison.excluded.slice(0, 5).map((entry) => <p key={entry.rideId}><strong>{rideById.get(entry.rideId)?.name ?? "Ride"}</strong><span>{entry.reason}</span></p>)}</div></details>}
       </section>
 
@@ -1893,9 +1915,9 @@ function PerformanceDetails({ rides, currentFtp, currentLthr }: { rides: Ride[];
       </section>
 
       <section className="durability-card panel">
-        <div className="section-heading"><div><span className="eyebrow">Cardiac drift</span><h2>Aerobic durability</h2></div><span className="small-badge">steady rides only</span></div>
-        <div className="drift-result"><strong>{latestBenchmark?.decouplingEligible && latestBenchmark.decoupling !== null && latestBenchmark.decoupling !== undefined ? `${latestBenchmark.decoupling.toFixed(1)}%` : "—"}</strong><span>{driftLabel}</span></div>
-        <p>{latestBenchmark?.decouplingEligible ? "Calculated from central power / heart-rate intervals after excluding warm-up and cooldown buckets." : latestBenchmark?.decouplingEligibilityReason ?? "Requires at least 45 minutes, VI ≤ 1.08, minimal stopped time, a steady non-workout effort, and sufficient paired power/HR data."}</p>
+        <div className="section-heading"><div><span className="eyebrow">Cardiac drift</span><h2>Aerobic durability</h2></div><span className={`small-badge${latestDriftRide?.decouplingEligible ? ` confidence-${latestDriftRide.decouplingConfidence ?? "low"}` : ""}`}>{latestDriftRide ? latestDriftRide.decouplingEligible ? `${latestDriftRide.decouplingConfidence ?? "low"} confidence` : "observed · withheld" : "steady rides only"}</span></div>
+        <div className="drift-result"><strong>{latestDriftRide ? `${latestDriftRide.decoupling!.toFixed(1)}%` : "—"}</strong><span>{driftLabel}</span></div>
+        <p>{latestDriftRide ? `${latestDriftRide.name} · ${latestDriftRide.dateLabel}. ${latestDriftRide.decouplingEligibilityReason ?? "Calculated from central power / heart-rate intervals after excluding warm-up and cooldown buckets."}` : "Requires at least 30 minutes, VI ≤ 1.08, minimal stopped time, a steady non-workout effort, and sufficient paired power/HR data. Rides under 45 minutes are provisional."}</p>
       </section>
 
       <section className="cadence-card panel full-width">

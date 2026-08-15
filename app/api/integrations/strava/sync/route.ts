@@ -297,6 +297,7 @@ export async function POST(request: Request) {
         variabilityIndex: summaryVariability,
         stoppedPercent,
         decouplingEligible: false,
+        decouplingConfidence: "none",
         decouplingEligibilityReason: "Detailed power and heart-rate streams are required.",
       }).where(eq(rideMetrics.rideId, rideId));
       updated += 1;
@@ -315,8 +316,9 @@ export async function POST(request: Request) {
         variabilityIndex: summaryVariability,
         stoppedPercent,
         decouplingEligible: false,
+        decouplingConfidence: "none",
         decouplingEligibilityReason: "Detailed power and heart-rate streams are required.",
-        algorithmVersion: "phase3.5",
+        algorithmVersion: "phase3.6",
         dataQuality: "medium",
       });
       imported += 1;
@@ -377,6 +379,7 @@ export async function POST(request: Request) {
         variabilityIndex: candidatePower.variabilityIndex,
         aerobicDecouplingPercent: streamMetrics.aerobicDecouplingPercent,
         decouplingEligible: eligibility.eligible,
+        decouplingConfidence: eligibility.confidence,
         decouplingEligibilityReason: eligibility.reason,
         stoppedPercent: candidateStoppedPercent,
         cadenceStddev: streamMetrics.cadenceStddev,
@@ -393,7 +396,7 @@ export async function POST(request: Request) {
         heartRateZone3Percent: streamMetrics.heartRateZones?.zone3Percent ?? null,
         heartRateZone4Percent: streamMetrics.heartRateZones?.zone4Percent ?? null,
         heartRateZone5Percent: streamMetrics.heartRateZones?.zone5Percent ?? null,
-        algorithmVersion: "phase3.5",
+        algorithmVersion: "phase3.6",
         dataQuality: "high",
       }).where(eq(rideMetrics.rideId, candidate.rideId));
       await upsertPowerDuration(db, candidate.rideId, bests);
@@ -472,6 +475,7 @@ export async function POST(request: Request) {
       variabilityIndex: candidatePower.variabilityIndex,
       aerobicDecouplingPercent: streamMetrics.aerobicDecouplingPercent,
       decouplingEligible: eligibility.eligible,
+      decouplingConfidence: eligibility.confidence,
       decouplingEligibilityReason: eligibility.reason,
       stoppedPercent: candidateStoppedPercent,
       cadenceStddev: streamMetrics.cadenceStddev,
@@ -488,7 +492,7 @@ export async function POST(request: Request) {
       heartRateZone3Percent: streamMetrics.heartRateZones?.zone3Percent ?? null,
       heartRateZone4Percent: streamMetrics.heartRateZones?.zone4Percent ?? null,
       heartRateZone5Percent: streamMetrics.heartRateZones?.zone5Percent ?? null,
-      algorithmVersion: "phase3.5",
+      algorithmVersion: "phase3.6",
       dataQuality: "high",
     }).where(eq(rideMetrics.rideId, candidate.rideId));
     await upsertPowerDuration(db, candidate.rideId, bests);

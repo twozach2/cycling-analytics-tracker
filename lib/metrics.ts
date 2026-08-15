@@ -67,10 +67,20 @@ export type DecouplingEligibilityInput = {
   isIntervalWorkout: boolean;
 };
 
+export type DecouplingConfidence = "none" | "low" | "moderate" | "high";
+
 export type DecouplingEligibility = {
   eligible: boolean;
+  confidence: DecouplingConfidence;
   reason: string;
 };
+
+export function decouplingDurationConfidence(movingTimeSeconds: number): DecouplingConfidence {
+  if (movingTimeSeconds < 30 * 60) return "none";
+  if (movingTimeSeconds < 45 * 60) return "low";
+  if (movingTimeSeconds < 60 * 60) return "moderate";
+  return "high";
+}
 
 const round = (value: number, digits = 1) => {
   const scale = 10 ** digits;
@@ -221,34 +231,41 @@ export function deriveRideMetrics(input: RideMetricInput): DerivedRideMetrics {
 }
 
 export function evaluateDecouplingEligibility(input: DecouplingEligibilityInput): DecouplingEligibility {
-  if (input.movingTimeSeconds < 45 * 60) {
-    return { eligible: false, reason: "Ride is shorter than 45 minutes." };
+  const confidence = decouplingDurationConfidence(input.movingTimeSeconds);
+  const ineligible = (reason: string): DecouplingEligibility => ({ eligible: false, confidence: "none", reason });
+  if (confidence === "none") {
+    return ineligible("Ride is shorter than 30 minutes.");
   }
   if (input.isIntervalWorkout) {
-    return { eligible: false, reason: "Trainer or interval workouts are excluded." };
+    return ineligible("Trainer or interval workouts are excluded.");
   }
   if (input.variabilityIndex === null) {
-    return { eligible: false, reason: "Variability index is unavailable." };
+    return ineligible("Variability index is unavailable.");
   }
   if (input.variabilityIndex > 1.08) {
-    return { eligible: false, reason: `Power variability is above the 1.08 VI limit (${input.variabilityIndex.toFixed(2)}).` };
+    return ineligible(`Power variability is above the 1.08 VI limit (${input.variabilityIndex.toFixed(2)}).`);
   }
   if (input.stoppedPercent === null) {
-    return { eligible: false, reason: "Stopped-time data is unavailable." };
+    return ineligible("Stopped-time data is unavailable.");
   }
   if (input.stoppedPercent > 5) {
-    return { eligible: false, reason: `Stopped time exceeds 5% (${input.stoppedPercent.toFixed(1)}%).` };
+    return ineligible(`Stopped time exceeds 5% (${input.stoppedPercent.toFixed(1)}%).`);
   }
   if (input.pairedSampleCount < 300 || input.pairedCoveragePercent < 60) {
-    return { eligible: false, reason: "Insufficient paired power and heart-rate samples." };
+    return ineligible("Insufficient paired power and heart-rate samples.");
   }
   if (input.aerobicDecouplingPercent === null) {
-    return { eligible: false, reason: "Not enough complete intervals for analysis." };
+    return ineligible("Not enough complete intervals for analysis.");
   }
   if (input.aerobicDecouplingPercent < -5) {
-    return { eligible: false, reason: "Second-half efficiency improved by more than 5%; warm-up or pacing distribution is dominating the result." };
+    return ineligible("Second-half efficiency improved by more than 5%; warm-up or pacing distribution is dominating the result.");
   }
-  return { eligible: true, reason: "Eligible steady ride: sufficient duration, stable power, minimal stopped time, and complete power/heart-rate data." };
+  const durationReason = confidence === "low"
+    ? "Provisional estimate: 30-44 minutes provides limited duration evidence."
+    : confidence === "moderate"
+      ? "Moderate-confidence estimate: 45-59 minutes provides usable duration evidence."
+      : "High-confidence estimate: at least 60 minutes provides the strongest duration evidence.";
+  return { eligible: true, confidence, reason: `${durationReason} Power was stable, stopped time was minimal, and paired power/heart-rate data was sufficient.` };
 }
 
 function baseRecovery(load: number): [number, number] {

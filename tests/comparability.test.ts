@@ -35,7 +35,7 @@ const benchmarkRide = (overrides: Partial<Zone2BenchmarkRide> = {}): Zone2Benchm
   ...overrides,
 });
 
-test("route cohorts require matching route, environment, stimulus, context, distance, power, and heart rate", () => {
+test("route cohorts surface same-route repeats while downgrading mixed training stimuli", () => {
   const result = buildComparableRouteCohorts([
     routeRide(),
     routeRide({ id: "route-2", distanceMiles: 20.2 }),
@@ -46,9 +46,10 @@ test("route cohorts require matching route, environment, stimulus, context, dist
   ]);
 
   assert.equal(result.cohorts.length, 1);
-  assert.deepEqual(result.cohorts[0].rides.map((ride) => ride.id), ["route-1", "route-2"]);
-  assert.equal(result.cohorts[0].confidence, "high");
-  assert.ok(result.excluded.some((entry) => entry.rideId === "tempo" && /No second ride/.test(entry.reason)));
+  assert.deepEqual(result.cohorts[0].rides.map((ride) => ride.id).sort(), ["route-1", "route-2", "tempo"]);
+  assert.equal(result.cohorts[0].confidence, "moderate");
+  assert.match(result.cohorts[0].reasons.join(" "), /training stimuli differ.*descriptive only/i);
+  assert.ok(!result.excluded.some((entry) => entry.rideId === "tempo"));
   assert.ok(result.excluded.some((entry) => entry.rideId === "group" && /not treated as repeatable/.test(entry.reason)));
   assert.ok(result.excluded.some((entry) => entry.rideId === "long" && /within 8%/.test(entry.reason)));
   assert.ok(result.excluded.some((entry) => entry.rideId === "no-hr" && /power and heart rate/.test(entry.reason)));
