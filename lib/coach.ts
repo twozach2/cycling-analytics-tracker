@@ -2,8 +2,9 @@ import { dataQualityRank, type EvidenceLevel } from "./data-quality";
 import type { SubjectiveRecovery } from "./metrics";
 import { localDayKey } from "./shared/date";
 import { median } from "./shared/math";
+import { buildTrainingLoadModel, type TrainingLoadStatus } from "./training-load";
 
-export const COACH_ALGORITHM_VERSION = "coach-v3";
+export const COACH_ALGORITHM_VERSION = "coach-v4";
 export const TREND_ALGORITHM_VERSION = "trend-v1";
 
 export type CoachRide = {
@@ -98,9 +99,13 @@ export type CoachReport = {
     moderateQualityRides: number;
     lowQualityRides: number;
     checkInRecorded: boolean;
-    acuteLoad: number;
-    chronicWeeklyLoad: number;
-    acuteChronicRatio: number | null;
+    sevenDayLoad: number;
+    fitnessLoad: number | null;
+    fatigueLoad: number | null;
+    form: number | null;
+    loadRatio: number | null;
+    loadStatus: TrainingLoadStatus;
+    loadHistoryDays: number;
     hoursSinceLastHardRide: number;
     recentHardSessions: number;
     todayRides: number;
@@ -394,7 +399,6 @@ export function buildCoachReport(input: BuildCoachReportInput): CoachReport {
   const now = reference.getTime();
   const rides = [...input.rides].filter((ride) => Number.isFinite(timestamp(ride)) && timestamp(ride) <= now).sort((a, b) => timestamp(b) - timestamp(a));
   const recent = rides.filter((ride) => inWindow(ride, now, 28));
-  const acute = rides.filter((ride) => inWindow(ride, now, 7));
   const hard = rides.filter(isObjectivelyHard);
   const recentHard = hard.filter((ride) => inWindow(ride, now, 7));
   const todayRides = rides.filter((ride) => localDayKey(ride.date) === localDayKey(reference));
@@ -402,11 +406,12 @@ export function buildCoachReport(input: BuildCoachReportInput): CoachReport {
   const todayMinutes = Math.round(todayRides.reduce((sum, ride) => sum + Math.max(0, ride.movingTimeSeconds), 0) / 60);
   const todayMaxIntensityFactor = Math.max(0, ...todayRides.map((ride) => ride.intensityFactor));
   const todayStrenuous = todayRides.some(isObjectivelyHard);
-  const acuteLoad = Math.round(acute.reduce((sum, ride) => sum + Math.max(0, ride.trainingLoad), 0));
-  const chronicWeeklyLoad = Math.round(recent.reduce((sum, ride) => sum + Math.max(0, ride.trainingLoad), 0) / 4);
-  const recentSpanDays = recent.length > 1 ? (timestamp(recent[0]) - timestamp(recent.at(-1)!)) / dayMs : 0;
-  const chronicBaselineReady = recent.length >= 4 && recentSpanDays >= 14;
-  const acuteChronicRatio = chronicBaselineReady && chronicWeeklyLoad > 0 ? Math.round((acuteLoad / chronicWeeklyLoad) * 100) / 100 : null;
+  const trainingLoad = buildTrainingLoadModel(rides.map((ride) => ({
+    date: ride.date,
+    trainingLoad: ride.trainingLoad,
+  })), reference);
+  const sevenDayLoad = Math.round(trainingLoad.current.sevenDayLoad);
+  const loadRatio = trainingLoad.current.loadRatio;
   const hoursSinceLastHardRide = Math.round(hoursSince(hard[0]?.date, now));
   const highQualityRides = recent.filter((ride) => ride.dataQualityLevel === "high").length;
   const moderateQualityRides = recent.filter((ride) => ride.dataQualityLevel === "moderate").length;
@@ -429,9 +434,15 @@ export function buildCoachReport(input: BuildCoachReportInput): CoachReport {
   if (todayStrenuous || todayTrainingLoad >= 30) cautions.push(`Today's completed work reached IF ${todayMaxIntensityFactor.toFixed(2)} and closes the intensity window for this plan.`);
   if (hoursSinceLastHardRide >= 36) positives.push(`${hoursSinceLastHardRide} hours since the last hard session.`);
   else cautions.push(`Only ${hoursSinceLastHardRide} hours since the last hard session.`);
-  if (acuteChronicRatio === null) cautions.push("The 28-day weekly load baseline is not stable yet.");
-  else if (acuteChronicRatio <= 1.3) positives.push(`Seven-day load is ${acuteChronicRatio.toFixed(2)}× the 28-day weekly baseline.`);
-  else cautions.push(`Seven-day load is elevated at ${acuteChronicRatio.toFixed(2)}× the 28-day weekly baseline.`);
+  if (trainingLoad.status === "insufficient") {
+    cautions.push(trainingLoad.limitations[0] ?? "Training-load history is not sufficient yet.");
+  } else if (trainingLoad.status === "provisional") {
+    cautions.push(trainingLoad.limitations[0] ?? "The 42-day fitness estimate is provisional.");
+  } else if (loadRatio !== null && loadRatio <= 1.3) {
+    positives.push(`Modeled 7-day fatigue is ${loadRatio.toFixed(2)}× modeled 42-day fitness.`);
+  } else if (loadRatio !== null) {
+    cautions.push(`Modeled 7-day fatigue is elevated at ${loadRatio.toFixed(2)}× modeled 42-day fitness.`);
+  }
   if (recentHard.length >= 2) cautions.push(`${recentHard.length} hard sessions already occurred in the last seven days.`);
   else positives.push(`${recentHard.length} hard ${recentHard.length === 1 ? "session" : "sessions"} in the last seven days.`);
   if (!input.checkInRecorded) cautions.push("Today's recovery check-in has not been saved.");
@@ -450,7 +461,7 @@ export function buildCoachReport(input: BuildCoachReportInput): CoachReport {
     todayMinutes,
     todayMaxIntensityFactor,
     readinessScore: input.readinessScore,
-    loadRatio: acuteChronicRatio,
+    loadRatio,
     recentHardSessions: recentHard.length,
     hoursSinceLastHardRide,
     checkInRecorded: input.checkInRecorded,
@@ -537,9 +548,13 @@ export function buildCoachReport(input: BuildCoachReportInput): CoachReport {
       moderateQualityRides,
       lowQualityRides,
       checkInRecorded: input.checkInRecorded,
-      acuteLoad,
-      chronicWeeklyLoad,
-      acuteChronicRatio,
+      sevenDayLoad,
+      fitnessLoad: trainingLoad.current.fitnessLoad,
+      fatigueLoad: trainingLoad.current.fatigueLoad,
+      form: trainingLoad.current.form,
+      loadRatio,
+      loadStatus: trainingLoad.status,
+      loadHistoryDays: trainingLoad.historyDays,
       hoursSinceLastHardRide,
       recentHardSessions: recentHard.length,
       todayRides: todayRides.length,

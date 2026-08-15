@@ -84,7 +84,9 @@ test("coach exposes every recommendation input and creates an adaptive seven-day
   assert.ok(report.positives.length >= 3);
   assert.equal(report.weeklyPlan[0].adaptive, false);
   assert.ok(report.weeklyPlan.slice(1).every((day) => day.adaptive));
-  assert.equal(report.algorithmVersion, "coach-v3");
+  assert.equal(report.algorithmVersion, "coach-v4");
+  assert.equal(report.evidenceSummary.loadStatus, "provisional");
+  assert.equal(report.evidenceSummary.loadRatio, null);
 });
 test("endurance trend excludes rides outside the comparable intensity band", () => {
   const trend = detectEnduranceTrend([

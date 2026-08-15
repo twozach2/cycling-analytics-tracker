@@ -1,6 +1,6 @@
 export type PowerBest = { durationSeconds: number; bestPowerWatts: number };
 
-export const POWER_RECORDS_ALGORITHM_VERSION = "power-duration-v2";
+export const POWER_RECORDS_ALGORITHM_VERSION = "power-duration-v3";
 
 export type PowerDurationEffort = PowerBest & {
   rideId: string;
@@ -21,6 +21,7 @@ export type PowerDurationRecord = {
   allTime: PowerRecordEffort;
   previousRecord: PowerRecordEffort | null;
   best30Days: PowerRecordEffort | null;
+  best42Days: PowerRecordEffort | null;
   best90Days: PowerRecordEffort | null;
   improvementWatts: number | null;
   improvementPercent: number | null;
@@ -37,9 +38,16 @@ export type PowerRecordTimelineEvent = {
   improvementPercent: number | null;
 };
 
+export type PowerDurationCurve = {
+  window: "all_time" | "42_days" | "90_days";
+  label: string;
+  points: Array<{ durationSeconds: number; label: string; effort: PowerRecordEffort }>;
+};
+
 export type PowerRecordHistory = {
   algorithmVersion: typeof POWER_RECORDS_ALGORITHM_VERSION;
   records: PowerDurationRecord[];
+  curves: PowerDurationCurve[];
   timeline: PowerRecordTimelineEvent[];
 };
 
@@ -104,6 +112,7 @@ export function buildPowerRecordHistory(efforts: PowerDurationEffort[], anchorTi
       return timestamp <= anchorTime && timestamp >= anchorTime - (days * 24 * 60 * 60 * 1000);
     });
     const best30Days = bestEffort(inWindow(30));
+    const best42Days = bestEffort(inWindow(42));
     const best90Days = bestEffort(inWindow(90));
     return {
       durationSeconds,
@@ -111,6 +120,7 @@ export function buildPowerRecordHistory(efforts: PowerDurationEffort[], anchorTi
       allTime: recordEffort(allTime),
       previousRecord: previousRecord ? recordEffort(previousRecord) : null,
       best30Days: best30Days ? recordEffort(best30Days) : null,
+      best42Days: best42Days ? recordEffort(best42Days) : null,
       best90Days: best90Days ? recordEffort(best90Days) : null,
       improvementWatts: previousRecord === null ? null : Math.round((allTime.bestPowerWatts - previousRecord.bestPowerWatts) * 10) / 10,
       improvementPercent: previousRecord === null ? null : Math.round(((allTime.bestPowerWatts - previousRecord.bestPowerWatts) / previousRecord.bestPowerWatts) * 1000) / 10,
@@ -119,7 +129,24 @@ export function buildPowerRecordHistory(efforts: PowerDurationEffort[], anchorTi
     };
   }).sort((a, b) => a.durationSeconds - b.durationSeconds);
   timeline.sort((a, b) => Date.parse(b.effort.startedAt) - Date.parse(a.effort.startedAt) || a.durationSeconds - b.durationSeconds);
-  return { algorithmVersion: POWER_RECORDS_ALGORITHM_VERSION, records, timeline };
+  const curve = (
+    window: PowerDurationCurve["window"],
+    label: string,
+    effortForRecord: (record: PowerDurationRecord) => PowerRecordEffort | null,
+  ): PowerDurationCurve => ({
+    window,
+    label,
+    points: records.flatMap((record) => {
+      const effort = effortForRecord(record);
+      return effort ? [{ durationSeconds: record.durationSeconds, label: record.label, effort }] : [];
+    }),
+  });
+  const curves = [
+    curve("all_time", "All time", (record) => record.allTime),
+    curve("42_days", "Last 42 days", (record) => record.best42Days),
+    curve("90_days", "Last 90 days", (record) => record.best90Days),
+  ];
+  return { algorithmVersion: POWER_RECORDS_ALGORITHM_VERSION, records, curves, timeline };
 }
 
 export type CyclingVo2Effort = {
@@ -282,7 +309,7 @@ export function projectFtpGoal(currentFtpWatts: number, targetFtpWatts: number, 
 export type PlanningInput = {
   readinessScore: number;
   painConcernSeverity: number;
-  acuteChronicRatio: number | null;
+  trainingLoadRatio: number | null;
   recentHardSessions: number;
 };
 
@@ -305,7 +332,7 @@ export function recommendWorkout(input: PlanningInput): WorkoutRecommendation {
   if (input.painConcernSeverity >= 3) {
     return { mode: "recovery", primary: "Easy, pain-free recovery spin · 20–30 min", detail: "Keep resistance light and stop if symptoms increase.", avoid: "Intervals and forceful low-cadence work" };
   }
-  if (input.readinessScore < 40 || (input.acuteChronicRatio ?? 0) > 1.5) {
+  if (input.readinessScore < 40 || (input.trainingLoadRatio ?? 0) > 1.5) {
     return { mode: "rest", primary: "Complete rest", detail: "Let fatigue settle, then reassess the morning check-in.", avoid: "Adding load to rescue the week" };
   }
   if (input.readinessScore < 70 || input.recentHardSessions >= 2) {
@@ -315,7 +342,7 @@ export function recommendWorkout(input: PlanningInput): WorkoutRecommendation {
 }
 
 export function buildWeeklyPlan(input: PlanningInput, startDateIso = new Date().toISOString().slice(0, 10)) {
-  const cautious = input.painConcernSeverity >= 3 || input.readinessScore < 55 || (input.acuteChronicRatio ?? 0) > 1.5;
+  const cautious = input.painConcernSeverity >= 3 || input.readinessScore < 55 || (input.trainingLoadRatio ?? 0) > 1.5;
   const schedule = cautious ? [
     { day: "Mon", session: "Rest + mobility", purpose: "Absorb recent load" },
     { day: "Tue", session: "Easy spin · 35 min", purpose: "Pain-free movement only" },

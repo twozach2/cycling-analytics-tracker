@@ -61,7 +61,9 @@ test("keeps the dashboard features while removing hosted runtime dependencies", 
   assert.match(dashboard, /never to a pass\/fail score/);
   assert.match(dashboard, /Choose what makes you want to ride/);
   assert.match(dashboard, /Optional stretch:/);
-  assert.match(dashboard, /28-day weekly baseline/);
+  assert.match(dashboard, /42-day fitness/);
+  assert.match(dashboard, /7-day fatigue/);
+  assert.match(dashboard, /These are workload models, not direct physiological measurements/);
   assert.match(dashboard, /Claims grow with the evidence/);
   assert.match(dashboard, /Data quality \+ provenance/);
   assert.match(dashboard, /Future days are low-confidence placeholders/);

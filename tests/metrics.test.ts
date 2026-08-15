@@ -67,7 +67,7 @@ test("adds explainable adjustments for accumulated load and heavy legs", () => {
 test("readiness combines objective load and the recovery questionnaire", () => {
   const readiness = calculateReadiness({
     hoursSinceLastHardRide: 48,
-    acuteChronicRatio: 1.05,
+    trainingLoadRatio: 1.05,
     subjective: { sleepQuality: 5, legFreshness: "fresh", bodyCondition: "normal", motivation: 5 },
   });
 
@@ -85,7 +85,7 @@ test("readiness recovery time advances against the current clock instead of the 
 test("a substantial pain concern caps readiness even when every other signal is strong", () => {
   const readiness = calculateReadiness({
     hoursSinceLastHardRide: 72,
-    acuteChronicRatio: 0.9,
+    trainingLoadRatio: 0.9,
     subjective: { sleepQuality: 5, legFreshness: "fresh", bodyCondition: "pain_concern", painSeverity: 5, motivation: 5 },
   });
 
@@ -96,12 +96,12 @@ test("a substantial pain concern caps readiness even when every other signal is 
 test("ordinary soreness affects readiness without acting as an injury override", () => {
   const mild = calculateReadiness({
     hoursSinceLastHardRide: 72,
-    acuteChronicRatio: 0.9,
+    trainingLoadRatio: 0.9,
     subjective: { sleepQuality: 5, legFreshness: "fresh", bodyCondition: "mild_soreness", motivation: 5 },
   });
   const painConcern = calculateReadiness({
     hoursSinceLastHardRide: 72,
-    acuteChronicRatio: 0.9,
+    trainingLoadRatio: 0.9,
     subjective: { sleepQuality: 5, legFreshness: "fresh", bodyCondition: "pain_concern", painSeverity: 3, motivation: 5 },
   });
 
@@ -136,7 +136,7 @@ test("decoupling eligibility tiers duration while rejecting unreliable ride evid
 test("illness is a readiness and recovery safety override", () => {
   const readiness = calculateReadiness({
     hoursSinceLastHardRide: 72,
-    acuteChronicRatio: 0.9,
+    trainingLoadRatio: 0.9,
     subjective: { sleepQuality: 5, legFreshness: "fresh", bodyCondition: "illness", illnessSeverity: 5, motivation: 5 },
   });
   const metrics = deriveRideMetrics({ movingTimeSeconds: 3600, averagePowerWatts: 110, normalizedPowerWatts: 112, averageHeartRateBpm: 130, ftpWatts: 165 });
@@ -147,10 +147,10 @@ test("illness is a readiness and recovery safety override", () => {
 });
 test("completed training today lowers remaining readiness with an auditable reason", () => {
   const subjective = { sleepQuality: 5, legFreshness: "fresh" as const, bodyCondition: "normal" as const, motivation: 5 };
-  const before = calculateReadiness({ hoursSinceLastHardRide: 72, acuteChronicRatio: 0.9, subjective });
+  const before = calculateReadiness({ hoursSinceLastHardRide: 72, trainingLoadRatio: 0.9, subjective });
   const after = calculateReadiness({
     hoursSinceLastHardRide: 0,
-    acuteChronicRatio: 0.9,
+    trainingLoadRatio: 0.9,
     subjective,
     todayTrainingLoad: 81,
     todayIntensityFactor: 0.885,
@@ -166,14 +166,14 @@ test("completed training today lowers remaining readiness with an auditable reas
 test("resting heart rate makes a conservative, explainable readiness adjustment", () => {
   const baseline = calculateReadiness({
     hoursSinceLastHardRide: 48,
-    acuteChronicRatio: 1,
+    trainingLoadRatio: 1,
     subjective: { sleepQuality: 4, legFreshness: "normal", bodyCondition: "normal", motivation: 4, restingHeartRate: 60 },
     restingHeartRateBaseline: 60,
     checkInRecorded: true,
   });
   const elevated = calculateReadiness({
     hoursSinceLastHardRide: 48,
-    acuteChronicRatio: 1,
+    trainingLoadRatio: 1,
     subjective: { sleepQuality: 4, legFreshness: "normal", bodyCondition: "normal", motivation: 4, restingHeartRate: 68 },
     restingHeartRateBaseline: 60,
     checkInRecorded: true,
@@ -189,7 +189,7 @@ test("resting heart rate makes a conservative, explainable readiness adjustment"
 test("readiness labels missing check-in inputs and lowers confidence", () => {
   const readiness = calculateReadiness({
     hoursSinceLastHardRide: 48,
-    acuteChronicRatio: null,
+    trainingLoadRatio: null,
     subjective: {},
     checkInRecorded: false,
   });

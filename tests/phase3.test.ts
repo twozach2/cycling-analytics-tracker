@@ -97,8 +97,12 @@ test("builds all-time, recent, and previous power records with a PR timeline", (
   assert.equal(fiveMinute.improvementWatts, 10);
   assert.equal(fiveMinute.improvementPercent, 4.8);
   assert.equal(fiveMinute.best30Days?.bestPowerWatts, 220);
+  assert.equal(fiveMinute.best42Days?.bestPowerWatts, 220);
   assert.equal(fiveMinute.recordCount, 3);
-  assert.equal(history.algorithmVersion, "power-duration-v2");
+  assert.equal(history.algorithmVersion, "power-duration-v3");
+  assert.deepEqual(history.curves.map((curve) => curve.window), ["all_time", "42_days", "90_days"]);
+  assert.equal(history.curves.find((curve) => curve.window === "42_days")?.points[0]?.effort.bestPowerWatts, 220);
+  assert.equal(history.curves.find((curve) => curve.window === "90_days")?.points[0]?.effort.bestPowerWatts, 220);
   assert.equal(history.timeline.length, 3);
 });
 
@@ -222,7 +226,7 @@ test("goal projection presents three scenarios", () => {
 });
 
 test("pain concerns make workout guidance and the generated week appropriately cautious", () => {
-  const moderateConcern = { readinessScore: 54, painConcernSeverity: 3, acuteChronicRatio: 1, recentHardSessions: 0 };
+  const moderateConcern = { readinessScore: 54, painConcernSeverity: 3, trainingLoadRatio: 1, recentHardSessions: 0 };
   const substantialConcern = { ...moderateConcern, readinessScore: 39, painConcernSeverity: 5 };
   assert.equal(recommendWorkout(moderateConcern).mode, "recovery");
   assert.match(recommendWorkout(moderateConcern).primary, /pain-free recovery spin/);
@@ -231,7 +235,7 @@ test("pain concerns make workout guidance and the generated week appropriately c
 });
 
 test("weekly plan starts today and advances through real calendar dates", () => {
-  const input = { readinessScore: 80, painConcernSeverity: 0, acuteChronicRatio: 1, recentHardSessions: 0 };
+  const input = { readinessScore: 80, painConcernSeverity: 0, trainingLoadRatio: 1, recentHardSessions: 0 };
   const plan = buildWeeklyPlan(input, "2026-08-08");
   assert.deepEqual(plan.map((day) => day.day), ["Sat", "Sun", "Mon", "Tue", "Wed", "Thu", "Fri"]);
   assert.deepEqual(plan.map((day) => day.dateIso), ["2026-08-08", "2026-08-09", "2026-08-10", "2026-08-11", "2026-08-12", "2026-08-13", "2026-08-14"]);

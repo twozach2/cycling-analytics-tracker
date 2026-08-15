@@ -99,7 +99,7 @@ const clamp = (value: number, minimum = 0, maximum = 100) => Math.min(maximum, M
 
 export function calculateReadiness(input: {
   hoursSinceLastHardRide: number;
-  acuteChronicRatio: number | null;
+  trainingLoadRatio: number | null;
   subjective: SubjectiveRecovery;
   todayTrainingLoad?: number;
   todayIntensityFactor?: number;
@@ -110,11 +110,11 @@ export function calculateReadiness(input: {
   const legScores = { fresh: 100, normal: 78, heavy: 45, dead: 10 } as const;
   const bodyScores = { normal: 100, mild_soreness: 75, significant_soreness: 35, pain_concern: 70, illness: 25 } as const;
   const hoursScore = clamp((input.hoursSinceLastHardRide / 48) * 100);
-  const loadScore = input.acuteChronicRatio === null
+  const loadScore = input.trainingLoadRatio === null
     ? 75
-    : input.acuteChronicRatio <= 1.2
+    : input.trainingLoadRatio <= 1.2
       ? 100
-      : clamp(100 - ((input.acuteChronicRatio - 1.2) * 90));
+      : clamp(100 - ((input.trainingLoadRatio - 1.2) * 90));
   const sleepScore = clamp((((input.subjective.sleepQuality ?? 3) - 1) / 4) * 100);
   const legScore = legScores[input.subjective.legFreshness ?? "normal"];
   const bodyCondition = input.subjective.bodyCondition ?? "normal";
@@ -129,14 +129,14 @@ export function calculateReadiness(input: {
   const assumptions: string[] = [];
   const components: ReadinessComponent[] = [
     { label: "Time since hard ride", value: Math.round(hoursScore), contribution: round(hoursScore * 0.25), detail: `${Math.round(input.hoursSinceLastHardRide)} hours available for recovery` },
-    { label: "Training load balance", value: Math.round(loadScore), contribution: round(loadScore * 0.20), detail: input.acuteChronicRatio === null ? "No acute/chronic ratio; a neutral load value is used" : `Acute/chronic ratio ${input.acuteChronicRatio.toFixed(2)}` },
+    { label: "Training load balance", value: Math.round(loadScore), contribution: round(loadScore * 0.20), detail: input.trainingLoadRatio === null ? "The fatigue/fitness ratio is withheld; a neutral load value is used" : `Modeled fatigue/fitness ratio ${input.trainingLoadRatio.toFixed(2)}` },
     { label: "Sleep", value: Math.round(sleepScore), contribution: round(sleepScore * 0.20), detail: `${input.subjective.sleepQuality ?? 3}/5 check-in` },
     { label: "Leg freshness", value: Math.round(legScore), contribution: round(legScore * 0.15), detail: input.subjective.legFreshness ?? "normal" },
     { label: "Body condition", value: Math.round(bodyScore), contribution: round(bodyScore * 0.15), detail: bodyCondition.replaceAll("_", " ") },
     { label: "Motivation", value: Math.round(motivationScore), contribution: round(motivationScore * 0.05), detail: `${input.subjective.motivation ?? 3}/5 check-in` },
   ];
 
-  if (input.acuteChronicRatio === null) assumptions.push("Training-load balance is using a neutral value until enough ride history is available.");
+  if (input.trainingLoadRatio === null) assumptions.push("Training-load balance is using a neutral value until the 42-day fitness model has enough history.");
   if (input.checkInRecorded === false) assumptions.push("Today's recovery check-in has not been saved; neutral questionnaire values are shown.");
 
   let score = Math.round(components.reduce((sum, component) => sum + component.contribution, 0));
@@ -186,9 +186,9 @@ export function calculateReadiness(input: {
         : score >= 40
           ? { label: "Easy ride preferred" as const, tone: "orange" as const }
           : { label: "Rest / recovery recommended" as const, tone: "red" as const };
-  const confidence = input.checkInRecorded === true && input.acuteChronicRatio !== null && hasRestingHeartRateEvidence
+  const confidence = input.checkInRecorded === true && input.trainingLoadRatio !== null && hasRestingHeartRateEvidence
     ? "high" as const
-    : (input.checkInRecorded === true || input.acuteChronicRatio !== null)
+    : (input.checkInRecorded === true || input.trainingLoadRatio !== null)
       ? "moderate" as const
       : "low" as const;
   return {

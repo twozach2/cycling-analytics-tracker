@@ -24,6 +24,7 @@ import {
 import { projectFtpGoal } from "@/lib/phase3";
 import { AUTOMATIC_SYNC_INTERVAL_MS, classifyRide, type ClassificationConfidence, type RideContext, type RideTrainingType } from "@/lib/strava-sync";
 import { buildCyclingMarkdown, cyclingMarkdownFilename, cyclingRideMarkdownFilename } from "@/lib/markdown-export";
+import { buildTrainingLoadModel, describeTrainingLoad } from "@/lib/training-load";
 import { recommendZwiftRoutes, ROUTE_INTENSITY_BANDS, ZWIFT_ROUTE_COUNT, ZWIFT_WORLDS } from "@/lib/zwift-routes";
 import type { ZwiftRotation } from "@/lib/zwift-world-rotation";
 
@@ -538,6 +539,7 @@ async function fetchSavedRides() {
 
 export default function CyclingDashboard() {
   const [initialPreferences] = useState<UiPreferences>(readUiPreferences);
+  const [dashboardNowMs, setDashboardNowMs] = useState(() => Date.now());
   const [view, setView] = useState<View>(() => navItems.some((item) => item.id === initialPreferences.view) ? initialPreferences.view as View : "dashboard");
   const [theme, setTheme] = useState<ThemeId>(() => themeOptions.some((option) => option.id === initialPreferences.theme) ? initialPreferences.theme as ThemeId : "citrus");
   const [installPrompt, setInstallPrompt] = useState<BeforeInstallPromptEvent | null>(null);
@@ -584,6 +586,11 @@ export default function CyclingDashboard() {
   useEffect(() => {
     document.documentElement.dataset.theme = theme;
   }, [theme]);
+
+  useEffect(() => {
+    const timer = window.setInterval(() => setDashboardNowMs(Date.now()), 60_000);
+    return () => window.clearInterval(timer);
+  }, []);
 
   useEffect(() => {
     const displayMode = window.matchMedia("(display-mode: standalone)");
@@ -1178,17 +1185,15 @@ export default function CyclingDashboard() {
   const downloadMarkdown = (exportRides: readonly Ride[], filename: string, message: string, generatedAt = new Date()) => {
     if (currentFtp === null || currentWeightKg === null) return;
     const referenceMs = generatedAt.getTime();
-    const ridesWithin = (days: number) => rides.filter((ride) => { const timestamp = Date.parse(rideStartedAt(ride)); return Number.isFinite(timestamp) && timestamp <= referenceMs && timestamp >= referenceMs - (days * 86_400_000); });
-    const loadWithin = (days: number) => ridesWithin(days).reduce((sum, ride) => sum + ride.trainingLoad, 0);
-    const acuteLoad = loadWithin(7);
-    const chronicWeeklyLoad = loadWithin(28) / 4;
-    const chronicRides = ridesWithin(28);
-    const chronicSpanDays = chronicRides.length > 1 ? (Math.max(...chronicRides.map((ride) => Date.parse(rideStartedAt(ride)))) - Math.min(...chronicRides.map((ride) => Date.parse(rideStartedAt(ride))))) / 86_400_000 : 0;
+    const trainingLoad = buildTrainingLoadModel(
+      rides.map((ride) => ({ date: rideStartedAt(ride), trainingLoad: ride.trainingLoad })),
+      generatedAt,
+    );
     const todayTraining = completedTrainingOnDate(rides, generatedAt);
     const latestHardRide = rides.filter(isObjectivelyHardRide).sort((a, b) => Date.parse(rideStartedAt(b)) - Date.parse(rideStartedAt(a)))[0];
     const snapshotReadiness = calculateReadiness({
       hoursSinceLastHardRide: elapsedHoursSince(latestHardRide ? rideStartedAt(latestHardRide) : null, referenceMs),
-      acuteChronicRatio: chronicRides.length >= 4 && chronicSpanDays >= 14 && chronicWeeklyLoad > 0 ? acuteLoad / chronicWeeklyLoad : null,
+      trainingLoadRatio: trainingLoad.current.loadRatio,
       subjective: recovery,
       todayTrainingLoad: todayTraining.trainingLoad,
       todayIntensityFactor: todayTraining.maximumIntensityFactor,
@@ -1315,10 +1320,10 @@ export default function CyclingDashboard() {
         )}
 
         {view === "dashboard" && <div className="dashboard-stack">
-          <Overview selectedRide={selectedRide} rides={rides} openRide={openRide} exportRide={exportRideMarkdown} changeRideType={changeRideType} changeRideContext={changeRideContext} rideTypeSaving={rideTypeSavingId === selectedRide.id} setView={setView} isDemo={dataMode !== "saved"} currentFtp={currentFtp} currentLthr={currentLthr} />
+          <Overview selectedRide={selectedRide} rides={rides} openRide={openRide} exportRide={exportRideMarkdown} changeRideType={changeRideType} changeRideContext={changeRideContext} rideTypeSaving={rideTypeSavingId === selectedRide.id} setView={setView} isDemo={dataMode !== "saved"} currentFtp={currentFtp} currentLthr={currentLthr} nowMs={dashboardNowMs} />
           <details className="performance-drawer">
             <summary><span><strong>Performance details</strong><small>Route comparisons, benchmarks, cadence, and workload</small></span><i>+</i></summary>
-            <PerformanceDetails rides={rides} currentFtp={currentFtp} currentLthr={currentLthr} />
+            <PerformanceDetails rides={rides} currentFtp={currentFtp} currentLthr={currentLthr} nowMs={dashboardNowMs} />
           </details>
         </div>}
         {view === "plan" && <PlanToday
@@ -1492,7 +1497,7 @@ function RiderSetup({ initialFtp, initialWeightKg, initialLthr, onSaved }: {
   );
 }
 
-function Overview({ selectedRide, rides, openRide, exportRide, changeRideType, changeRideContext, rideTypeSaving, setView, isDemo, currentFtp, currentLthr }: {
+function Overview({ selectedRide, rides, openRide, exportRide, changeRideType, changeRideContext, rideTypeSaving, setView, isDemo, currentFtp, currentLthr, nowMs }: {
   selectedRide: Ride;
   rides: Ride[];
   openRide: (ride: Ride) => void;
@@ -1503,19 +1508,22 @@ function Overview({ selectedRide, rides, openRide, exportRide, changeRideType, c
   setView: (view: View) => void;
   isDemo: boolean;
   currentFtp: number;
+  nowMs: number;
   currentLthr: number | null;
 }) {
   const dayMs = 24 * 60 * 60 * 1000;
-  const rideTimestamps = rides.map((ride) => Date.parse(ride.date)).filter(Number.isFinite);
-  const anchorMs = rideTimestamps.length ? Math.max(...rideTimestamps) : 0;
+  const anchorMs = nowMs;
+  const trainingLoad = buildTrainingLoadModel(
+    rides.map((ride) => ({ date: rideStartedAt(ride), trainingLoad: ride.trainingLoad })),
+    new Date(anchorMs),
+  );
   const ridesInWindow = (startMs: number, endMs: number) => rides.filter((ride) => {
-    const timestamp = Date.parse(ride.date);
+    const timestamp = Date.parse(rideStartedAt(ride));
     return Number.isFinite(timestamp) && timestamp > startMs && timestamp <= endMs;
   });
-  const currentWeekRides = ridesInWindow(anchorMs - (7 * dayMs), anchorMs + dayMs);
-  const priorWeekRides = ridesInWindow(anchorMs - (14 * dayMs), anchorMs - (7 * dayMs));
-  const sevenDayLoad = Math.round(currentWeekRides.reduce((sum, ride) => sum + ride.trainingLoad, 0));
-  const priorWeekLoad = Math.round(priorWeekRides.reduce((sum, ride) => sum + ride.trainingLoad, 0));
+  const currentWeekRides = ridesInWindow(anchorMs - (7 * dayMs), anchorMs);
+  const sevenDayLoad = Math.round(trainingLoad.current.sevenDayLoad);
+  const priorWeekLoad = Math.round(trainingLoad.weeklyTotals.at(-2) ?? 0);
   const loadDelta = priorWeekLoad ? Math.round(((sevenDayLoad - priorWeekLoad) / priorWeekLoad) * 100) : null;
   const trainingSeconds = currentWeekRides.reduce((sum, ride) => sum + ride.movingTimeSeconds, 0);
   const trainingLabel = `${Math.floor(trainingSeconds / 3600)}h ${Math.round((trainingSeconds % 3600) / 60).toString().padStart(2, "0")}`;
@@ -1530,14 +1538,8 @@ function Overview({ selectedRide, rides, openRide, exportRide, changeRideType, c
   const wattsHeartRides = rides.filter((ride) => ride.averagePower > 0 && ride.averageHeartRate > 0).slice(0, 7).reverse();
   const wattsScaleMax = Math.max(250, Math.ceil(Math.max(0, ...wattsHeartRides.map((ride) => ride.averagePower)) / 50) * 50);
   const heartRateScaleMax = 200;
-  const weeklyLoadValues = Array.from({ length: 7 }, (_, index) => {
-    const weeksAgo = 6 - index;
-    const end = anchorMs - (weeksAgo * 7 * dayMs) + dayMs;
-    const start = end - (7 * dayMs);
-    return Math.round(ridesInWindow(start, end).reduce((sum, ride) => sum + ride.trainingLoad, 0));
-  });
+  const weeklyLoadValues = trainingLoad.weeklyTotals;
   const loadScale = Math.max(100, ...weeklyLoadValues);
-  const twentyEightDayAverage = Math.round(weeklyLoadValues.slice(-4).reduce((sum, load) => sum + load, 0) / 4);
   const selectedPowerData = isDemo ? powerDuration : [
     { label: "Peak", watts: selectedRide.maximumPower, best: selectedRide.maximumPower },
     { label: "Norm", watts: selectedRide.normalizedPower ?? 0, best: selectedRide.normalizedPower ?? 0 },
@@ -1574,11 +1576,11 @@ function Overview({ selectedRide, rides, openRide, exportRide, changeRideType, c
       </section>
 
       <section className="load-card panel">
-        <div className="section-heading"><div><span className="eyebrow">Load balance</span><h2>Seven weeks</h2></div><span className="small-badge">On track</span></div>
+        <div className="section-heading"><div><span className="eyebrow">Training-load history</span><h2>Seven weeks</h2></div><span className="small-badge">{trainingLoad.status}</span></div>
         <div className="load-chart" aria-label="Weekly training load bar chart">
           {weeklyLoadValues.map((value, index) => <div key={`${value}-${index}`}><i style={{ height: `${Math.max(2, (value / loadScale) * 100)}%` }} className={index === weeklyLoadValues.length - 1 ? "current" : ""} /><small>{value}</small></div>)}
         </div>
-        <div className="load-footer"><span>Acute load <strong>{sevenDayLoad}</strong></span><span>28-day avg <strong>{twentyEightDayAverage}</strong></span></div>
+        <div className="load-footer"><span>7-day total <strong>{sevenDayLoad}</strong></span><span>Modeled fitness <strong>{trainingLoad.current.fitnessLoad?.toFixed(1) ?? "—"}</strong></span></div>
       </section>
 
       <section className="power-heart-card panel full-width">
@@ -1791,24 +1793,22 @@ function RideLog({ rides, allRides, filter, setFilter, search, setSearch, openRi
   );
 }
 
-function PerformanceDetails({ rides, currentFtp, currentLthr }: { rides: Ride[]; currentFtp: number; currentLthr: number | null }) {
+function PerformanceDetails({ rides, currentFtp, currentLthr, nowMs }: { rides: Ride[]; currentFtp: number; currentLthr: number | null; nowMs: number }) {
   const dayMs = 24 * 60 * 60 * 1000;
-  const timestamps = rides.map((ride) => Date.parse(ride.date)).filter(Number.isFinite);
-  const anchorMs = timestamps.length ? Math.max(...timestamps) : 0;
+  const anchorMs = nowMs;
   const withinDays = (days: number) => rides.filter((ride) => {
-    const timestamp = Date.parse(ride.date);
-    return Number.isFinite(timestamp) && timestamp > anchorMs - (days * dayMs) && timestamp <= anchorMs + dayMs;
+    const timestamp = Date.parse(rideStartedAt(ride));
+    return Number.isFinite(timestamp) && timestamp > anchorMs - (days * dayMs) && timestamp <= anchorMs;
   });
   const acuteRides = withinDays(7);
   const weeklyHeartRate = currentLthr === null ? null : aggregateHeartRateZones(acuteRides.map((ride) => ride.heartRateZones?.thresholdBpm === currentLthr ? ride.heartRateZones : null));
   const weeklyHeartRateRideCount = acuteRides.filter((ride) => ride.heartRateZones?.thresholdBpm === currentLthr).length;
-  const load7 = acuteRides.reduce((sum, ride) => sum + ride.trainingLoad, 0);
-  const baselineRides = withinDays(28);
-  const load28 = baselineRides.reduce((sum, ride) => sum + ride.trainingLoad, 0) / 4;
-  const load42 = withinDays(42).reduce((sum, ride) => sum + ride.trainingLoad, 0) / 6;
-  const baselineSpanDays = baselineRides.length > 1 ? (Math.max(...baselineRides.map((ride) => Date.parse(ride.date))) - Math.min(...baselineRides.map((ride) => Date.parse(ride.date)))) / dayMs : 0;
-  const baselineReady = baselineRides.length >= 4 && baselineSpanDays >= 14 && load28 > 0;
-  const acuteChronicRatio = baselineReady ? load7 / load28 : null;
+  const trainingLoad = buildTrainingLoadModel(
+    rides.map((ride) => ({ date: rideStartedAt(ride), trainingLoad: ride.trainingLoad })),
+    new Date(anchorMs),
+  );
+  const load7 = trainingLoad.current.sevenDayLoad;
+  const loadRatio = trainingLoad.current.loadRatio;
   const routeComparison = buildComparableRouteCohorts(rides.map((ride) => ({
     ...ride,
     environment: ride.environment ?? (ride.indoor ? "indoor" : "outdoor"),
@@ -1838,15 +1838,16 @@ function PerformanceDetails({ rides, currentFtp, currentLthr }: { rides: Ride[];
   const volumeHours = acuteRides.reduce((sum, ride) => sum + ride.movingTimeSeconds, 0) / 3600;
   const volumeDistance = acuteRides.reduce((sum, ride) => sum + ride.distanceMiles, 0);
   const volumeElevation = acuteRides.reduce((sum, ride) => sum + ride.elevationFeet, 0);
-  const loadStatus = acuteChronicRatio === null
-    ? "Baseline not ready"
-    : acuteChronicRatio < 0.8
-      ? "Below recent baseline"
-      : acuteChronicRatio <= 1.2
-        ? "Near recent baseline"
-        : acuteChronicRatio <= 1.3
-          ? "Moderately above baseline"
-          : "Review recent increase";
+  const loadStatus = describeTrainingLoad(trainingLoad);
+  const loadTrendPoints = trainingLoad.points.slice(-42);
+  const loadTrendMaximum = Math.max(1, ...loadTrendPoints.flatMap((point) => [point.fitnessLoad, point.fatigueLoad]));
+  const loadLine = (value: (point: (typeof loadTrendPoints)[number]) => number) => loadTrendPoints
+    .map((point, index) => {
+      const x = loadTrendPoints.length <= 1 ? 0 : (index / (loadTrendPoints.length - 1)) * 100;
+      const y = 38 - ((value(point) / loadTrendMaximum) * 34);
+      return `${x.toFixed(2)},${y.toFixed(2)}`;
+    })
+    .join(" ");
   const latestDriftRide = rides
     .filter((ride) => ride.decoupling !== null)
     .sort((a, b) => Date.parse(b.startedAt ?? b.date) - Date.parse(a.startedAt ?? a.date))[0];
@@ -1868,8 +1869,8 @@ function PerformanceDetails({ rides, currentFtp, currentLthr }: { rides: Ride[];
 
       <section className="phase-kpis">
         <MetricCard label="7-day load" value={Math.round(load7).toString()} unit="recent total" change={`${acuteRides.length} recent rides`} tone="lime" />
-        <MetricCard label="28-day weekly baseline" value={baselineReady ? Math.round(load28).toString() : "—"} unit="weekly average" change={baselineReady ? `${Math.round(load42)} pts · 42d average` : "Needs 4 rides across 14 days"} tone="cream" />
-        <MetricCard label="Load comparison" value={acuteChronicRatio === null ? "—" : `${acuteChronicRatio.toFixed(2)}×`} unit="7d ÷ baseline" change={loadStatus} tone="coral" />
+        <MetricCard label="42-day fitness" value={trainingLoad.current.fitnessLoad?.toFixed(1) ?? "—"} unit="modeled load" change={trainingLoad.status === "established" ? `${trainingLoad.historyDays} days of history` : trainingLoad.limitations[0] ?? "History needed"} tone="cream" />
+        <MetricCard label="7-day fatigue" value={trainingLoad.current.fatigueLoad?.toFixed(1) ?? "—"} unit="modeled load" change={loadStatus} tone="coral" />
         <MetricCard label="Benchmarks" value={benchmarkRides.length.toString()} unit="eligible rides" change={benchmarkCohort.trendReady ? `Trend ready · ${groupedRoutes.length} route cohorts` : `${benchmarkRides.length} of ${ZONE2_BENCHMARK_PROTOCOL.minimumTrendRides} needed · ${groupedRoutes.length} route cohorts`} tone="sky" />
       </section>
 
@@ -1940,10 +1941,21 @@ function PerformanceDetails({ rides, currentFtp, currentLthr }: { rides: Ride[];
       </section>
 
       <section className="workload-card panel full-width">
-        <div className="section-heading"><div><span className="eyebrow">Weekly volume</span><h2>Load with context</h2></div><span className={`load-flag ${acuteChronicRatio !== null && acuteChronicRatio > 1.3 ? "alert" : ""}`}>{loadStatus}</span></div>
-        <div className="workload-equation" aria-label="Seven-day load divided by the 28-day weekly baseline"><article><span>Last 7 days</span><strong>{Math.round(load7)}</strong><small>total load</small></article><b>÷</b><article><span>28-day weekly baseline</span><strong>{baselineReady ? Math.round(load28) : "—"}</strong><small>28-day total ÷ 4</small></article><b>=</b><article className="workload-result"><span>Current comparison</span><strong>{acuteChronicRatio === null ? "—" : `${acuteChronicRatio.toFixed(2)}×`}</strong><small>{loadStatus}</small></article></div>
+        <div className="section-heading"><div><span className="eyebrow">Training load</span><h2>Fitness and fatigue with context</h2></div><span className={`load-flag ${loadRatio !== null && loadRatio > 1.3 ? "alert" : ""}`}>{loadStatus}</span></div>
+        <div className="workload-equation" aria-label="Modeled seven-day fatigue divided by modeled 42-day fitness"><article><span>7-day fatigue</span><strong>{trainingLoad.current.fatigueLoad?.toFixed(1) ?? "—"}</strong><small>exponentially weighted</small></article><b>÷</b><article><span>42-day fitness</span><strong>{trainingLoad.current.fitnessLoad?.toFixed(1) ?? "—"}</strong><small>exponentially weighted</small></article><b>=</b><article className="workload-result"><span>Current comparison</span><strong>{loadRatio === null ? "—" : `${loadRatio.toFixed(2)}×`}</strong><small>{loadStatus}</small></article></div>
+        {loadTrendPoints.length > 1 ? <div className="training-load-series">
+          <div className="training-load-series-heading"><span>Last {loadTrendPoints.length} days</span><strong>Modeled daily trend</strong><small>0–{Math.ceil(loadTrendMaximum)} load</small></div>
+          <svg viewBox="0 0 100 40" preserveAspectRatio="none" role="img" aria-label="Modeled 42-day fitness and 7-day fatigue trend">
+            <title>Modeled 42-day fitness and 7-day fatigue</title>
+            <line x1="0" y1="38" x2="100" y2="38" />
+            <line x1="0" y1="21" x2="100" y2="21" />
+            <polyline className="fitness-line" points={loadLine((point) => point.fitnessLoad)} />
+            <polyline className="fatigue-line" points={loadLine((point) => point.fatigueLoad)} />
+          </svg>
+          <div className="training-load-legend"><span className="fitness">42-day fitness</span><span className="fatigue">7-day fatigue</span><em>{trainingLoad.status} evidence</em></div>
+        </div> : <div className="analysis-empty compact"><strong>Training-load trend needs more history.</strong><span>{trainingLoad.limitations[0] ?? "Import rides with recorded training load."}</span></div>}
         <div className="workload-grid"><Stat label="Hours" value={volumeHours.toFixed(1)} /><Stat label="Distance" value={volumeDistance.toFixed(1)} unit="mi" /><Stat label="Elevation" value={Math.round(volumeElevation).toLocaleString()} unit="ft" /><Stat label="7-day load" value={Math.round(load7).toString()} unit="pts" /><Stat label="Hard sessions" value={acuteRides.filter((ride) => ride.type === "Tempo" || ride.type === "Threshold").length.toString()} /></div>
-        <p className="chart-note"><i /> A value of 1.00 means the last seven days match your recent weekly average. This is a workload-change review signal, not an injury prediction.</p>
+        <p className="chart-note"><i /> Daily training load feeds two exponential estimates: 42-day fitness and 7-day fatigue. A ratio appears only after enough history. These are workload models, not direct physiological measurements or injury predictions. {trainingLoad.algorithmVersion}</p>
       </section>
     </div>
   );
@@ -2013,6 +2025,7 @@ type PowerRecordHistoryView = {
     allTime: PowerRecordEffortView;
     previousRecord: PowerRecordEffortView | null;
     best30Days: PowerRecordEffortView | null;
+    best42Days: PowerRecordEffortView | null;
     best90Days: PowerRecordEffortView | null;
     improvementWatts: number | null;
     improvementPercent: number | null;
@@ -2087,7 +2100,7 @@ function PowerRecordsCard({ history }: { history: PowerRecordHistoryView | null 
   const dateLabel = (startedAt: string) => new Date(startedAt).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
   return (
     <section className="power-records-card panel full-width">
-      <div className="section-heading"><div><span className="eyebrow">Personal records</span><h2>Power-duration history</h2><p>Best continuous power from each ride, separated by effort duration.</p></div><span className="small-badge">gap-aware / {history?.algorithmVersion ?? "power-duration-v2"}</span></div>
+      <div className="section-heading"><div><span className="eyebrow">Personal records</span><h2>Power-duration history</h2><p>All-time records alongside your best continuous efforts from the last 42 and 90 days.</p></div><span className="small-badge">gap-aware / {history?.algorithmVersion ?? "power-duration-v3"}</span></div>
       {featured.length ? <>
         <div className="power-record-grid">
           {featured.map((record) => <article key={record.durationSeconds}>
@@ -2100,7 +2113,7 @@ function PowerRecordsCard({ history }: { history: PowerRecordHistoryView | null 
               <small>{record.recordCount} record {record.recordCount === 1 ? "mark" : "changes"}</small>
             </div>
             <dl>
-              <div><dt>30-day best</dt><dd>{record.best30Days ? `${Math.round(record.best30Days.bestPowerWatts)} W` : "--"}</dd></div>
+              <div><dt>42-day best</dt><dd>{record.best42Days ? `${Math.round(record.best42Days.bestPowerWatts)} W` : "--"}</dd></div>
               <div><dt>90-day best</dt><dd>{record.best90Days ? `${Math.round(record.best90Days.bestPowerWatts)} W` : "--"}</dd></div>
             </dl>
           </article>)}
@@ -2354,11 +2367,11 @@ function PlanToday({ rides, recovery, setRecovery, recoverySaveState, saveRecove
   };
 
   const dayMs = 24 * 60 * 60 * 1000;
-  const timestamps = rides.map((ride) => Date.parse(ride.date)).filter(Number.isFinite);
-  const anchorMs = timestamps.length ? Math.max(...timestamps) : Date.parse("2026-08-07");
+  const referenceDate = planStartDate === localDateKey() ? new Date() : new Date(`${planStartDate}T12:00:00`);
+  const anchorMs = referenceDate.getTime();
   const block = (startDaysAgo: number, endDaysAgo: number) => {
     const blockRides = rides.filter((ride) => {
-      const timestamp = Date.parse(ride.date);
+      const timestamp = Date.parse(rideStartedAt(ride));
       return timestamp <= anchorMs - (endDaysAgo * dayMs) && timestamp > anchorMs - (startDaysAgo * dayMs);
     });
     const powered = blockRides.filter((ride) => ride.averagePower > 0);
@@ -2373,20 +2386,16 @@ function PlanToday({ rides, recovery, setRecovery, recoverySaveState, saveRecove
   };
   const currentBlock = block(42, 0);
   const priorBlock = block(84, 42);
-  const referenceDate = planStartDate === localDateKey() ? new Date() : new Date(`${planStartDate}T12:00:00`);
   const referenceMs = referenceDate.getTime();
-  const liveRides = (days: number) => rides.filter((ride) => { const timestamp = Date.parse(rideStartedAt(ride)); return Number.isFinite(timestamp) && timestamp <= referenceMs && timestamp >= referenceMs - (days * dayMs); });
-  const liveLoad = (days: number) => liveRides(days).reduce((sum, ride) => sum + ride.trainingLoad, 0);
-  const liveAcuteLoad = liveLoad(7);
-  const liveChronicRides = liveRides(28);
-  const liveChronicLoad = liveChronicRides.reduce((sum, ride) => sum + ride.trainingLoad, 0) / 4;
-  const liveChronicSpanDays = liveChronicRides.length > 1 ? (Math.max(...liveChronicRides.map((ride) => Date.parse(rideStartedAt(ride)))) - Math.min(...liveChronicRides.map((ride) => Date.parse(rideStartedAt(ride))))) / dayMs : 0;
-  const loadRatio = liveChronicRides.length >= 4 && liveChronicSpanDays >= 14 && liveChronicLoad > 0 ? liveAcuteLoad / liveChronicLoad : null;
+  const trainingLoad = buildTrainingLoadModel(
+    rides.map((ride) => ({ date: rideStartedAt(ride), trainingLoad: ride.trainingLoad })),
+    referenceDate,
+  );
   const todayTraining = completedTrainingOnDate(rides, referenceDate);
   const latestHardRide = rides.filter(isObjectivelyHardRide).sort((a, b) => Date.parse(rideStartedAt(b)) - Date.parse(rideStartedAt(a)))[0];
   const readiness = calculateReadiness({
     hoursSinceLastHardRide: elapsedHoursSince(latestHardRide ? rideStartedAt(latestHardRide) : null, referenceMs),
-    acuteChronicRatio: loadRatio,
+    trainingLoadRatio: trainingLoad.current.loadRatio,
     subjective: recovery,
     todayTrainingLoad: todayTraining.trainingLoad,
     todayIntensityFactor: todayTraining.maximumIntensityFactor,
@@ -2427,15 +2436,9 @@ function PlanToday({ rides, recovery, setRecovery, recoverySaveState, saveRecove
   const change = (current: number, previous: number, suffix = "") => previous ? `${current >= previous ? "+" : ""}${(current - previous).toFixed(1)}${suffix}` : "—";
   const projectionDate = (date: string | null) => date ? new Date(`${date}T12:00:00Z`).toLocaleDateString("en-US", { month: "short", year: "numeric", timeZone: "UTC" }) : "—";
   const contributionLabel = coach.rideReflection.contribution === "quality_work" ? "Quality work" : coach.rideReflection.contribution === "aerobic_endurance" ? "Aerobic endurance" : coach.rideReflection.contribution === "easy_movement" ? "Easy movement" : "Fresh suggestion";
-  const coachLoadStatus = coach.evidenceSummary.acuteChronicRatio === null
-    ? "Baseline not ready"
-    : coach.evidenceSummary.acuteChronicRatio < 0.8
-      ? "Below recent baseline"
-      : coach.evidenceSummary.acuteChronicRatio <= 1.2
-        ? "Near recent baseline"
-        : coach.evidenceSummary.acuteChronicRatio <= 1.3
-          ? "Moderately above baseline"
-          : "Elevated recent load";
+  const coachLoadStatus = coach.evidenceSummary.loadStatus === "established"
+    ? coach.evidenceSummary.loadRatio !== null && coach.evidenceSummary.loadRatio > 1.3 ? "Fatigue elevated vs fitness" : "Established load history"
+    : coach.evidenceSummary.loadStatus === "provisional" ? "Provisional 42-day history" : "History not ready";
 
   return (
     <div className="phase-three-layout">
@@ -2460,13 +2463,13 @@ function PlanToday({ rides, recovery, setRecovery, recoverySaveState, saveRecove
       <section className={`coach-reasoning panel full-width state-${coach.state}`}>
         <div className="section-heading"><div><span className="eyebrow">Why this choice</span><h2>Every input stays visible</h2><p>The coach consumes existing analytics; it does not invent new fitness metrics.</p></div><span className={`confidence-badge confidence-${coach.confidence}`}>{coach.confidence} confidence</span></div>
         <div className="coach-load-equation" aria-label="Coach workload calculation">
-          <article><span>Last 7 days</span><strong>{coach.evidenceSummary.acuteLoad}</strong><small>total load, including today</small></article>
+          <article><span>7-day fatigue</span><strong>{coach.evidenceSummary.fatigueLoad?.toFixed(1) ?? "—"}</strong><small>modeled from daily load</small></article>
           <b>÷</b>
-          <article><span>28-day weekly baseline</span><strong>{coach.evidenceSummary.chronicWeeklyLoad || "—"}</strong><small>28-day total ÷ 4</small></article>
+          <article><span>42-day fitness</span><strong>{coach.evidenceSummary.fitnessLoad?.toFixed(1) ?? "—"}</strong><small>{coach.evidenceSummary.loadHistoryDays} days observed</small></article>
           <b>=</b>
-          <article className="coach-load-result"><span>Workload comparison</span><strong>{coach.evidenceSummary.acuteChronicRatio === null ? "—" : `${coach.evidenceSummary.acuteChronicRatio.toFixed(2)}×`}</strong><small>{coachLoadStatus}</small></article>
+          <article className="coach-load-result"><span>Fatigue / fitness</span><strong>{coach.evidenceSummary.loadRatio === null ? "—" : `${coach.evidenceSummary.loadRatio.toFixed(2)}×`}</strong><small>{coachLoadStatus}</small></article>
         </div>
-        <p className="coach-load-note">1.00 means the last seven days equal your recent weekly average. The comparison informs caution; it does not predict injury.</p>
+        <p className="coach-load-note">The same daily series drives both estimates. The ratio is withheld until the 42-day model has enough history; it informs caution and does not predict injury.</p>
         {currentLthr !== null && <p className="coach-lthr-note"><strong>Heart-rate guidance:</strong> Route cues use your {currentLthr} bpm LTHR ({lthrProfile?.confidence ?? "unrated"} confidence, {lthrSourceLabel}). Power, perceived effort, and symptoms still take precedence.</p>}
         <div className="coach-reason-grid">
           <article><span>Supports the choice</span>{coach.positives.length ? coach.positives.map((reason) => <p key={reason}><i>+</i>{reason}</p>) : <p><i>·</i>No positive signal changed the plan.</p>}</article>
