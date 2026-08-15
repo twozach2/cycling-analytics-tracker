@@ -1,3 +1,5 @@
+import { round } from "./shared/math";
+
 export type RideMetricInput = {
   movingTimeSeconds: number;
   averagePowerWatts: number | null;
@@ -75,17 +77,23 @@ export type DecouplingEligibility = {
   reason: string;
 };
 
+export const DECOUPLING_PROTOCOL = {
+  minimumDurationSeconds: 30 * 60,
+  moderateDurationSeconds: 45 * 60,
+  highDurationSeconds: 60 * 60,
+  maximumVariabilityIndex: 1.08,
+  maximumStoppedPercent: 5,
+  minimumPairedSamples: 300,
+  minimumPairedCoveragePercent: 60,
+  minimumInterpretableDriftPercent: -5,
+} as const;
+
 export function decouplingDurationConfidence(movingTimeSeconds: number): DecouplingConfidence {
-  if (movingTimeSeconds < 30 * 60) return "none";
-  if (movingTimeSeconds < 45 * 60) return "low";
-  if (movingTimeSeconds < 60 * 60) return "moderate";
+  if (movingTimeSeconds < DECOUPLING_PROTOCOL.minimumDurationSeconds) return "none";
+  if (movingTimeSeconds < DECOUPLING_PROTOCOL.moderateDurationSeconds) return "low";
+  if (movingTimeSeconds < DECOUPLING_PROTOCOL.highDurationSeconds) return "moderate";
   return "high";
 }
-
-const round = (value: number, digits = 1) => {
-  const scale = 10 ** digits;
-  return Math.round(value * scale) / scale;
-};
 
 const clamp = (value: number, minimum = 0, maximum = 100) => Math.min(maximum, Math.max(minimum, value));
 
@@ -234,7 +242,7 @@ export function evaluateDecouplingEligibility(input: DecouplingEligibilityInput)
   const confidence = decouplingDurationConfidence(input.movingTimeSeconds);
   const ineligible = (reason: string): DecouplingEligibility => ({ eligible: false, confidence: "none", reason });
   if (confidence === "none") {
-    return ineligible("Ride is shorter than 30 minutes.");
+    return ineligible(`Ride is shorter than ${DECOUPLING_PROTOCOL.minimumDurationSeconds / 60} minutes.`);
   }
   if (input.isIntervalWorkout) {
     return ineligible("Trainer or interval workouts are excluded.");
@@ -242,23 +250,26 @@ export function evaluateDecouplingEligibility(input: DecouplingEligibilityInput)
   if (input.variabilityIndex === null) {
     return ineligible("Variability index is unavailable.");
   }
-  if (input.variabilityIndex > 1.08) {
-    return ineligible(`Power variability is above the 1.08 VI limit (${input.variabilityIndex.toFixed(2)}).`);
+  if (input.variabilityIndex > DECOUPLING_PROTOCOL.maximumVariabilityIndex) {
+    return ineligible(`Power variability is above the ${DECOUPLING_PROTOCOL.maximumVariabilityIndex.toFixed(2)} VI limit (${input.variabilityIndex.toFixed(2)}).`);
   }
   if (input.stoppedPercent === null) {
     return ineligible("Stopped-time data is unavailable.");
   }
-  if (input.stoppedPercent > 5) {
-    return ineligible(`Stopped time exceeds 5% (${input.stoppedPercent.toFixed(1)}%).`);
+  if (input.stoppedPercent > DECOUPLING_PROTOCOL.maximumStoppedPercent) {
+    return ineligible(`Stopped time exceeds ${DECOUPLING_PROTOCOL.maximumStoppedPercent}% (${input.stoppedPercent.toFixed(1)}%).`);
   }
-  if (input.pairedSampleCount < 300 || input.pairedCoveragePercent < 60) {
+  if (
+    input.pairedSampleCount < DECOUPLING_PROTOCOL.minimumPairedSamples
+    || input.pairedCoveragePercent < DECOUPLING_PROTOCOL.minimumPairedCoveragePercent
+  ) {
     return ineligible("Insufficient paired power and heart-rate samples.");
   }
   if (input.aerobicDecouplingPercent === null) {
     return ineligible("Not enough complete intervals for analysis.");
   }
-  if (input.aerobicDecouplingPercent < -5) {
-    return ineligible("Second-half efficiency improved by more than 5%; warm-up or pacing distribution is dominating the result.");
+  if (input.aerobicDecouplingPercent < DECOUPLING_PROTOCOL.minimumInterpretableDriftPercent) {
+    return ineligible(`Second-half efficiency improved by more than ${Math.abs(DECOUPLING_PROTOCOL.minimumInterpretableDriftPercent)}%; warm-up or pacing distribution is dominating the result.`);
   }
   const durationReason = confidence === "low"
     ? "Provisional estimate: 30-44 minutes provides limited duration evidence."

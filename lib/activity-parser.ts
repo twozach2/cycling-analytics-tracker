@@ -1,4 +1,5 @@
 import { deriveHeartRateZones, type HeartRateZoneDistribution } from "./heart-rate";
+import { median, round } from "./shared/math";
 import { countActivitySampleRecords, type StreamRecordCounts } from "./stream-counts";
 
 export type DetectedActivity = {
@@ -88,11 +89,6 @@ const maximum = (values: Array<number | null>) => {
   return valid.length ? Math.max(...valid) : null;
 };
 
-const round = (value: number, digits = 1) => {
-  const scale = 10 ** digits;
-  return Math.round(value * scale) / scale;
-};
-
 const NORMALIZED_POWER_WINDOW_SECONDS = 30;
 
 function derivePowerStatistics(samples: ActivitySample[]) {
@@ -176,12 +172,6 @@ export function deriveStreamMetrics(samples: ActivitySample[], lthrBpm?: number 
       const heartRate = average(values.map((sample) => sample.heartRate));
       return power !== null && heartRate !== null && heartRate > 0 ? power / heartRate : null;
     };
-    const median = (values: number[]) => {
-      if (!values.length) return null;
-      const sorted = [...values].sort((a, b) => a - b);
-      const midpoint = Math.floor(sorted.length / 2);
-      return sorted.length % 2 ? sorted[midpoint] : (sorted[midpoint - 1] + sorted[midpoint]) / 2;
-    };
     const bucketEfficiencies = buckets.map((bucket) => bucket.length >= 4 ? efficiency(bucket) : null);
     const midpoint = Math.floor(bucketCount / 2);
     const firstValues = bucketEfficiencies.slice(1, midpoint).filter((value): value is number => value !== null);
@@ -231,11 +221,8 @@ function normalizePowerSamples(samples: ActivitySample[]) {
 function medianPositiveDelta(samples: TimedPowerSample[]) {
   const deltas = samples.slice(1)
     .map((sample, index) => sample.time - samples[index].time)
-    .filter((delta) => delta > 0)
-    .sort((a, b) => a - b);
-  if (!deltas.length) return null;
-  const midpoint = Math.floor(deltas.length / 2);
-  return deltas.length % 2 === 0 ? (deltas[midpoint - 1] + deltas[midpoint]) / 2 : deltas[midpoint];
+    .filter((delta) => delta > 0);
+  return median(deltas);
 }
 
 function continuousPowerSegments(samples: TimedPowerSample[]) {

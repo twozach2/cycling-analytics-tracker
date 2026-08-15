@@ -7,6 +7,12 @@ test("the local server serves the built Vite application shell", async () => {
   const response = await createApp().request("http://127.0.0.1:8722/");
   assert.equal(response.status, 200);
   assert.match(response.headers.get("content-type") ?? "", /^text\/html\b/i);
+  assert.match(response.headers.get("content-security-policy") ?? "", /default-src 'self'/);
+  assert.match(response.headers.get("content-security-policy") ?? "", /frame-ancestors 'none'/);
+  assert.equal(response.headers.get("permissions-policy"), "camera=(), microphone=(), geolocation=()");
+  assert.equal(response.headers.get("referrer-policy"), "no-referrer");
+  assert.equal(response.headers.get("x-content-type-options"), "nosniff");
+  assert.equal(response.headers.get("x-frame-options"), "DENY");
 
   const html = await response.text();
   assert.match(html, /<title>Cycling Analytics<\/title>/i);
@@ -15,16 +21,19 @@ test("the local server serves the built Vite application shell", async () => {
 });
 
 test("keeps the dashboard features while removing hosted runtime dependencies", async () => {
-  const [index, packageJson, dashboard, styles, manifest, server, database, fileStore] = await Promise.all([
+  const [index, packageJson, dashboard, methodology, theme, styles, manifest, server, database, fileStore] = await Promise.all([
     readFile(new URL("../index.html", import.meta.url), "utf8"),
     readFile(new URL("../package.json", import.meta.url), "utf8"),
     readFile(new URL("../app/CyclingDashboard.tsx", import.meta.url), "utf8"),
+    readFile(new URL("../app/views/Methodology.tsx", import.meta.url), "utf8"),
+    readFile(new URL("../app/theme.ts", import.meta.url), "utf8"),
     readFile(new URL("../app/globals.css", import.meta.url), "utf8"),
     readFile(new URL("../public/manifest.webmanifest", import.meta.url), "utf8"),
     readFile(new URL("../server/index.ts", import.meta.url), "utf8"),
     readFile(new URL("../server/platform/db.ts", import.meta.url), "utf8"),
     readFile(new URL("../server/platform/file-store.ts", import.meta.url), "utf8"),
   ]);
+  const interfaceSource = [dashboard, methodology, theme].join("\n");
 
   assert.match(index, /Cycling Analytics/);
   assert.match(index, /manifest\.webmanifest/);
@@ -64,7 +73,7 @@ test("keeps the dashboard features while removing hosted runtime dependencies", 
   assert.match(dashboard, /FTP snapshot/);
   assert.match(dashboard, /Strava auto-sync on/);
   assert.match(dashboard, /beforeinstallprompt/);
-  assert.match(dashboard, /Night Circuit/);
+  assert.match(interfaceSource, /Night Circuit/);
   assert.match(dashboard, /cycling-analytics:ui-preferences/);
   assert.doesNotMatch(dashboard, /next\/image|<Image/);
   assert.match(styles, /html\[data-theme="night-city"\]/);

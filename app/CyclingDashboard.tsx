@@ -1,5 +1,9 @@
 import { ChangeEvent, DragEvent, useCallback, useEffect, useRef, useState } from "react";
+import { themeOptions, type ThemeId } from "@/app/theme";
+import { Methodology } from "@/app/views/Methodology";
+import { requestJson } from "@/lib/api-client";
 import { parseActivityFile, type DetectedActivity } from "@/lib/activity-parser";
+import { saveThenRefresh } from "@/lib/import-transaction";
 import { buildCadenceOverview, hasCadenceDistribution, type CadenceAnalyticsRide, type CadenceCohortSummary } from "@/lib/cadence";
 import { buildComparableRouteCohorts, buildZone2BenchmarkCohort, COMPARABILITY_VERSION, ZONE2_BENCHMARK_PROTOCOL, ZONE2_BENCHMARK_VERSION } from "@/lib/comparability";
 import { buildCoachReport, type CoachRide } from "@/lib/coach";
@@ -7,6 +11,7 @@ import { assessRideDataQuality, type RideDataQuality } from "@/lib/data-quality"
 import { HEART_RATE_ZONES, aggregateHeartRateZones, describeHeartRateDistribution, heartRateZoneRange, type HeartRateZoneDistribution } from "@/lib/heart-rate";
 import {
   calculateReadiness,
+  DECOUPLING_PROTOCOL,
   evaluateDecouplingEligibility,
   deriveRideMetrics,
   elapsedHoursSince,
@@ -18,12 +23,11 @@ import {
 } from "@/lib/metrics";
 import { projectFtpGoal } from "@/lib/phase3";
 import { AUTOMATIC_SYNC_INTERVAL_MS, classifyRide, type ClassificationConfidence, type RideContext, type RideTrainingType } from "@/lib/strava-sync";
-import { buildCyclingMarkdown, cyclingMarkdownFilename, cyclingRideMarkdownFilename, METHOD_DEFINITIONS } from "@/lib/markdown-export";
+import { buildCyclingMarkdown, cyclingMarkdownFilename, cyclingRideMarkdownFilename } from "@/lib/markdown-export";
 import { recommendZwiftRoutes, ROUTE_INTENSITY_BANDS, ZWIFT_ROUTE_COUNT, ZWIFT_WORLDS } from "@/lib/zwift-routes";
 import type { ZwiftRotation } from "@/lib/zwift-world-rotation";
 
 type View = "dashboard" | "plan" | "rides" | "import" | "method";
-type ThemeId = "citrus" | "night-city" | "midnight" | "alpine";
 type DataMode = "loading" | "demo" | "saved" | "unavailable";
 type RideEnvironment = "virtual" | "indoor" | "outdoor";
 type WorkoutSubtype = "trainer_workout" | "race" | null;
@@ -261,38 +265,6 @@ const navItems: Array<{ id: View; label: string; glyph: string }> = [
   { id: "rides", label: "Ride log", glyph: "03" },
   { id: "import", label: "Import", glyph: "04" },
   { id: "method", label: "Method", glyph: "05" },
-];
-
-const themeOptions: Array<{
-  id: ThemeId;
-  name: string;
-  description: string;
-  swatches: [string, string, string, string];
-}> = [
-  {
-    id: "citrus",
-    name: "Citrus Paper",
-    description: "The original warm paper palette with a sharp lime signal.",
-    swatches: ["#f4f1e8", "#171a16", "#d7ff62", "#a9d9e7"],
-  },
-  {
-    id: "night-city",
-    name: "Night Circuit",
-    description: "Electric yellow, cyan, and hot pink over a deep blue-black cockpit.",
-    swatches: ["#080a16", "#f9f002", "#00f0ff", "#ff2a6d"],
-  },
-  {
-    id: "midnight",
-    name: "Midnight Volt",
-    description: "Low-glare navy with cool blue and acid-green training cues.",
-    swatches: ["#0b1220", "#dbeafe", "#7dd3fc", "#a3e635"],
-  },
-  {
-    id: "alpine",
-    name: "Alpine Day",
-    description: "Cool stone, glacier blue, and evergreen for daylight sessions.",
-    swatches: ["#edf3f0", "#16302a", "#86c5d8", "#d6ed8b"],
-  },
 ];
 
 const UI_PREFERENCES_KEY = "cycling-analytics:ui-preferences";
@@ -556,9 +528,11 @@ function mapSavedRide({ ride, metrics, stream, sourceFile }: SavedRideRow): Ride
 }
 
 async function fetchSavedRides() {
-  const response = await fetch("/api/rides", { cache: "no-store" });
-  const payload = await response.json() as { rides?: SavedRideRow[]; error?: string };
-  if (!response.ok) throw new Error(payload.error ?? "Saved rides could not be loaded.");
+  const payload = await requestJson<{ rides?: SavedRideRow[] }>(
+    "/api/rides",
+    { cache: "no-store" },
+    "Saved rides could not be loaded.",
+  );
   return (payload.rides ?? []).map(mapSavedRide);
 }
 
@@ -1079,18 +1053,22 @@ export default function CyclingDashboard() {
       } else {
         const formData = new FormData();
         formData.set("file", pendingFile);
-        const uploadResponse = await fetch("/api/import", { method: "POST", body: formData });
-        const upload = await uploadResponse.json() as { sourceFile?: { id: string }; error?: string };
-        if (!uploadResponse.ok || !upload.sourceFile?.id) {
-          throw new Error(upload.error ?? "The original activity file could not be saved.");
+        const upload = await requestJson<{ sourceFile?: { id: string } }>(
+          "/api/import",
+          { method: "POST", body: formData },
+          "The original activity file could not be saved.",
+        );
+        const sourceFileId = upload.sourceFile?.id;
+        if (!sourceFileId) {
+          throw new Error("The original activity file was accepted without a storage reference.");
         }
 
         const extension = pendingFile.name.split(".").at(-1)?.toLowerCase();
-        const saveResponse = await fetch("/api/rides", {
+        const persistence = await saveThenRefresh(() => requestJson<{ rideId?: string; duplicate?: boolean; refreshed?: boolean }>("/api/rides", {
           method: "POST",
           headers: { "content-type": "application/json" },
           body: JSON.stringify({
-            sourceFileId: upload.sourceFile.id,
+            sourceFileId,
             source: extension === "fit" || extension === "tcx" || extension === "gpx" ? extension : "manual",
             name: detected.name,
             startedAt: detected.startedAt ?? new Date().toISOString(),
@@ -1131,16 +1109,24 @@ export default function CyclingDashboard() {
             availableStreams: Object.entries(detected.streamSampleCounts).filter(([, count]) => count > 0).map(([stream]) => stream),
             powerDuration: detected.powerDuration,
           }),
+        }, "The ride could not be added to your log."), async () => {
+          const savedRides = await fetchSavedRides();
+          if (!savedRides.length) throw new Error("The refreshed log was unexpectedly empty.");
+          return savedRides;
         });
-        const saved = await saveResponse.json() as { rideId?: string; duplicate?: boolean; refreshed?: boolean; error?: string };
-        if (!saveResponse.ok) throw new Error(saved.error ?? "The ride could not be added to your log.");
+        const saved = persistence.saved;
 
-        const savedRides = await fetchSavedRides();
-        if (!savedRides.length) throw new Error("The ride was saved, but the refreshed log was empty.");
-        setRides(savedRides);
-        setSelectedRideId(saved.rideId ?? savedRides[0].id);
+        if (persistence.status === "saved") {
+          setRides(persistence.refreshed);
+          setSelectedRideId(saved.rideId ?? persistence.refreshed[0].id);
+          setSyncNote(saved.refreshed ? "Existing ride found · Analytics refreshed" : "Saved just now · Private");
+        } else {
+          const locallyConfirmedRide = { ...ride, id: saved.rideId ?? ride.id };
+          setRides((current) => [locallyConfirmedRide, ...current.filter((entry) => entry.id !== locallyConfirmedRide.id)]);
+          setSelectedRideId(locallyConfirmedRide.id);
+          setSyncNote("Ride saved · Full log refresh will retry when the app reloads");
+        }
         setDataMode("saved");
-        setSyncNote(saved.refreshed ? "Existing ride found · Analytics refreshed" : "Saved just now · Private");
       }
       setView("dashboard");
       resetImport();
@@ -1917,7 +1903,7 @@ function PerformanceDetails({ rides, currentFtp, currentLthr }: { rides: Ride[];
       <section className="durability-card panel">
         <div className="section-heading"><div><span className="eyebrow">Cardiac drift</span><h2>Aerobic durability</h2></div><span className={`small-badge${latestDriftRide?.decouplingEligible ? ` confidence-${latestDriftRide.decouplingConfidence ?? "low"}` : ""}`}>{latestDriftRide ? latestDriftRide.decouplingEligible ? `${latestDriftRide.decouplingConfidence ?? "low"} confidence` : "observed · withheld" : "steady rides only"}</span></div>
         <div className="drift-result"><strong>{latestDriftRide ? `${latestDriftRide.decoupling!.toFixed(1)}%` : "—"}</strong><span>{driftLabel}</span></div>
-        <p>{latestDriftRide ? `${latestDriftRide.name} · ${latestDriftRide.dateLabel}. ${latestDriftRide.decouplingEligibilityReason ?? "Calculated from central power / heart-rate intervals after excluding warm-up and cooldown buckets."}` : "Requires at least 30 minutes, VI ≤ 1.08, minimal stopped time, a steady non-workout effort, and sufficient paired power/HR data. Rides under 45 minutes are provisional."}</p>
+        <p>{latestDriftRide ? `${latestDriftRide.name} · ${latestDriftRide.dateLabel}. ${latestDriftRide.decouplingEligibilityReason ?? "Calculated from central power / heart-rate intervals after excluding warm-up and cooldown buckets."}` : `Requires at least ${DECOUPLING_PROTOCOL.minimumDurationSeconds / 60} minutes, VI ≤ ${DECOUPLING_PROTOCOL.maximumVariabilityIndex.toFixed(2)}, no more than ${DECOUPLING_PROTOCOL.maximumStoppedPercent}% stopped time, a steady non-workout effort, and sufficient paired power/HR data. Rides under ${DECOUPLING_PROTOCOL.moderateDurationSeconds / 60} minutes are provisional.`}</p>
       </section>
 
       <section className="cadence-card panel full-width">
@@ -2919,55 +2905,4 @@ function ImportRide({ detected, filename, error, isReading, isSaving, isDragging
 
 function ReviewField({ label, value }: { label: string; value: string }) {
   return <label className="review-field"><span>{label}</span><input value={value} readOnly /></label>;
-}
-
-function Methodology({ currentFtp, currentWeightKg, currentLthr, theme, setTheme, installPromptAvailable, isStandaloneApp, installDesktopApp }: {
-  currentFtp: number;
-  currentWeightKg: number;
-  currentLthr: number | null;
-  theme: ThemeId;
-  setTheme: (theme: ThemeId) => void;
-  installPromptAvailable: boolean;
-  isStandaloneApp: boolean;
-  installDesktopApp: () => Promise<void>;
-}) {
-  return <div className="method-layout">
-    <section className="theme-card panel">
-      <div className="section-heading"><div><span className="eyebrow">Appearance</span><h2>Choose your ride room</h2><p>Four complete palettes, tuned for clarity in different light.</p></div></div>
-      <div className="theme-grid" role="radiogroup" aria-label="Color theme">
-        {themeOptions.map((option) => <button
-          key={option.id}
-          type="button"
-          className={`theme-option ${theme === option.id ? "selected" : ""}`}
-          aria-pressed={theme === option.id}
-          onClick={() => setTheme(option.id)}
-        >
-          <span className="theme-swatch" aria-hidden="true" style={{ backgroundColor: option.swatches[0] }}>
-            {option.swatches.slice(1).map((color) => <i key={color} style={{ backgroundColor: color }} />)}
-          </span>
-          <span className="theme-copy"><strong>{option.name}</strong><small>{option.description}</small></span>
-          <em>{theme === option.id ? "Active" : "Use theme"}</em>
-        </button>)}
-      </div>
-      <p className="chart-note"><i /> Theme, last tab, selected ride, and ride-log controls are remembered on this device.</p>
-    </section>
-    <section className="install-card panel">
-      <div className="install-mark" aria-hidden="true">CA</div>
-      <div>
-        <span className="eyebrow">Desktop app</span>
-        <h2>{isStandaloneApp ? "Installed and ready." : "Give the tracker its own window."}</h2>
-        <p>{isStandaloneApp
-          ? "This copy launches independently and keeps its local theme, navigation, and ride-log preferences between sessions."
-          : "Install Cycling Analytics from Edge or Chrome for a Start-menu icon, standalone window, and device-local preference retention."}</p>
-      </div>
-      {isStandaloneApp
-        ? <span className="install-status"><i /> Running as an app</span>
-        : installPromptAvailable
-          ? <button className="primary-button" type="button" onClick={() => void installDesktopApp()}>Install app <span>↓</span></button>
-          : <span className="install-help">Use your browser menu → Install Cycling Analytics</span>}
-    </section>
-    <section className="method-hero panel-dark"><span className="eyebrow light">Explainable by design</span><h2>No mystery score.</h2><p>Every recommendation is assembled from visible inputs, conservative rules, and versioned calculations. Pain always overrides the number.</p><div className="version-stamp"><span>Current ruleset</span><strong>v3.5</strong></div></section>
-    <section className="method-list panel"><div className="section-heading"><div><span className="eyebrow">Metric dictionary</span><h2>What the app calculates</h2></div></div>{METHOD_DEFINITIONS.map((method) => <article key={method.id} className="method-row"><span>{method.id}</span><div><strong>{method.title}</strong><code>{method.formula}</code><p>{method.note}</p></div></article>)}</section>
-    <section className="config-card panel"><div className="section-heading"><div><span className="eyebrow">Athlete configuration</span><h2>Current working values</h2></div></div><div className="config-grid"><Stat label="FTP" value={String(currentFtp)} unit="W" /><Stat label="Body weight" value={String(Math.round(currentWeightKg * 2.2046226218))} unit="lb" /><Stat label="FTP / weight" value={(currentFtp / currentWeightKg).toFixed(2)} unit="W/kg" /><Stat label="LTHR" value={currentLthr === null ? "Not set" : String(currentLthr)} unit={currentLthr === null ? undefined : "bpm"} /><Stat label="Zone 2 target" value={String(Math.round(currentFtp * 2 / 3))} unit="W" /></div><p className="chart-note"><i /> FTP, body weight, and optional LTHR can be updated from Plan Today. Every ride keeps its own FTP snapshot; heart-rate distributions record the LTHR used and should be reprocessed after a threshold change.</p></section>
-  </div>;
 }

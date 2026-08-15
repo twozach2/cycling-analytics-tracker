@@ -1,3 +1,5 @@
+import { round } from "./shared/math";
+
 export const LTHR_CANDIDATE_ALGORITHM_VERSION = "lthr-candidate-v1";
 
 export type LthrConfidence = "low" | "moderate" | "high";
@@ -45,11 +47,6 @@ const mean = (values: readonly number[]) => values.reduce((sum, value) => sum + 
 const standardDeviation = (values: readonly number[]) => {
   const average = mean(values);
   return Math.sqrt(values.reduce((sum, value) => sum + ((value - average) ** 2), 0) / values.length);
-};
-
-const round = (value: number, digits = 1) => {
-  const scale = 10 ** digits;
-  return Math.round(value * scale) / scale;
 };
 
 function windowEvidence(samples: readonly Sample[], start: number, durationSeconds: number) {

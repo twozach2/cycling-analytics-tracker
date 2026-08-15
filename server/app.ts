@@ -26,8 +26,34 @@ function handle(handler: RequestHandler) {
   return (context: { req: { raw: Request } }) => handler(context.req.raw);
 }
 
+const SECURITY_HEADERS = {
+  "Content-Security-Policy": [
+    "default-src 'self'",
+    "base-uri 'self'",
+    "form-action 'self'",
+    "frame-ancestors 'none'",
+    "object-src 'none'",
+    "script-src 'self'",
+    "style-src 'self' 'unsafe-inline'",
+    "img-src 'self' data: https:",
+    "font-src 'self'",
+    "connect-src 'self'",
+  ].join("; "),
+  "Permissions-Policy": "camera=(), microphone=(), geolocation=()",
+  "Referrer-Policy": "no-referrer",
+  "X-Content-Type-Options": "nosniff",
+  "X-Frame-Options": "DENY",
+} as const;
+
 export function createApp() {
   const app = new Hono();
+
+  app.use("*", async (context, next) => {
+    await next();
+    for (const [name, value] of Object.entries(SECURITY_HEADERS)) {
+      if (!context.res.headers.has(name)) context.header(name, value);
+    }
+  });
 
   app.get("/api/health", (context) => context.json({ status: "ok", mode: "local" }));
   app.get("/api/rides", handle(ridesRoute.GET));

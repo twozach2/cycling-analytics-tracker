@@ -1,4 +1,4 @@
-import { and, desc, eq } from "drizzle-orm";
+import { and, desc, eq, isNull } from "drizzle-orm";
 import { getDb } from "../../../../../db";
 import { activityStreams, externalConnections, ftpHistory, powerDuration as powerDurationTable, rideMetrics, riders, rides } from "../../../../../db/schema";
 import { currentRider } from "../../../../../lib/current-rider";
@@ -165,9 +165,39 @@ export async function POST(request: Request) {
       lastSyncedAt: connection.lastSyncedAt,
     });
   }
+
   if (automatic) {
     const claimedAt = syncStartedAt.toISOString();
-    await db.update(externalConnections).set({ lastSyncedAt: claimedAt, updatedAt: claimedAt }).where(eq(externalConnections.id, connection.id));
+    const previousSyncMatches = connection.lastSyncedAt === null
+      ? isNull(externalConnections.lastSyncedAt)
+      : eq(externalConnections.lastSyncedAt, connection.lastSyncedAt);
+    const claim = await db
+      .update(externalConnections)
+      .set({ lastSyncedAt: claimedAt, updatedAt: claimedAt })
+      .where(and(eq(externalConnections.id, connection.id), previousSyncMatches))
+      .returning({ id: externalConnections.id });
+
+    if (!claim.length) {
+      const [latestConnection] = await db
+        .select({ lastSyncedAt: externalConnections.lastSyncedAt })
+        .from(externalConnections)
+        .where(eq(externalConnections.id, connection.id))
+        .limit(1);
+      return Response.json({
+        mode,
+        automatic,
+        throttled: true,
+        imported: 0,
+        updated: 0,
+        skipped: 0,
+        activitiesScanned: 0,
+        streamsImported: 0,
+        streamsReprocessed: 0,
+        streamFailures: 0,
+        streamDeferred: 0,
+        lastSyncedAt: latestConnection?.lastSyncedAt ?? connection.lastSyncedAt,
+      });
+    }
   }
 
   let accessToken: string;

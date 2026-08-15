@@ -2,6 +2,7 @@ import { buildComparableRouteCohorts, buildZone2BenchmarkCohort, COMPARABILITY_V
 import type { CoachReport } from "./coach";
 import type { RideDataQuality } from "./data-quality";
 import type { HeartRateZoneDistribution } from "./heart-rate";
+import { DECOUPLING_PROTOCOL } from "./metrics";
 export type MarkdownRide = {
   id: string;
   name: string;
@@ -62,7 +63,7 @@ export const METHOD_DEFINITIONS: readonly MethodDefinition[] = [
   { id: "01", title: "Power / HR ratio", formula: "average power ÷ average heart rate", note: "Contextual efficiency signal for comparable steady rides." },
   { id: "02", title: "Intensity factor", formula: "normalized power ÷ FTP at ride date", note: "Every ride keeps its own FTP snapshot; changing today's FTP does not rewrite historical IF or load." },
   { id: "03", title: "Training load", formula: "hours × intensity² × 100", note: "A transparent TSS-like load, not a licensed physiological diagnosis." },
-  { id: "04", title: "Aerobic decoupling", formula: "median central-interval efficiency · first half vs second half", note: "Ten equal-duration intervals are formed, with warm-up and cooldown edge buckets excluded. Duration confidence is tiered: under 30 minutes is withheld, 30-44 is low/provisional, 45-59 is moderate, and 60+ is high. VI ≤1.08, ≤5% stopped time, a non-workout effort, sufficient paired power/HR samples, and no outsized warm-up signal are still required." },
+  { id: "04", title: "Aerobic decoupling", formula: "median central-interval efficiency · first half vs second half", note: `Ten equal-duration intervals are formed, with warm-up and cooldown edge buckets excluded. Duration confidence is tiered: under ${DECOUPLING_PROTOCOL.minimumDurationSeconds / 60} minutes is withheld, ${DECOUPLING_PROTOCOL.minimumDurationSeconds / 60}-${(DECOUPLING_PROTOCOL.moderateDurationSeconds / 60) - 1} is low/provisional, ${DECOUPLING_PROTOCOL.moderateDurationSeconds / 60}-${(DECOUPLING_PROTOCOL.highDurationSeconds / 60) - 1} is moderate, and ${DECOUPLING_PROTOCOL.highDurationSeconds / 60}+ is high. VI ≤${DECOUPLING_PROTOCOL.maximumVariabilityIndex.toFixed(2)}, ≤${DECOUPLING_PROTOCOL.maximumStoppedPercent}% stopped time, a non-workout effort, sufficient paired power/HR samples, and no outsized warm-up signal are still required.` },
   { id: "05", title: "Load ratio", formula: "7-day load ÷ 28-day weekly average", note: "A review signal for abrupt changes, never an exact injury threshold." },
   { id: "06", title: "Readiness", formula: "recovery time + load + check-in + optional resting-HR trend", note: "A weighted, explainable score with visible components, assumptions, and confidence. Elevated resting HR adjusts conservatively; pain and illness remain safety overrides." },
   { id: "07", title: "FTP prediction", formula: "20–60 min best power × duration factor", note: "A conservative range from recorded efforts, with confidence tied to available evidence." },

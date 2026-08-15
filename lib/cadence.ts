@@ -1,3 +1,5 @@
+import { median } from "./shared/math";
+
 export type CadenceEnvironment = "virtual" | "indoor" | "outdoor";
 
 export type CadenceAnalyticsRide = {
@@ -20,13 +22,6 @@ export type CadenceCohortSummary = {
 };
 
 const finite = (value: number | null | undefined): value is number => typeof value === "number" && Number.isFinite(value);
-
-function median(values: readonly number[]) {
-  if (!values.length) return null;
-  const ordered = [...values].sort((a, b) => a - b);
-  const midpoint = Math.floor(ordered.length / 2);
-  return ordered.length % 2 ? ordered[midpoint] : (ordered[midpoint - 1] + ordered[midpoint]) / 2;
-}
 
 export function hasCadenceDistribution(ride: CadenceAnalyticsRide) {
   return finite(ride.averageCadence)

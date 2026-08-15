@@ -1,3 +1,5 @@
+import { round } from "./shared/math";
+
 export type HeartRateZoneDistribution = {
   thresholdBpm: number;
   sampleCount: number;
@@ -23,11 +25,6 @@ export const HEART_RATE_ZONES: ReadonlyArray<{
   { key: "zone4Percent", shortLabel: "Z4", label: "Threshold", minimumRatio: 0.94, maximumRatio: 1 },
   { key: "zone5Percent", shortLabel: "Z5", label: "Above threshold", minimumRatio: 1, maximumRatio: null },
 ];
-
-const round = (value: number, digits = 1) => {
-  const scale = 10 ** digits;
-  return Math.round(value * scale) / scale;
-};
 
 export function validLthr(value: number | null | undefined): value is number {
   return Number.isFinite(value) && value! >= 80 && value! <= 220;

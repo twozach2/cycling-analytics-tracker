@@ -1,5 +1,7 @@
 import { dataQualityRank, type EvidenceLevel } from "./data-quality";
 import type { SubjectiveRecovery } from "./metrics";
+import { localDayKey } from "./shared/date";
+import { median } from "./shared/math";
 
 export const COACH_ALGORITHM_VERSION = "coach-v3";
 export const TREND_ALGORITHM_VERSION = "trend-v1";
@@ -122,20 +124,6 @@ export type BuildCoachReportInput = {
 const dayMs = 24 * 60 * 60 * 1000;
 const hardTypes = new Set(["Tempo", "Sweet Spot", "Threshold", "VO2", "Sprint", "FTP Test"]);
 const isObjectivelyHard = (ride: CoachRide) => hardTypes.has(ride.trainingType) || (ride.intensityFactor >= 0.8 && ride.movingTimeSeconds >= 30 * 60);
-const localDayKey = (value: string | Date) => {
-  if (typeof value === "string" && /^\d{4}-\d{2}-\d{2}$/.test(value)) return value;
-  const date = value instanceof Date ? value : new Date(value);
-  if (!Number.isFinite(date.getTime())) return "";
-  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
-};
-
-const median = (values: readonly number[]) => {
-  const valid = values.filter(Number.isFinite).sort((a, b) => a - b);
-  if (!valid.length) return null;
-  const middle = Math.floor(valid.length / 2);
-  return valid.length % 2 ? valid[middle] : (valid[middle - 1] + valid[middle]) / 2;
-};
-
 const boundedDate = (value: string | Date | undefined) => {
   const parsed = value instanceof Date ? value : value ? new Date(value) : new Date();
   return Number.isFinite(parsed.getTime()) ? parsed : new Date();

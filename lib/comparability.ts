@@ -1,3 +1,5 @@
+import { median } from "./shared/math";
+
 export type EvidenceConfidence = "low" | "moderate" | "high";
 export type ComparisonEnvironment = "virtual" | "indoor" | "outdoor";
 export type ComparisonContext = "ordinary" | "benchmark" | "structured_workout" | "race" | "group_ride";
@@ -51,11 +53,6 @@ export type RouteComparisonResult<T extends ComparableRouteRide> = {
 };
 
 const normalizedRoute = (route: string) => route.trim().toLowerCase().replace(/\s+/g, " ");
-const median = (values: readonly number[]) => {
-  const sorted = [...values].sort((a, b) => a - b);
-  const middle = Math.floor(sorted.length / 2);
-  return sorted.length % 2 ? sorted[middle] : (sorted[middle - 1] + sorted[middle]) / 2;
-};
 const percentageDifference = (value: number, reference: number) => reference > 0 ? Math.abs(value - reference) / reference * 100 : Number.POSITIVE_INFINITY;
 
 function routeCandidateFailure(ride: ComparableRouteRide) {
@@ -95,7 +92,10 @@ export function buildComparableRouteCohorts<T extends ComparableRouteRide>(rides
   for (const [baseKey, group] of baseGroups) {
     const clusters: T[][] = [];
     for (const ride of [...group].sort((a, b) => a.distanceMiles - b.distanceMiles)) {
-      const cluster = clusters.find((candidate) => percentageDifference(ride.distanceMiles, median(candidate.map((entry) => entry.distanceMiles))) <= ROUTE_DISTANCE_TOLERANCE_PERCENT + 0.000001);
+      const cluster = clusters.find((candidate) => percentageDifference(
+        ride.distanceMiles,
+        median(candidate.map((entry) => entry.distanceMiles)) ?? ride.distanceMiles,
+      ) <= ROUTE_DISTANCE_TOLERANCE_PERCENT + 0.000001);
       if (cluster) cluster.push(ride);
       else clusters.push([ride]);
     }
@@ -108,7 +108,7 @@ export function buildComparableRouteCohorts<T extends ComparableRouteRide>(rides
         });
         continue;
       }
-      const distanceMedian = median(cluster.map((ride) => ride.distanceMiles));
+      const distanceMedian = median(cluster.map((ride) => ride.distanceMiles)) ?? 0;
       const minimumDistance = Math.min(...cluster.map((ride) => ride.distanceMiles));
       const maximumDistance = Math.max(...cluster.map((ride) => ride.distanceMiles));
       const distanceSpreadPercent = distanceMedian > 0 ? (maximumDistance - minimumDistance) / distanceMedian * 100 : 0;
@@ -233,7 +233,9 @@ export function buildZone2BenchmarkCohort<T extends Zone2BenchmarkRide>(rides: r
   const clusters: T[][] = [];
   for (const group of baseGroups.values()) {
     for (const ride of [...group].sort((a, b) => a.intensityFactor - b.intensityFactor)) {
-      const cluster = clusters.find((candidate) => candidate[0].environment === ride.environment && Math.abs(ride.intensityFactor - median(candidate.map((entry) => entry.intensityFactor))) <= ZONE2_BENCHMARK_PROTOCOL.intensityClusterTolerance + 0.000001);
+      const cluster = clusters.find((candidate) => candidate[0].environment === ride.environment && Math.abs(
+        ride.intensityFactor - (median(candidate.map((entry) => entry.intensityFactor)) ?? ride.intensityFactor),
+      ) <= ZONE2_BENCHMARK_PROTOCOL.intensityClusterTolerance + 0.000001);
       if (cluster) cluster.push(ride);
       else clusters.push([ride]);
     }
