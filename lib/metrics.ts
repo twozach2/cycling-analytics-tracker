@@ -6,7 +6,7 @@ export type RideMetricInput = {
   ftpWatts: number | null;
 };
 
-export type BodyCondition = "normal" | "mild_soreness" | "significant_soreness" | "pain_concern";
+export type BodyCondition = "normal" | "mild_soreness" | "significant_soreness" | "pain_concern" | "illness";
 
 export type PainLocation = "unspecified" | "knee" | "back" | "neck_shoulders" | "hands_wrists" | "hips" | "saddle_contact" | "other";
 
@@ -17,18 +17,34 @@ export type SubjectiveRecovery = {
   painLocation?: PainLocation;
   painSeverity?: number;
   motivation?: number;
+  illnessSeverity?: number;
+  restingHeartRate?: number | null;
+};
+
+export type ReadinessComponent = {
+  label: string;
+  value: number;
+  contribution: number;
+  detail: string;
 };
 
 export type ReadinessResult = {
   score: number;
   label: "Ready for hard work" | "Good to train" | "Moderate fatigue" | "Easy ride preferred" | "Rest / recovery recommended";
   tone: "green" | "yellow" | "orange" | "red";
+  confidence: "high" | "moderate" | "low";
+  estimated: boolean;
+  postRideAdjusted: boolean;
+  adjustments: string[];
+  assumptions: string[];
+  components: ReadinessComponent[];
+  restingHeartRateDelta: number | null;
 };
 
 export type RecoveryRecommendation = {
   minimumHours: number;
   maximumHours: number;
-  status: "low fatigue" | "moderate fatigue" | "high fatigue" | "pain flag";
+  status: "low fatigue" | "moderate fatigue" | "high fatigue" | "pain flag" | "illness flag";
   nextSession: string;
   reasons: string[];
 };
@@ -51,10 +67,20 @@ export type DecouplingEligibilityInput = {
   isIntervalWorkout: boolean;
 };
 
+export type DecouplingConfidence = "none" | "low" | "moderate" | "high";
+
 export type DecouplingEligibility = {
   eligible: boolean;
+  confidence: DecouplingConfidence;
   reason: string;
 };
+
+export function decouplingDurationConfidence(movingTimeSeconds: number): DecouplingConfidence {
+  if (movingTimeSeconds < 30 * 60) return "none";
+  if (movingTimeSeconds < 45 * 60) return "low";
+  if (movingTimeSeconds < 60 * 60) return "moderate";
+  return "high";
+}
 
 const round = (value: number, digits = 1) => {
   const scale = 10 ** digits;
@@ -67,9 +93,14 @@ export function calculateReadiness(input: {
   hoursSinceLastHardRide: number;
   acuteChronicRatio: number | null;
   subjective: SubjectiveRecovery;
+  todayTrainingLoad?: number;
+  todayIntensityFactor?: number;
+  todayMovingTimeSeconds?: number;
+  restingHeartRateBaseline?: number | null;
+  checkInRecorded?: boolean;
 }): ReadinessResult {
   const legScores = { fresh: 100, normal: 78, heavy: 45, dead: 10 } as const;
-  const bodyScores = { normal: 100, mild_soreness: 75, significant_soreness: 35, pain_concern: 70 } as const;
+  const bodyScores = { normal: 100, mild_soreness: 75, significant_soreness: 35, pain_concern: 70, illness: 25 } as const;
   const hoursScore = clamp((input.hoursSinceLastHardRide / 48) * 100);
   const loadScore = input.acuteChronicRatio === null
     ? 75
@@ -81,24 +112,94 @@ export function calculateReadiness(input: {
   const bodyCondition = input.subjective.bodyCondition ?? "normal";
   const bodyScore = bodyScores[bodyCondition];
   const painSeverity = bodyCondition === "pain_concern" ? clamp(input.subjective.painSeverity ?? 1, 1, 10) : 0;
+  const illnessSeverity = bodyCondition === "illness" ? clamp(input.subjective.illnessSeverity ?? 1, 1, 10) : 0;
   const motivationScore = clamp((((input.subjective.motivation ?? 3) - 1) / 4) * 100);
-  let score = Math.round(
-    (hoursScore * 0.25) +
-    (loadScore * 0.20) +
-    (sleepScore * 0.20) +
-    (legScore * 0.15) +
-    (bodyScore * 0.15) +
-    (motivationScore * 0.05),
-  );
+  const todayTrainingLoad = Math.max(0, input.todayTrainingLoad ?? 0);
+  const todayIntensityFactor = Math.max(0, input.todayIntensityFactor ?? 0);
+  const todayMinutes = Math.max(0, (input.todayMovingTimeSeconds ?? 0) / 60);
+  const adjustments: string[] = [];
+  const assumptions: string[] = [];
+  const components: ReadinessComponent[] = [
+    { label: "Time since hard ride", value: Math.round(hoursScore), contribution: round(hoursScore * 0.25), detail: `${Math.round(input.hoursSinceLastHardRide)} hours available for recovery` },
+    { label: "Training load balance", value: Math.round(loadScore), contribution: round(loadScore * 0.20), detail: input.acuteChronicRatio === null ? "No acute/chronic ratio; a neutral load value is used" : `Acute/chronic ratio ${input.acuteChronicRatio.toFixed(2)}` },
+    { label: "Sleep", value: Math.round(sleepScore), contribution: round(sleepScore * 0.20), detail: `${input.subjective.sleepQuality ?? 3}/5 check-in` },
+    { label: "Leg freshness", value: Math.round(legScore), contribution: round(legScore * 0.15), detail: input.subjective.legFreshness ?? "normal" },
+    { label: "Body condition", value: Math.round(bodyScore), contribution: round(bodyScore * 0.15), detail: bodyCondition.replaceAll("_", " ") },
+    { label: "Motivation", value: Math.round(motivationScore), contribution: round(motivationScore * 0.05), detail: `${input.subjective.motivation ?? 3}/5 check-in` },
+  ];
+
+  if (input.acuteChronicRatio === null) assumptions.push("Training-load balance is using a neutral value until enough ride history is available.");
+  if (input.checkInRecorded === false) assumptions.push("Today's recovery check-in has not been saved; neutral questionnaire values are shown.");
+
+  let score = Math.round(components.reduce((sum, component) => sum + component.contribution, 0));
+  const currentRestingHeartRate = input.subjective.restingHeartRate;
+  const baseline = input.restingHeartRateBaseline;
+  const hasRestingHeartRateEvidence = Number.isFinite(currentRestingHeartRate) && Number.isFinite(baseline);
+  const restingHeartRateDelta = hasRestingHeartRateEvidence ? Math.round(currentRestingHeartRate! - baseline!) : null;
+  if (restingHeartRateDelta !== null) {
+    const penalty = restingHeartRateDelta >= 10 ? 12 : restingHeartRateDelta >= 7 ? 8 : restingHeartRateDelta >= 4 ? 4 : 0;
+    score -= penalty;
+    components.push({
+      label: "Resting heart rate",
+      value: Math.max(0, 100 - (penalty * 5)),
+      contribution: -penalty,
+      detail: `${currentRestingHeartRate} bpm today; ${restingHeartRateDelta >= 0 ? "+" : ""}${restingHeartRateDelta} vs ${baseline} bpm baseline`,
+    });
+    if (penalty > 0) adjustments.push(`Resting heart rate is ${restingHeartRateDelta} bpm above baseline; readiness is adjusted conservatively.`);
+  } else if (input.checkInRecorded) {
+    assumptions.push("A resting-heart-rate trend needs today's reading and at least three prior readings.");
+  }
+
   if (painSeverity >= 7) score = Math.min(score, 20);
   else if (painSeverity >= 5) score = Math.min(score, 39);
   else if (painSeverity >= 3) score = Math.min(score, 54);
+  if (illnessSeverity >= 7) score = Math.min(score, 15);
+  else if (illnessSeverity >= 4) score = Math.min(score, 30);
+  else if (illnessSeverity > 0) score = Math.min(score, 45);
 
-  if (score >= 85) return { score, label: "Ready for hard work", tone: "green" };
-  if (score >= 70) return { score, label: "Good to train", tone: "green" };
-  if (score >= 55) return { score, label: "Moderate fatigue", tone: "yellow" };
-  if (score >= 40) return { score, label: "Easy ride preferred", tone: "orange" };
-  return { score, label: "Rest / recovery recommended", tone: "red" };
+  if (todayTrainingLoad >= 60 || (todayIntensityFactor >= 0.8 && todayMinutes >= 30)) {
+    score = Math.min(score, 54);
+    adjustments.push(`Today's completed training was substantial: ${Math.round(todayTrainingLoad)} load, ${Math.round(todayMinutes)} minutes, max IF ${todayIntensityFactor.toFixed(2)}.`);
+  } else if (todayTrainingLoad >= 30 || (todayIntensityFactor >= 0.7 && todayMinutes >= 30)) {
+    score = Math.min(score, 69);
+    adjustments.push(`Today's completed training added meaningful load: ${Math.round(todayTrainingLoad)} load across ${Math.round(todayMinutes)} minutes.`);
+  } else if (todayTrainingLoad >= 15) {
+    score = Math.min(score, 79);
+    adjustments.push(`Today's completed easy training is included: ${Math.round(todayTrainingLoad)} load across ${Math.round(todayMinutes)} minutes.`);
+  }
+
+  score = Math.round(clamp(score));
+  const result = score >= 85
+    ? { label: "Ready for hard work" as const, tone: "green" as const }
+    : score >= 70
+      ? { label: "Good to train" as const, tone: "green" as const }
+      : score >= 55
+        ? { label: "Moderate fatigue" as const, tone: "yellow" as const }
+        : score >= 40
+          ? { label: "Easy ride preferred" as const, tone: "orange" as const }
+          : { label: "Rest / recovery recommended" as const, tone: "red" as const };
+  const confidence = input.checkInRecorded === true && input.acuteChronicRatio !== null && hasRestingHeartRateEvidence
+    ? "high" as const
+    : (input.checkInRecorded === true || input.acuteChronicRatio !== null)
+      ? "moderate" as const
+      : "low" as const;
+  return {
+    score,
+    ...result,
+    confidence,
+    estimated: assumptions.length > 0 || confidence === "low",
+    postRideAdjusted: todayTrainingLoad > 0 || todayMinutes > 0,
+    adjustments,
+    assumptions,
+    components,
+    restingHeartRateDelta,
+  };
+}
+export function elapsedHoursSince(activityStartedAt: string | null, referenceTimeMs = Date.now(), fallbackHours = 72) {
+  if (!activityStartedAt) return fallbackHours;
+  const activityTimeMs = Date.parse(activityStartedAt);
+  if (!Number.isFinite(activityTimeMs) || !Number.isFinite(referenceTimeMs)) return fallbackHours;
+  return Math.max(0, (referenceTimeMs - activityTimeMs) / (60 * 60 * 1000));
 }
 
 export function deriveRideMetrics(input: RideMetricInput): DerivedRideMetrics {
@@ -130,34 +231,41 @@ export function deriveRideMetrics(input: RideMetricInput): DerivedRideMetrics {
 }
 
 export function evaluateDecouplingEligibility(input: DecouplingEligibilityInput): DecouplingEligibility {
-  if (input.movingTimeSeconds < 45 * 60) {
-    return { eligible: false, reason: "Ride is shorter than 45 minutes." };
+  const confidence = decouplingDurationConfidence(input.movingTimeSeconds);
+  const ineligible = (reason: string): DecouplingEligibility => ({ eligible: false, confidence: "none", reason });
+  if (confidence === "none") {
+    return ineligible("Ride is shorter than 30 minutes.");
   }
   if (input.isIntervalWorkout) {
-    return { eligible: false, reason: "Trainer or interval workouts are excluded." };
+    return ineligible("Trainer or interval workouts are excluded.");
   }
   if (input.variabilityIndex === null) {
-    return { eligible: false, reason: "Variability index is unavailable." };
+    return ineligible("Variability index is unavailable.");
   }
   if (input.variabilityIndex > 1.08) {
-    return { eligible: false, reason: `Power variability is above the 1.08 VI limit (${input.variabilityIndex.toFixed(2)}).` };
+    return ineligible(`Power variability is above the 1.08 VI limit (${input.variabilityIndex.toFixed(2)}).`);
   }
   if (input.stoppedPercent === null) {
-    return { eligible: false, reason: "Stopped-time data is unavailable." };
+    return ineligible("Stopped-time data is unavailable.");
   }
   if (input.stoppedPercent > 5) {
-    return { eligible: false, reason: `Stopped time exceeds 5% (${input.stoppedPercent.toFixed(1)}%).` };
+    return ineligible(`Stopped time exceeds 5% (${input.stoppedPercent.toFixed(1)}%).`);
   }
   if (input.pairedSampleCount < 300 || input.pairedCoveragePercent < 60) {
-    return { eligible: false, reason: "Insufficient paired power and heart-rate samples." };
+    return ineligible("Insufficient paired power and heart-rate samples.");
   }
   if (input.aerobicDecouplingPercent === null) {
-    return { eligible: false, reason: "Not enough complete intervals for analysis." };
+    return ineligible("Not enough complete intervals for analysis.");
   }
   if (input.aerobicDecouplingPercent < -5) {
-    return { eligible: false, reason: "Second-half efficiency improved by more than 5%; warm-up or pacing distribution is dominating the result." };
+    return ineligible("Second-half efficiency improved by more than 5%; warm-up or pacing distribution is dominating the result.");
   }
-  return { eligible: true, reason: "Eligible steady ride: sufficient duration, stable power, minimal stopped time, and complete power/heart-rate data." };
+  const durationReason = confidence === "low"
+    ? "Provisional estimate: 30-44 minutes provides limited duration evidence."
+    : confidence === "moderate"
+      ? "Moderate-confidence estimate: 45-59 minutes provides usable duration evidence."
+      : "High-confidence estimate: at least 60 minutes provides the strongest duration evidence.";
+  return { eligible: true, confidence, reason: `${durationReason} Power was stable, stopped time was minimal, and paired power/heart-rate data was sufficient.` };
 }
 
 function baseRecovery(load: number): [number, number] {
@@ -176,6 +284,21 @@ export function recommendRecovery(
   recent72HourLoad: number,
   subjective: SubjectiveRecovery = {},
 ): RecoveryRecommendation {
+  const illnessSeverity = subjective.bodyCondition === "illness" ? subjective.illnessSeverity ?? 1 : 0;
+  if (illnessSeverity > 0) {
+    return {
+      minimumHours: illnessSeverity >= 4 ? 24 : 12,
+      maximumHours: illnessSeverity >= 4 ? 72 : 36,
+      status: "illness flag",
+      nextSession: illnessSeverity >= 4
+        ? "Training guidance is withheld. Rest and follow appropriate medical guidance for concerning symptoms."
+        : "Skip intensity. Reassess symptoms before choosing any easy movement.",
+      reasons: [
+        `Illness symptoms reported at ${illnessSeverity}/10`,
+        "Illness is a safety guardrail rather than a training-load adjustment",
+      ],
+    };
+  }
   const painSeverity = subjective.bodyCondition === "pain_concern" ? subjective.painSeverity ?? 1 : 0;
   if (painSeverity >= 3) {
     const location = formatPainLocation(subjective.painLocation);

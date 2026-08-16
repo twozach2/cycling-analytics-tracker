@@ -12,8 +12,9 @@
 
 # testing
 /coverage
+*.tsbuildinfo
 
-# next.js
+# generated web builds
 /.next/
 /.vinext/
 /out/
@@ -36,6 +37,9 @@ yarn-error.log*
 .vercel
 
 /dist/
+/dist-electron/
+/dist-installers/
 /.wrangler/
 /outputs/
 /work/
+/.local-data/

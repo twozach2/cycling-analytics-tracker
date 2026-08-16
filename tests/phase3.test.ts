@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { access } from "node:fs/promises";
 import test from "node:test";
 import { derivePowerDuration, deriveStreamMetrics, type ActivitySample } from "../lib/activity-parser.ts";
-import { buildCyclingVo2Trend, buildWeeklyPlan, estimateCyclingVo2Max, predictFtp, projectFtpGoal, recommendWorkout } from "../lib/phase3.ts";
+import { buildCyclingVo2Trend, buildPowerRecordHistory, buildWeeklyPlan, estimateCyclingVo2Max, predictFtp, projectFtpGoal, recommendWorkout } from "../lib/phase3.ts";
 import { estimateZwiftRouteTime, recommendZwiftRoutes, ROUTE_TIME_WINDOWS, ZWIFT_ROUTE_CATALOG, ZWIFT_ROUTE_COUNT, ZWIFT_WORLDS } from "../lib/zwift-routes.ts";
 import { fallbackGuestWorlds, parseGuestWorldsFromSchedule } from "../lib/zwift-world-rotation.ts";
 
@@ -21,6 +21,87 @@ test("derives rolling power evidence from timestamped samples", () => {
   assert.equal(bests.find((best) => best.durationSeconds === 1200)?.bestPowerWatts, 200);
 });
 
+test("power-duration uses elapsed time for irregular samples", () => {
+  const samples: ActivitySample[] = [0, 1000, 2100, 3500, 5000].map((time) => ({
+    time,
+    power: 215,
+    heartRate: null,
+    cadence: null,
+    distance: null,
+    elevation: null,
+    latitude: null,
+    longitude: null,
+  }));
+  assert.equal(derivePowerDuration(samples).find((best) => best.durationSeconds === 5)?.bestPowerWatts, 215);
+});
+
+test("power-duration rejects pauses and trainer dropouts", () => {
+  const block = (startSecond: number) => Array.from({ length: 241 }, (_, offset) => ({
+    time: (startSecond + offset) * 1000,
+    power: 400,
+    heartRate: null,
+    cadence: null,
+    distance: null,
+    elevation: null,
+    latitude: null,
+    longitude: null,
+  } satisfies ActivitySample));
+  const bests = derivePowerDuration([...block(0), ...block(600)]);
+  assert.equal(bests.some((best) => best.durationSeconds === 300), false);
+  assert.equal(bests.find((best) => best.durationSeconds === 120)?.bestPowerWatts, 400);
+});
+
+test("power-duration counts continuous zero-power time and ignores duplicate timestamps", () => {
+  const samples: ActivitySample[] = Array.from({ length: 121 }, (_, second) => ({
+    time: second * 1000,
+    power: second < 60 ? 200 : 0,
+    heartRate: null,
+    cadence: null,
+    distance: null,
+    elevation: null,
+    latitude: null,
+    longitude: null,
+  }));
+  samples.push({ ...samples[0], power: 200 });
+  const bests = derivePowerDuration(samples);
+  assert.equal(bests.find((best) => best.durationSeconds === 120)?.bestPowerWatts, 100);
+});
+
+test("power-duration includes ten, fifteen, and ninety minute targets", () => {
+  const samples: ActivitySample[] = Array.from({ length: 5401 }, (_, second) => ({
+    time: second * 1000,
+    power: 180,
+    heartRate: null,
+    cadence: null,
+    distance: null,
+    elevation: null,
+    latitude: null,
+    longitude: null,
+  }));
+  const durations = derivePowerDuration(samples).map((best) => best.durationSeconds);
+  assert.ok(durations.includes(600));
+  assert.ok(durations.includes(900));
+  assert.ok(durations.includes(5400));
+});
+
+test("builds all-time, recent, and previous power records with a PR timeline", () => {
+  const history = buildPowerRecordHistory([
+    { rideId: "a", rideName: "Baseline", startedAt: "2026-01-01T12:00:00Z", durationSeconds: 300, bestPowerWatts: 200 },
+    { rideId: "b", rideName: "January build", startedAt: "2026-01-10T12:00:00Z", durationSeconds: 300, bestPowerWatts: 210 },
+    { rideId: "c", rideName: "Not a record", startedAt: "2026-02-01T12:00:00Z", durationSeconds: 300, bestPowerWatts: 205 },
+    { rideId: "d", rideName: "April peak", startedAt: "2026-04-01T12:00:00Z", durationSeconds: 300, bestPowerWatts: 220 },
+  ], Date.parse("2026-04-10T12:00:00Z"));
+  const fiveMinute = history.records.find((record) => record.durationSeconds === 300)!;
+  assert.equal(fiveMinute.allTime.rideName, "April peak");
+  assert.equal(fiveMinute.previousRecord?.bestPowerWatts, 210);
+  assert.equal(fiveMinute.improvementWatts, 10);
+  assert.equal(fiveMinute.improvementPercent, 4.8);
+  assert.equal(fiveMinute.best30Days?.bestPowerWatts, 220);
+  assert.equal(fiveMinute.recordCount, 3);
+  assert.equal(history.algorithmVersion, "power-duration-v2");
+  assert.equal(history.timeline.length, 3);
+});
+
 test("derives interval-smoothed durability from a variable ride", () => {
   const samples: ActivitySample[] = Array.from({ length: 1200 }, (_, second) => ({
     time: second * 1000,
@@ -36,6 +117,60 @@ test("derives interval-smoothed durability from a variable ride", () => {
   assert.equal(metrics.aerobicDecouplingPercent, 6.7);
 });
 
+test("computes normalized power and VI from a detailed power stream", () => {
+  const samples: ActivitySample[] = Array.from({ length: 600 }, (_, second) => ({
+    time: second * 1000,
+    power: Math.floor(second / 60) % 2 === 0 ? 100 : 200,
+    heartRate: 140,
+    cadence: 88,
+    distance: second * 8,
+    elevation: null,
+    latitude: null,
+    longitude: null,
+  }));
+  const metrics = deriveStreamMetrics(samples);
+  assert.ok(metrics.averagePower! >= 149 && metrics.averagePower! <= 151);
+  assert.ok(metrics.normalizedPower! > metrics.averagePower!);
+  assert.ok(metrics.variabilityIndex! > 1.05);
+});
+
+test("normalized power does not bridge pauses or power-stream dropouts", () => {
+  const sample = (time: number, power: number): ActivitySample => ({
+    time,
+    power,
+    heartRate: 140,
+    cadence: 88,
+    distance: null,
+    elevation: null,
+    latitude: null,
+    longitude: null,
+  });
+  const samples = [
+    ...Array.from({ length: 90 }, (_, second) => sample(second * 1000, 100)),
+    ...Array.from({ length: 90 }, (_, second) => sample((150 + second) * 1000, 200)),
+  ];
+  const metrics = deriveStreamMetrics(samples);
+  assert.equal(metrics.averagePower, 150);
+  assert.ok(metrics.normalizedPower! >= 170 && metrics.normalizedPower! <= 171);
+  assert.ok(metrics.variabilityIndex! >= 1.13 && metrics.variabilityIndex! <= 1.15);
+});
+
+test("withholds normalized power when a continuous 30-second window is unavailable", () => {
+  const samples: ActivitySample[] = Array.from({ length: 20 }, (_, second) => ({
+    time: second * 1000,
+    power: 150,
+    heartRate: null,
+    cadence: null,
+    distance: null,
+    elevation: null,
+    latitude: null,
+    longitude: null,
+  }));
+  const metrics = deriveStreamMetrics(samples);
+  assert.equal(metrics.averagePower, 150);
+  assert.equal(metrics.normalizedPower, null);
+  assert.equal(metrics.variabilityIndex, null);
+});
 test("requires enough paired intervals for durability", () => {
   const samples: ActivitySample[] = Array.from({ length: 20 }, (_, second) => ({
     time: second * 1000,
@@ -109,6 +244,11 @@ test("Zwift route suite uses the requested time windows and FTP-based targets", 
   assert.equal(new Set(suite.map((suggestion) => suggestion.route.id)).size, 3);
   assert.deepEqual(suite.map((suggestion) => suggestion.targetWatts), ["125–145 W", "125–145 W", "125–145 W"]);
   assert.equal(suite.find((suggestion) => suggestion.recommended)?.commitment, 60);
+  assert.ok(suite.every((suggestion) => suggestion.focus === "Tempo exploration"));
+  assert.ok(suite.every((suggestion) => suggestion.rideCue.includes("comfortably strong tempo stretches")));
+  assert.ok(suite.every((suggestion) => suggestion.optionalStretch.includes("Skipping it is equally valid")));
+  assert.ok(suite.every((suggestion) => suggestion.encouragement.includes("not an assignment")));
+  assert.ok(suite.every((suggestion) => suggestion.timingCue.includes("125–145 W")));
   assert.equal(ZWIFT_ROUTE_COUNT, 75);
   assert.ok(suite.every((suggestion) => (
     suggestion.estimatedMinutes >= ROUTE_TIME_WINDOWS[suggestion.commitment].minimumMinutes
@@ -116,13 +256,19 @@ test("Zwift route suite uses the requested time windows and FTP-based targets", 
   )));
 });
 
-test("Zwift route timing accounts for rider weight and sustainable W/kg", () => {
+test("Zwift route timing uses the suggested mode's FTP range", () => {
   const laReine = ZWIFT_ROUTE_CATALOG.find((route) => route.id === "france-la-reine")!;
-  const estimate = estimateZwiftRouteTime(laReine, 165, 275 / 2.2046226218);
-  assert.ok(estimate.minimumPowerWatts >= 124 && estimate.minimumPowerWatts <= 126);
-  assert.ok(estimate.maximumPowerWatts >= 149 && estimate.maximumPowerWatts <= 151);
-  assert.ok(estimate.minimumMinutes > 180);
-  assert.ok(estimate.maximumMinutes > estimate.minimumMinutes);
+  const endurance = estimateZwiftRouteTime(laReine, 165, 275 / 2.2046226218, "endurance");
+  const tempo = estimateZwiftRouteTime(laReine, 165, 275 / 2.2046226218, "tempo");
+  const recovery = estimateZwiftRouteTime(laReine, 165, 275 / 2.2046226218, "recovery");
+  assert.equal(endurance.minimumPowerWatts, 99);
+  assert.equal(endurance.maximumPowerWatts, 119);
+  assert.equal(tempo.minimumPowerWatts, 125);
+  assert.equal(tempo.maximumPowerWatts, 145);
+  assert.ok(recovery.midpointMinutes > endurance.midpointMinutes);
+  assert.ok(endurance.midpointMinutes > tempo.midpointMinutes);
+  assert.ok(endurance.minimumMinutes > 180);
+  assert.ok(endurance.maximumMinutes > endurance.minimumMinutes);
   assert.throws(() => estimateZwiftRouteTime(laReine, Number.NaN, 80), /saved FTP/i);
   assert.throws(() => estimateZwiftRouteTime(laReine, 200, Number.NaN), /saved body weight/i);
 });
@@ -131,6 +277,8 @@ test("Zwift route suite can be limited to a supplied world pool", () => {
   const suite = recommendZwiftRoutes("endurance", 200, 80, ["Watopia", "Paris", "France"]);
   assert.ok(suite.every((suggestion) => ["Watopia", "Paris", "France"].includes(suggestion.route.world)));
   assert.ok(suite.every((suggestion) => suggestion.reason.includes("change of scenery")));
+  assert.ok(suite.every((suggestion) => suggestion.focus === "Aerobic endurance"));
+  assert.ok(suite.every((suggestion) => suggestion.terrainCue.includes("cue:")));
 });
 
 test("shuffling avoids recent routes while exposing the full world catalog", () => {
@@ -174,4 +322,9 @@ test("rest guardrail pauses every route choice", () => {
   const suite = recommendZwiftRoutes("rest", 165, 275 / 2.2046226218);
   assert.ok(suite.every((suggestion) => suggestion.disabled));
   assert.equal(suite.find((suggestion) => suggestion.recommended)?.commitment, 30);
+});
+
+test("Zwift route suite uses personalized LTHR cues when configured", () => {
+  const suite = recommendZwiftRoutes("endurance", 165, 275 / 2.2046226218, undefined, 0, [], 150);
+  assert.ok(suite.every((suggestion) => suggestion.heartRateCue === "Mostly Z2 · 122–134 bpm · brief Z3 hills are fine"));
 });

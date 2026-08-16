@@ -1,22 +1,34 @@
 # Cycling Analytics
 
-A private, full-stack cycling dashboard for importing Strava and activity-file data, tracking training trends, and generating explainable daily guidance and Zwift route suggestions.
+A private cycling dashboard for importing Strava and activity-file data, tracking training trends, and generating explainable daily guidance and Zwift route suggestions.
 
-## Highlights
+## Coach Mode
 
-- Required rider setup for FTP and body weight—no generic athlete defaults
-- Strava OAuth with six-month backfill, automatic 15-minute in-app refresh, incremental sync, and duplicate protection
-- FIT, TCX, and GPX uploads with original-file retention
-- Power, heart-rate, cadence, workload, FTP, and aerobic-durability analysis
-- Rolling 90-day estimated cycling VO₂-max trend from recorded five-minute power and ride-specific weight
-- Virtual/indoor/outdoor classification with trainer-workout subtypes and environment-matched comparisons
-- Automatic Strava ride-type suggestions with persistent manual overrides
-- Per-ride FTP snapshots plus conservative decoupling eligibility checks
-- Personalized Zwift route-time ranges using rider weight, sustainable power, distance, and climbing
-- Markdown export of the complete ride log or one selected ride, including rider configuration and methodology
-- Four complete color themes, including a neon Cyberpunk-inspired dark palette, with device-local preference and view restoration
-- Installable desktop PWA with its own app icon, standalone window, and retained device preferences
-- Cloudflare D1 persistence, R2 file storage, and ChatGPT-authenticated rider profiles
+Coach Mode is a deterministic, evidence-gated recommendation engine rather than a free-form AI coach. It combines the saved recovery check-in with recent load, time since hard work, ride classification, personal duration/load baselines, and explicit data-quality provenance. Every recommendation shows the supporting signals, cautions, safety guardrails, confidence, and algorithm version used to produce it.
+
+Hard-session advice is withheld or downgraded when pain or illness is reported, the recovery check-in is missing, recent evidence is weak, two hard sessions already occurred in seven days, or recovery time is insufficient. Future days are deliberately low-confidence placeholders and are regenerated from current evidence instead of being treated as a rigid prescription.
+
+Workload is presented as an explicit comparison: total load from the last seven days divided by the 28-day total normalized to a weekly average. A stable baseline requires at least four rides spanning 14 days. The ratio is a review signal for sudden workload change, not an injury prediction.
+
+Route suggestions pair several time commitments with a flexible ride focus, terrain-aware cues, a power guide, and an explicitly optional stretch idea. These are invitations to explore—not workouts to pass—and riders are encouraged to change the effort, shorten the route, or simply enjoy the scenery.
+
+Normalized power and variability index are computed from detailed timestamped power streams when an activity source does not provide recorded NP. Recorded values remain preferred; computed values are labeled separately and drive recalculated IF, load, and decoupling eligibility. Re-importing an existing FIT/TCX/GPX file refreshes its analytics without creating a duplicate, and Strava stored streams are reprocessed during sync.
+
+Optional lactate-threshold heart rate (LTHR) unlocks five non-overlapping heart-rate zones for every detailed heart-rate stream, per-ride and seven-day time-in-zone views, neutral ride-intensity context, and personalized Coach route cues. The app never guesses LTHR from maximum heart rate; after changing it, re-sync Strava or re-import source files to recalculate older rides.
+
+The app can also surface conservative LTHR candidates from a continuous 20-minute threshold-like window with detailed power and heart-rate evidence. Every candidate shows its source ride, confidence, qualifying metrics, and limitations. A candidate never changes the athlete profile until the rider explicitly confirms it, and confirmed values retain their provenance in LTHR history.
+
+Recovery check-ins can include resting heart rate. Once three prior daily readings exist, readiness compares today's value with a rolling seven-reading median, applies only conservative upward-HR penalties, and exposes its full component breakdown, assumptions, and confidence level.
+
+Zwift route-time estimates use the current ride idea's FTP-relative effort range rather than a fixed W/kg assumption, so recovery, endurance, and tempo suggestions produce different personalized time windows.
+
+After a same-day ride is imported, Coach Mode describes what the ride contributed—easy movement, aerobic endurance, or quality work—celebrates the time spent riding, and adapts the next suggestions around the resulting load. It never assigns adherence scores or treats a useful ride as a failure.
+
+Trend claims use genuinely comparable Zone 2 rides: the same indoor/outdoor environment, non-low classification and data quality, usable power plus heart rate, and intensity within 0.05 IF of the cohort median. Two rides create a possible signal, three or four a likely signal, and an established trend requires at least five rides spanning three weeks. Outdoor trends remain capped because wind, traffic, surface, and drafting are not observed.
+
+Each ride exposes the actual record count received for every detailed signal and distinguishes it from recorded summaries, derived values, or unavailable data. Existing Strava streams are backfilled from their stored payloads. The Markdown exporter includes this provenance and a complete Coach Mode reasoning snapshot for later audit.
+
+The `codex/standalone` branch is the local-first application track. Phase 1 replaces the hosted runtime with a Vite React SPA, a Hono server bound to `127.0.0.1:8722`, SQLite, and an on-disk ride-file store. The hosted `main` branch is unchanged.
 
 ## Local development
 
@@ -27,21 +39,80 @@ npm install
 npm run dev
 ```
 
-Copy `.env.example` to `.env.local` and add your own Strava application credentials when testing the integration locally. Never commit real credentials or tokens.
+Vite opens the development UI on `http://127.0.0.1:5173` and proxies `/api` to the local service. A production build is served entirely from `http://127.0.0.1:8722`:
+
+```bash
+npm run build
+npm start
+```
+
+For day-to-day visual iteration on Windows, use the persistent browser preview:
+
+```bash
+npm run preview:web
+```
+
+On Windows, install a one-click launcher on the desktop with:
+
+```bash
+npm run preview:install-shortcut
+```
+
+The command starts the API on port `8723`, starts the hot-reloading dashboard on `http://127.0.0.1:5173`, and opens the browser automatically. Keep its terminal window open while using the preview; press `Ctrl+C` to stop it. Running the command again while it is active simply reopens the existing preview.
+
+Preview data persists in `%LOCALAPPDATA%\\CyclingAnalyticsPreview` and is deliberately separate from the installed Electron app. On first launch, it takes a snapshot of the desktop app's rides and preferences when available, but never copies encrypted Strava credentials. This prevents an in-progress browser build from sharing a live SQLite database or overwriting the desktop app's secrets. Set `CYCLING_PREVIEW_DATA_DIR` before launching if you want a different preview data directory.
+
+Strava remains optional. Configure your own Strava API application from the Import tab; client credentials are no longer read from environment variables.
+
+The Electron desktop shell uses the same local service and can be launched with:
+
+```bash
+npm run dev:electron
+```
+
+## Local data
+
+The app uses one device-local rider. SQLite migrations run automatically at startup, and structured data is stored in `cycling.sqlite`. Original activity files and Strava stream payloads are stored under `ride-files/`.
+
+Strava client credentials and OAuth tokens are deliberately excluded from SQLite. In the Electron app they are encrypted with the operating system's secure storage. Existing Phase 2 owner-only plaintext files are migrated to encrypted values on first desktop launch.
+
+Default data locations:
+
+- Installed Windows app: `%APPDATA%\\cycling-analytics`
+- Windows persistent browser preview: `%LOCALAPPDATA%\\CyclingAnalyticsPreview`
+- Windows local-server development: `%LOCALAPPDATA%\\CyclingAnalytics`
+- macOS: `~/Library/Application Support/CyclingAnalytics`
+- Linux: `$XDG_DATA_HOME/CyclingAnalytics` or `~/.local/share/CyclingAnalytics`
+
+Set `CYCLING_DATA_DIR` to use another directory. This is especially useful for development and tests.
 
 ## Validation
 
 ```bash
-npm run build
+npm run lint
 npm test
 ```
 
-Generate a Drizzle migration after changing `db/schema.ts`:
+After changing `db/schema.ts`, generate and review a migration:
 
 ```bash
 npm run db:generate
 ```
 
-## Privacy and data
+Phase 3 adds the Electron window, startup lifecycle, and OS-encrypted secret storage. Phase 4 adds cross-platform packaging and a signing-ready release workflow.
 
-Rider settings and activity records are associated with the authenticated user on the current deployment. Structured data is stored in D1; original activity files and imported stream payloads are stored in R2. FTP and body weight must be supplied by the rider before dependent calculations or Strava synchronization are enabled.
+## Desktop distribution
+
+Build the installer for the current operating system, or select a platform explicitly:
+
+```bash
+npm run dist
+npm run dist:win
+npm run dist:mac
+npm run dist:mac:unsigned
+npm run dist:linux
+```
+
+Artifacts are written to `dist-installers/`. The release workflow also builds natively on Windows, macOS, and Ubuntu for version tags such as `v0.1.0`, or through a manual workflow run.
+
+Windows signing is optional and uses `WIN_CSC_LINK` plus `WIN_CSC_KEY_PASSWORD`. Signed and notarized macOS packages require `MAC_CSC_LINK`, `MAC_CSC_KEY_PASSWORD`, `APPLE_ID`, `APPLE_APP_SPECIFIC_PASSWORD`, and `APPLE_TEAM_ID` GitHub Actions secrets. Use `dist:mac:unsigned` for local preview builds without those credentials; CI does the same instead of failing the entire three-platform build.

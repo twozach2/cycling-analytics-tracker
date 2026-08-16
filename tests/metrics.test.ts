@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { calculateReadiness, deriveRideMetrics, evaluateDecouplingEligibility, recommendRecovery } from "../lib/metrics.ts";
+import { calculateReadiness, deriveRideMetrics, elapsedHoursSince, evaluateDecouplingEligibility, recommendRecovery } from "../lib/metrics.ts";
 
 test("uses normalized power for intensity and load when available", () => {
   const metrics = deriveRideMetrics({
@@ -71,8 +71,15 @@ test("readiness combines objective load and the recovery questionnaire", () => {
     subjective: { sleepQuality: 5, legFreshness: "fresh", bodyCondition: "normal", motivation: 5 },
   });
 
-  assert.ok(readiness.score >= 85);
+  assert.equal(readiness.score, 100);
   assert.equal(readiness.label, "Ready for hard work");
+});
+
+test("readiness recovery time advances against the current clock instead of the latest ride", () => {
+  const hardRide = "2026-08-07T12:00:00.000Z";
+  assert.equal(elapsedHoursSince(hardRide, Date.parse("2026-08-09T12:00:00.000Z")), 48);
+  assert.equal(elapsedHoursSince(hardRide, Date.parse("2026-08-07T06:00:00.000Z")), 0);
+  assert.equal(elapsedHoursSince(null, Date.parse("2026-08-09T12:00:00.000Z")), 72);
 });
 
 test("a substantial pain concern caps readiness even when every other signal is strong", () => {
@@ -103,7 +110,7 @@ test("ordinary soreness affects readiness without acting as an injury override",
   assert.equal(painConcern.label, "Easy ride preferred");
 });
 
-test("decoupling eligibility rejects short, variable, stopped, and warm-up-dominated rides", () => {
+test("decoupling eligibility tiers duration while rejecting unreliable ride evidence", () => {
   const steady = {
     movingTimeSeconds: 3600,
     variabilityIndex: 1.04,
@@ -113,10 +120,82 @@ test("decoupling eligibility rejects short, variable, stopped, and warm-up-domin
     aerobicDecouplingPercent: 3.2,
     isIntervalWorkout: false,
   };
-  assert.equal(evaluateDecouplingEligibility(steady).eligible, true);
-  assert.match(evaluateDecouplingEligibility({ ...steady, movingTimeSeconds: 2400 }).reason, /45 minutes/);
+  assert.deepEqual(evaluateDecouplingEligibility(steady).confidence, "high");
+  const provisional = evaluateDecouplingEligibility({ ...steady, movingTimeSeconds: 40 * 60 });
+  assert.equal(provisional.eligible, true);
+  assert.equal(provisional.confidence, "low");
+  assert.match(provisional.reason, /Provisional/);
+  assert.equal(evaluateDecouplingEligibility({ ...steady, movingTimeSeconds: 50 * 60 }).confidence, "moderate");
+  assert.match(evaluateDecouplingEligibility({ ...steady, movingTimeSeconds: 20 * 60 }).reason, /30 minutes/);
   assert.match(evaluateDecouplingEligibility({ ...steady, variabilityIndex: 1.12 }).reason, /1\.08 VI/);
   assert.match(evaluateDecouplingEligibility({ ...steady, stoppedPercent: 8 }).reason, /Stopped time/);
   assert.match(evaluateDecouplingEligibility({ ...steady, aerobicDecouplingPercent: -11.2 }).reason, /warm-up/i);
   assert.match(evaluateDecouplingEligibility({ ...steady, isIntervalWorkout: true }).reason, /workouts/i);
+});
+
+test("illness is a readiness and recovery safety override", () => {
+  const readiness = calculateReadiness({
+    hoursSinceLastHardRide: 72,
+    acuteChronicRatio: 0.9,
+    subjective: { sleepQuality: 5, legFreshness: "fresh", bodyCondition: "illness", illnessSeverity: 5, motivation: 5 },
+  });
+  const metrics = deriveRideMetrics({ movingTimeSeconds: 3600, averagePowerWatts: 110, normalizedPowerWatts: 112, averageHeartRateBpm: 130, ftpWatts: 165 });
+  const recovery = recommendRecovery(metrics, 3600, 0, { bodyCondition: "illness", illnessSeverity: 5 });
+  assert.equal(readiness.score, 30);
+  assert.equal(recovery.status, "illness flag");
+  assert.match(recovery.nextSession, /withheld/i);
+});
+test("completed training today lowers remaining readiness with an auditable reason", () => {
+  const subjective = { sleepQuality: 5, legFreshness: "fresh" as const, bodyCondition: "normal" as const, motivation: 5 };
+  const before = calculateReadiness({ hoursSinceLastHardRide: 72, acuteChronicRatio: 0.9, subjective });
+  const after = calculateReadiness({
+    hoursSinceLastHardRide: 0,
+    acuteChronicRatio: 0.9,
+    subjective,
+    todayTrainingLoad: 81,
+    todayIntensityFactor: 0.885,
+    todayMovingTimeSeconds: 3723,
+  });
+
+  assert.equal(before.score, 100);
+  assert.equal(after.score, 54);
+  assert.equal(after.postRideAdjusted, true);
+  assert.match(after.adjustments[0], /81 load/);
+});
+
+test("resting heart rate makes a conservative, explainable readiness adjustment", () => {
+  const baseline = calculateReadiness({
+    hoursSinceLastHardRide: 48,
+    acuteChronicRatio: 1,
+    subjective: { sleepQuality: 4, legFreshness: "normal", bodyCondition: "normal", motivation: 4, restingHeartRate: 60 },
+    restingHeartRateBaseline: 60,
+    checkInRecorded: true,
+  });
+  const elevated = calculateReadiness({
+    hoursSinceLastHardRide: 48,
+    acuteChronicRatio: 1,
+    subjective: { sleepQuality: 4, legFreshness: "normal", bodyCondition: "normal", motivation: 4, restingHeartRate: 68 },
+    restingHeartRateBaseline: 60,
+    checkInRecorded: true,
+  });
+
+  assert.equal(elevated.score, baseline.score - 8);
+  assert.equal(elevated.restingHeartRateDelta, 8);
+  assert.equal(elevated.confidence, "high");
+  assert.match(elevated.adjustments[0], /above baseline/);
+  assert.ok(elevated.components.some((component) => component.label === "Resting heart rate"));
+});
+
+test("readiness labels missing check-in inputs and lowers confidence", () => {
+  const readiness = calculateReadiness({
+    hoursSinceLastHardRide: 48,
+    acuteChronicRatio: null,
+    subjective: {},
+    checkInRecorded: false,
+  });
+
+  assert.equal(readiness.confidence, "low");
+  assert.equal(readiness.estimated, true);
+  assert.ok(readiness.assumptions.some((assumption) => assumption.includes("check-in")));
+  assert.ok(readiness.assumptions.some((assumption) => assumption.includes("Training-load")));
 });

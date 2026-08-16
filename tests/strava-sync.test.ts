@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { classifyStravaActivity, classifyStravaRideType, ftpSnapshotForRide, isCyclingActivity, parseReadBudget, shouldRunAutomaticSync, sixMonthsBefore, syncAfterEpoch } from "../lib/strava-sync.ts";
+import { classifyRide, classifyStravaActivity, classifyStravaRideType, ftpSnapshotForRide, isCyclingActivity, parseReadBudget, RIDE_CLASSIFICATION_VERSION, shouldRunAutomaticSync, sixMonthsBefore, syncAfterEpoch } from "../lib/strava-sync.ts";
 
 test("six-month imports use a calendar-aware cutoff", () => {
   assert.equal(sixMonthsBefore(new Date("2026-08-31T12:30:00Z")).toISOString(), "2026-02-28T12:30:00.000Z");
@@ -42,11 +42,70 @@ test("Strava virtual and trainer rides are classified as indoor", () => {
 
 test("Strava rides receive useful training types instead of a fixed Free ride label", () => {
   assert.equal(classifyStravaRideType({ name: "Morning Zone 2", workoutSubtype: null, intensityFactor: 0.84 }), "Zone 2");
-  assert.equal(classifyStravaRideType({ name: "Friday aerobic benchmark", workoutSubtype: null, intensityFactor: 0.68 }), "Zone 2 benchmark");
+  assert.equal(classifyStravaRideType({ name: "Friday aerobic benchmark", workoutSubtype: null, intensityFactor: 0.68 }), "Zone 2");
   assert.equal(classifyStravaRideType({ name: "Triple Flat Loops", workoutSubtype: null, intensityFactor: 0.71 }), "Zone 2");
   assert.equal(classifyStravaRideType({ name: "R.G.V.", workoutSubtype: null, intensityFactor: 0.82 }), "Tempo");
   assert.equal(classifyStravaRideType({ name: "FTP intervals", workoutSubtype: "trainer_workout", intensityFactor: 0.86 }), "Threshold");
   assert.equal(classifyStravaRideType({ name: "Coffee ride", workoutSubtype: null, intensityFactor: null }), "Free ride");
+});
+
+test("ride classification separates training stimulus from context", () => {
+  assert.deepEqual(classifyRide({
+    name: "Friday aerobic benchmark",
+    workoutSubtype: null,
+    intensityFactor: 0.68,
+    movingTimeSeconds: 3600,
+    variabilityIndex: 1.02,
+  }), {
+    trainingType: "Zone 2",
+    context: "benchmark",
+    confidence: "high",
+    reason: "The activity name explicitly identifies a controlled Zone 2 benchmark. Context: benchmark.",
+    version: RIDE_CLASSIFICATION_VERSION,
+  });
+
+  const groupRide = classifyRide({
+    name: "Pacer Group Ride with Bernie",
+    workoutSubtype: null,
+    intensityFactor: 0.82,
+    movingTimeSeconds: 3600,
+    variabilityIndex: 1.08,
+  });
+  assert.equal(groupRide.trainingType, "Tempo");
+  assert.equal(groupRide.context, "group_ride");
+  assert.equal(groupRide.confidence, "moderate");
+  assert.match(groupRide.reason, /IF 0\.82.*VI 1\.08/);
+});
+
+test("ride classification is conservative when intent is not explicit", () => {
+  const variableRide = classifyRide({
+    name: "Unstructured hills",
+    workoutSubtype: null,
+    intensityFactor: 0.7,
+    movingTimeSeconds: 5400,
+    variabilityIndex: 1.2,
+  });
+  assert.equal(variableRide.trainingType, "Zone 2");
+  assert.equal(variableRide.context, "ordinary");
+  assert.equal(variableRide.confidence, "low");
+
+  const race = classifyRide({
+    name: "Zwift Race",
+    workoutSubtype: "race",
+    intensityFactor: 0.84,
+    variabilityIndex: 1.18,
+  });
+  assert.equal(race.trainingType, "Tempo");
+  assert.equal(race.context, "race");
+  assert.equal(race.confidence, "low");
+
+  assert.equal(
+    classifyRide({ name: "VO2 workout 5x3", workoutSubtype: "trainer_workout", intensityFactor: 0.93 }).trainingType,
+    "VO2",
+  );
+  assert.equal(classifyRide({ name: "Sweet Spot 3x12", workoutSubtype: "trainer_workout", intensityFactor: 0.9 }).trainingType, "Sweet Spot");
+  assert.equal(classifyRide({ name: "Sweet Spot 3x12", workoutSubtype: null, intensityFactor: 0.9 }).context, "structured_workout");
+  assert.equal(classifyRide({ name: "Hard ride", workoutSubtype: null, intensityFactor: 1.05 }).trainingType, "Threshold");
 });
 
 test("FTP snapshots use dated history and never fall forward to today's FTP", () => {

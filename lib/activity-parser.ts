@@ -1,3 +1,6 @@
+import { deriveHeartRateZones, type HeartRateZoneDistribution } from "./heart-rate";
+import { countActivitySampleRecords, type StreamRecordCounts } from "./stream-counts";
+
 export type DetectedActivity = {
   name: string;
   startedAt: string;
@@ -12,6 +15,7 @@ export type DetectedActivity = {
   averagePower: number | null;
   maximumPower: number | null;
   normalizedPower: number | null;
+  normalizedPowerSource: "recorded" | "computed" | "unavailable";
   sourceTrainingLoad: number | null;
   aerobicDecouplingPercent: number | null;
   pairedSampleCount: number;
@@ -24,8 +28,10 @@ export type DetectedActivity = {
   cadenceHighPercent: number | null;
   first15HeartRate: number | null;
   final15HeartRate: number | null;
+  heartRateZones: HeartRateZoneDistribution | null;
   powerDuration: Array<{ durationSeconds: number; bestPowerWatts: number }>;
   sampleCount: number;
+  streamSampleCounts: StreamRecordCounts;
   environment: "virtual" | "indoor" | "outdoor";
   workoutSubtype: "trainer_workout" | "race" | null;
   warnings: string[];
@@ -41,6 +47,23 @@ export type ActivitySample = {
   power: number | null;
   distance: number | null;
 };
+
+export const POWER_DURATION_TARGETS_SECONDS = [
+  5,
+  15,
+  30,
+  60,
+  120,
+  300,
+  480,
+  600,
+  900,
+  1200,
+  1800,
+  2700,
+  3600,
+  5400,
+] as const;
 
 const numberOrNull = (value: string | null | undefined) => {
   if (!value) return null;
@@ -70,7 +93,61 @@ const round = (value: number, digits = 1) => {
   return Math.round(value * scale) / scale;
 };
 
-export function deriveStreamMetrics(samples: ActivitySample[]) {
+const NORMALIZED_POWER_WINDOW_SECONDS = 30;
+
+function derivePowerStatistics(samples: ActivitySample[]) {
+  const segments = continuousPowerSegments(normalizePowerSamples(samples));
+  let totalPower = 0;
+  let totalSeconds = 0;
+  let fourthPowerTotal = 0;
+  let rollingWindowCount = 0;
+
+  for (const segment of segments) {
+    const startTime = segment[0].time;
+    const endTime = segment.at(-1)!.time;
+    if (endTime <= startTime) continue;
+    let sampleIndex = 0;
+    let currentPower = Math.max(0, segment[0].power);
+    const rollingPower: number[] = [];
+    let rollingTotal = 0;
+
+    // Resample continuous power at one-second intervals. Holding the most recent
+    // sample preserves lower-frequency recordings without bridging pauses or
+    // device dropouts, which continuousPowerSegments has already separated.
+    for (let time = startTime; time < endTime; time += 1000) {
+      while (sampleIndex + 1 < segment.length && segment[sampleIndex + 1].time <= time) {
+        sampleIndex += 1;
+        currentPower = Math.max(0, segment[sampleIndex].power);
+      }
+      totalPower += currentPower;
+      totalSeconds += 1;
+      rollingPower.push(currentPower);
+      rollingTotal += currentPower;
+      if (rollingPower.length > NORMALIZED_POWER_WINDOW_SECONDS) rollingTotal -= rollingPower.shift()!;
+      if (rollingPower.length === NORMALIZED_POWER_WINDOW_SECONDS) {
+        fourthPowerTotal += (rollingTotal / NORMALIZED_POWER_WINDOW_SECONDS) ** 4;
+        rollingWindowCount += 1;
+      }
+    }
+  }
+
+  const fallbackPower = samples
+    .map((sample) => sample.power)
+    .filter((value): value is number => value !== null && value >= 0 && Number.isFinite(value));
+  const averagePower = totalSeconds
+    ? round(totalPower / totalSeconds)
+    : fallbackPower.length
+      ? round(fallbackPower.reduce((sum, value) => sum + value, 0) / fallbackPower.length)
+      : null;
+  const normalizedPower = rollingWindowCount ? round((fourthPowerTotal / rollingWindowCount) ** 0.25) : null;
+  const variabilityIndex = normalizedPower !== null && averagePower !== null && averagePower > 0
+    ? round(normalizedPower / averagePower, 3)
+    : null;
+  return { averagePower, normalizedPower, variabilityIndex };
+}
+
+export function deriveStreamMetrics(samples: ActivitySample[], lthrBpm?: number | null) {
+  const power = derivePowerStatistics(samples);
   const cadence = samples.map((sample) => sample.cadence).filter((value): value is number => value !== null && value > 0);
   const cadenceMean = cadence.length ? cadence.reduce((sum, value) => sum + value, 0) / cadence.length : null;
   const cadenceStddev = cadenceMean === null ? null : Math.sqrt(cadence.reduce((sum, value) => sum + ((value - cadenceMean) ** 2), 0) / cadence.length);
@@ -121,6 +198,7 @@ export function deriveStreamMetrics(samples: ActivitySample[]) {
   const final15HeartRate = lastTime === null ? null : average(timedHeartRate.filter((sample) => sample.time! >= lastTime - (15 * 60 * 1000)).map((sample) => sample.heartRate));
 
   return {
+    ...power,
     aerobicDecouplingPercent,
     pairedSampleCount: paired.length,
     pairedCoveragePercent: samples.length ? round((paired.length / samples.length) * 100) : 0,
@@ -131,30 +209,111 @@ export function deriveStreamMetrics(samples: ActivitySample[]) {
     cadenceHighPercent: cadencePercent((value) => value > 100),
     first15HeartRate: first15HeartRate === null ? null : round(first15HeartRate),
     final15HeartRate: final15HeartRate === null ? null : round(final15HeartRate),
+    heartRateZones: deriveHeartRateZones(samples.map((sample) => sample.heartRate), lthrBpm),
   };
 }
 
-export function derivePowerDuration(samples: ActivitySample[]) {
-  const powerSamples = samples
-    .filter((sample): sample is ActivitySample & { time: number; power: number } => sample.time !== null && sample.power !== null && sample.power >= 0)
-    .sort((a, b) => a.time - b.time);
-  if (powerSamples.length < 2) return [];
-  const targets = [5, 15, 30, 60, 120, 300, 480, 1200, 1800, 2700, 3600];
+type TimedPowerSample = { time: number; power: number };
 
-  return targets.flatMap((durationSeconds) => {
-    const targetMs = durationSeconds * 1000;
-    let left = 0;
-    let sum = 0;
-    let best = 0;
-    for (let right = 0; right < powerSamples.length; right += 1) {
-      sum += powerSamples[right].power;
-      while (left + 1 < right && powerSamples[right].time - powerSamples[left + 1].time >= targetMs) {
-        sum -= powerSamples[left].power;
-        left += 1;
-      }
-      const span = powerSamples[right].time - powerSamples[left].time;
-      if (span >= targetMs * 0.95) best = Math.max(best, sum / (right - left + 1));
+function normalizePowerSamples(samples: ActivitySample[]) {
+  const duplicateBuckets = new Map<number, { total: number; count: number }>();
+  for (const sample of samples) {
+    if (sample.time === null || sample.power === null || sample.power < 0 || !Number.isFinite(sample.time) || !Number.isFinite(sample.power)) continue;
+    const bucket = duplicateBuckets.get(sample.time) ?? { total: 0, count: 0 };
+    bucket.total += sample.power;
+    bucket.count += 1;
+    duplicateBuckets.set(sample.time, bucket);
+  }
+  return Array.from(duplicateBuckets, ([time, bucket]) => ({ time, power: bucket.total / bucket.count }))
+    .sort((a, b) => a.time - b.time);
+}
+
+function medianPositiveDelta(samples: TimedPowerSample[]) {
+  const deltas = samples.slice(1)
+    .map((sample, index) => sample.time - samples[index].time)
+    .filter((delta) => delta > 0)
+    .sort((a, b) => a - b);
+  if (!deltas.length) return null;
+  const midpoint = Math.floor(deltas.length / 2);
+  return deltas.length % 2 === 0 ? (deltas[midpoint - 1] + deltas[midpoint]) / 2 : deltas[midpoint];
+}
+
+function continuousPowerSegments(samples: TimedPowerSample[]) {
+  if (samples.length < 2) return [];
+  const typicalIntervalMs = medianPositiveDelta(samples) ?? 1000;
+  // Preserve legitimate lower-frequency recordings while refusing to bridge pauses,
+  // auto-pause gaps, or trainer dropouts into a fictitious continuous effort.
+  const maximumGapMs = Math.max(3000, Math.min(15_000, typicalIntervalMs * 3));
+  const segments: TimedPowerSample[][] = [];
+  let current: TimedPowerSample[] = [samples[0]];
+  for (let index = 1; index < samples.length; index += 1) {
+    if (samples[index].time - samples[index - 1].time > maximumGapMs) {
+      if (current.length >= 2) segments.push(current);
+      current = [];
     }
+    current.push(samples[index]);
+  }
+  if (current.length >= 2) segments.push(current);
+  return segments;
+}
+
+type PowerIntegral = {
+  samples: TimedPowerSample[];
+  cumulativeWattMilliseconds: number[];
+  startTime: number;
+  endTime: number;
+};
+
+function buildPowerIntegral(samples: TimedPowerSample[]): PowerIntegral {
+  const cumulativeWattMilliseconds = [0];
+  for (let index = 1; index < samples.length; index += 1) {
+    const elapsedMs = samples[index].time - samples[index - 1].time;
+    cumulativeWattMilliseconds[index] = cumulativeWattMilliseconds[index - 1] + (samples[index - 1].power * elapsedMs);
+  }
+  return {
+    samples,
+    cumulativeWattMilliseconds,
+    startTime: samples[0].time,
+    endTime: samples.at(-1)!.time,
+  };
+}
+
+function powerIntegralAt(segment: PowerIntegral, time: number) {
+  if (time <= segment.startTime) return 0;
+  if (time >= segment.endTime) return segment.cumulativeWattMilliseconds.at(-1)!;
+  let low = 0;
+  let high = segment.samples.length - 1;
+  while (low + 1 < high) {
+    const midpoint = Math.floor((low + high) / 2);
+    if (segment.samples[midpoint].time <= time) low = midpoint;
+    else high = midpoint;
+  }
+  return segment.cumulativeWattMilliseconds[low] + (segment.samples[low].power * (time - segment.samples[low].time));
+}
+
+function bestPowerForDuration(segment: PowerIntegral, durationMs: number) {
+  const latestStart = segment.endTime - durationMs;
+  if (latestStart < segment.startTime) return 0;
+  const candidateStarts = new Set<number>([segment.startTime, latestStart]);
+  for (const sample of segment.samples) {
+    if (sample.time >= segment.startTime && sample.time <= latestStart) candidateStarts.add(sample.time);
+    const alignedToEnd = sample.time - durationMs;
+    if (alignedToEnd >= segment.startTime && alignedToEnd <= latestStart) candidateStarts.add(alignedToEnd);
+  }
+  let best = 0;
+  for (const start of candidateStarts) {
+    const work = powerIntegralAt(segment, start + durationMs) - powerIntegralAt(segment, start);
+    best = Math.max(best, work / durationMs);
+  }
+  return best;
+}
+
+export function derivePowerDuration(samples: ActivitySample[]) {
+  const segments = continuousPowerSegments(normalizePowerSamples(samples)).map(buildPowerIntegral);
+  if (!segments.length) return [];
+  return POWER_DURATION_TARGETS_SECONDS.flatMap((durationSeconds) => {
+    const durationMs = durationSeconds * 1000;
+    const best = segments.reduce((leader, segment) => Math.max(leader, bestPowerForDuration(segment, durationMs)), 0);
     return best > 0 ? [{ durationSeconds, bestPowerWatts: round(best) }] : [];
   });
 }
@@ -178,7 +337,7 @@ const haversineMeters = (a: ActivitySample, b: ActivitySample) => {
   return earthRadius * 2 * Math.atan2(Math.sqrt(h), Math.sqrt(1 - h));
 };
 
-export function parseXmlActivity(xmlText: string, filename: string): DetectedActivity {
+export function parseXmlActivity(xmlText: string, filename: string, lthrBpm?: number | null): DetectedActivity {
   const document = new DOMParser().parseFromString(xmlText, "application/xml");
   if (document.querySelector("parsererror")) throw new Error("This XML file could not be read.");
 
@@ -232,7 +391,7 @@ export function parseXmlActivity(xmlText: string, filename: string): DetectedAct
   if (!distance) warnings.push("Distance could not be detected");
 
   const fileBase = filename.replace(/\.(gpx|tcx)$/i, "").replace(/[_-]+/g, " ");
-  const streams = deriveStreamMetrics(samples);
+  const streams = deriveStreamMetrics(samples, lthrBpm);
   const virtual = /\bzwift\b/i.test(xmlText);
   return {
     name: fileBase || "Imported ride",
@@ -245,14 +404,13 @@ export function parseXmlActivity(xmlText: string, filename: string): DetectedAct
     maximumHeartRate: maximum(samples.map((sample) => sample.heartRate)),
     averageCadence: average(samples.map((sample) => sample.cadence)),
     maximumCadence: maximum(samples.map((sample) => sample.cadence)),
-    averagePower: average(samples.map((sample) => sample.power)),
     maximumPower: maximum(samples.map((sample) => sample.power)),
-    normalizedPower: null,
+    normalizedPowerSource: streams.normalizedPower === null ? "unavailable" : "computed",
     sourceTrainingLoad: null,
     ...streams,
-    variabilityIndex: null,
     powerDuration: derivePowerDuration(samples),
     sampleCount: samples.length,
+    streamSampleCounts: countActivitySampleRecords(samples),
     environment: virtual ? "virtual" : "outdoor",
     workoutSubtype: null,
     warnings,
@@ -273,7 +431,7 @@ const fitDate = (value: unknown) => {
   return null;
 };
 
-export async function parseFitActivity(buffer: ArrayBuffer, filename: string): Promise<DetectedActivity> {
+export async function parseFitActivity(buffer: ArrayBuffer, filename: string, lthrBpm?: number | null): Promise<DetectedActivity> {
   const { Decoder, Stream } = await import("@garmin/fitsdk");
   const validationStream = Stream.fromArrayBuffer(buffer);
   if (!Decoder.isFIT(validationStream)) throw new Error("This file does not contain a valid FIT header.");
@@ -327,8 +485,9 @@ export async function parseFitActivity(buffer: ArrayBuffer, filename: string): P
 
   const fileBase = filename.replace(/\.fit$/i, "").replace(/[_-]+/g, " ");
   const averagePower = fitNumber(session?.avgPower) ?? average(powerValues);
-  const normalizedPower = fitNumber(session?.normalizedPower);
-  const streams = deriveStreamMetrics(recordSamples);
+  const recordedNormalizedPower = fitNumber(session?.normalizedPower);
+  const streams = deriveStreamMetrics(recordSamples, lthrBpm);
+  const normalizedPower = recordedNormalizedPower ?? streams.normalizedPower;
   const subSport = String(session?.subSport ?? "").toLowerCase().replace(/[^a-z]/g, "");
   const virtual = subSport.includes("virtual");
   const indoor = virtual || subSport.includes("indoor");
@@ -343,23 +502,27 @@ export async function parseFitActivity(buffer: ArrayBuffer, filename: string): P
     maximumHeartRate: fitNumber(session?.maxHeartRate) ?? maximum(heartRateValues),
     averageCadence: fitNumber(session?.avgCadence) ?? average(cadenceValues),
     maximumCadence: fitNumber(session?.maxCadence) ?? maximum(cadenceValues),
-    averagePower,
     maximumPower: fitNumber(session?.maxPower) ?? maximum(powerValues),
-    normalizedPower,
     sourceTrainingLoad: fitNumber(session?.trainingStressScore),
     ...streams,
-    variabilityIndex: normalizedPower !== null && averagePower !== null && averagePower > 0 ? round(normalizedPower / averagePower, 2) : null,
+    averagePower,
+    normalizedPower,
+    normalizedPowerSource: recordedNormalizedPower !== null ? "recorded" : normalizedPower !== null ? "computed" : "unavailable",
+    variabilityIndex: normalizedPower !== null && averagePower !== null && averagePower > 0
+      ? round(normalizedPower / averagePower, 3)
+      : streams.variabilityIndex,
     powerDuration: derivePowerDuration(recordSamples),
     sampleCount: records.length,
+    streamSampleCounts: countActivitySampleRecords(recordSamples),
     environment: virtual ? "virtual" : indoor ? "indoor" : "outdoor",
     workoutSubtype: null,
     warnings,
   };
 }
 
-export async function parseActivityFile(file: File): Promise<DetectedActivity> {
+export async function parseActivityFile(file: File, lthrBpm?: number | null): Promise<DetectedActivity> {
   const extension = file.name.split(".").at(-1)?.toLowerCase();
-  if (extension === "fit") return parseFitActivity(await file.arrayBuffer(), file.name);
-  if (extension === "gpx" || extension === "tcx") return parseXmlActivity(await file.text(), file.name);
+  if (extension === "fit") return parseFitActivity(await file.arrayBuffer(), file.name, lthrBpm);
+  if (extension === "gpx" || extension === "tcx") return parseXmlActivity(await file.text(), file.name, lthrBpm);
   throw new Error("Choose an original FIT file, TCX export, or GPX activity file.");
 }

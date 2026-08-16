@@ -1,8 +1,9 @@
 {
   "compilerOptions": {
-    "target": "ES2017",
+    "target": "ES2022",
     "lib": ["dom", "dom.iterable", "esnext"],
     "allowJs": true,
+    "allowImportingTsExtensions": true,
     "skipLibCheck": true,
     "strict": true,
     "noEmit": true,
@@ -13,17 +14,11 @@
     "isolatedModules": true,
     "jsx": "react-jsx",
     "incremental": true,
+    "types": ["node"],
     "paths": {
       "@/*": ["./*"]
     }
   },
-  "include": [
-    "next-env.d.ts",
-    "**/*.ts",
-    "**/*.tsx",
-    ".next/types/**/*.ts",
-    ".next/dev/types/**/*.ts",
-    "**/*.mts"
-  ],
-  "exclude": ["node_modules"]
+  "include": ["app/**/*.ts", "app/**/*.tsx", "db/**/*.ts", "electron/**/*.ts", "lib/**/*.ts", "server/**/*.ts", "src/**/*.tsx", "tests/**/*.ts", "vite.config.ts", "drizzle.config.ts"],
+  "exclude": ["node_modules", "dist", "dist-electron", ".next", ".vinext", "build", "worker"]
 }

@@ -1,7 +1,7 @@
 {
   "version": "6",
   "dialect": "sqlite",
-  "id": "443a8942-5589-4982-b6b4-1b28f163a3fd",
+  "id": "5abfc6c4-20d4-4edb-a7d1-1eb4d18dd884",
   "prevId": "cb54f5fe-2bdb-4978-854f-ee287b00843b",
   "tables": {
     "activity_streams": {
@@ -112,20 +112,6 @@
         },
         "display_name": {
           "name": "display_name",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false,
-          "autoincrement": false
-        },
-        "access_token": {
-          "name": "access_token",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false,
-          "autoincrement": false
-        },
-        "refresh_token": {
-          "name": "refresh_token",
           "type": "text",
           "primaryKey": false,
           "notNull": false,
@@ -474,27 +460,6 @@
         },
         "knee_pain": {
           "name": "knee_pain",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": false,
-          "autoincrement": false
-        },
-        "body_condition": {
-          "name": "body_condition",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false,
-          "autoincrement": false
-        },
-        "pain_location": {
-          "name": "pain_location",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false,
-          "autoincrement": false
-        },
-        "pain_severity": {
-          "name": "pain_severity",
           "type": "integer",
           "primaryKey": false,
           "notNull": false,

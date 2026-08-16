@@ -1,5 +1,127 @@
 export type PowerBest = { durationSeconds: number; bestPowerWatts: number };
 
+export const POWER_RECORDS_ALGORITHM_VERSION = "power-duration-v2";
+
+export type PowerDurationEffort = PowerBest & {
+  rideId: string;
+  rideName: string;
+  startedAt: string;
+};
+
+export type PowerRecordEffort = {
+  rideId: string;
+  rideName: string;
+  startedAt: string;
+  bestPowerWatts: number;
+};
+
+export type PowerDurationRecord = {
+  durationSeconds: number;
+  label: string;
+  allTime: PowerRecordEffort;
+  previousRecord: PowerRecordEffort | null;
+  best30Days: PowerRecordEffort | null;
+  best90Days: PowerRecordEffort | null;
+  improvementWatts: number | null;
+  improvementPercent: number | null;
+  effortCount: number;
+  recordCount: number;
+};
+
+export type PowerRecordTimelineEvent = {
+  durationSeconds: number;
+  label: string;
+  effort: PowerRecordEffort;
+  previousPowerWatts: number | null;
+  improvementWatts: number | null;
+  improvementPercent: number | null;
+};
+
+export type PowerRecordHistory = {
+  algorithmVersion: typeof POWER_RECORDS_ALGORITHM_VERSION;
+  records: PowerDurationRecord[];
+  timeline: PowerRecordTimelineEvent[];
+};
+
+export function powerDurationLabel(durationSeconds: number) {
+  if (durationSeconds < 60) return `${durationSeconds}s`;
+  if (durationSeconds % 3600 === 0) return `${durationSeconds / 3600}h`;
+  return `${durationSeconds / 60}m`;
+}
+
+function recordEffort(effort: PowerDurationEffort): PowerRecordEffort {
+  return {
+    rideId: effort.rideId,
+    rideName: effort.rideName,
+    startedAt: effort.startedAt,
+    bestPowerWatts: Math.round(effort.bestPowerWatts * 10) / 10,
+  };
+}
+
+function bestEffort(efforts: PowerDurationEffort[]) {
+  return efforts.reduce((leader, effort) => {
+    if (!leader || effort.bestPowerWatts > leader.bestPowerWatts) return effort;
+    if (effort.bestPowerWatts === leader.bestPowerWatts && Date.parse(effort.startedAt) > Date.parse(leader.startedAt)) return effort;
+    return leader;
+  }, null as PowerDurationEffort | null);
+}
+
+export function buildPowerRecordHistory(efforts: PowerDurationEffort[], anchorTime = Date.now()): PowerRecordHistory {
+  const valid = efforts.filter((effort) => (
+    effort.rideId.length > 0
+    && effort.rideName.length > 0
+    && Number.isFinite(Date.parse(effort.startedAt))
+    && Number.isFinite(effort.durationSeconds)
+    && effort.durationSeconds > 0
+    && Number.isFinite(effort.bestPowerWatts)
+    && effort.bestPowerWatts > 0
+  ));
+  const grouped = new Map<number, PowerDurationEffort[]>();
+  for (const effort of valid) grouped.set(effort.durationSeconds, [...(grouped.get(effort.durationSeconds) ?? []), effort]);
+  const timeline: PowerRecordTimelineEvent[] = [];
+  const records = Array.from(grouped, ([durationSeconds, durationEfforts]) => {
+    const chronological = durationEfforts.sort((a, b) => Date.parse(a.startedAt) - Date.parse(b.startedAt) || a.rideId.localeCompare(b.rideId));
+    const recordBreakers: PowerDurationEffort[] = [];
+    for (const effort of chronological) {
+      const leader = recordBreakers.at(-1);
+      if (!leader || effort.bestPowerWatts > leader.bestPowerWatts) {
+        const previousPowerWatts = leader?.bestPowerWatts ?? null;
+        timeline.push({
+          durationSeconds,
+          label: powerDurationLabel(durationSeconds),
+          effort: recordEffort(effort),
+          previousPowerWatts,
+          improvementWatts: previousPowerWatts === null ? null : Math.round((effort.bestPowerWatts - previousPowerWatts) * 10) / 10,
+          improvementPercent: previousPowerWatts === null ? null : Math.round(((effort.bestPowerWatts - previousPowerWatts) / previousPowerWatts) * 1000) / 10,
+        });
+        recordBreakers.push(effort);
+      }
+    }
+    const allTime = recordBreakers.at(-1)!;
+    const previousRecord = recordBreakers.at(-2) ?? null;
+    const inWindow = (days: number) => chronological.filter((effort) => {
+      const timestamp = Date.parse(effort.startedAt);
+      return timestamp <= anchorTime && timestamp >= anchorTime - (days * 24 * 60 * 60 * 1000);
+    });
+    const best30Days = bestEffort(inWindow(30));
+    const best90Days = bestEffort(inWindow(90));
+    return {
+      durationSeconds,
+      label: powerDurationLabel(durationSeconds),
+      allTime: recordEffort(allTime),
+      previousRecord: previousRecord ? recordEffort(previousRecord) : null,
+      best30Days: best30Days ? recordEffort(best30Days) : null,
+      best90Days: best90Days ? recordEffort(best90Days) : null,
+      improvementWatts: previousRecord === null ? null : Math.round((allTime.bestPowerWatts - previousRecord.bestPowerWatts) * 10) / 10,
+      improvementPercent: previousRecord === null ? null : Math.round(((allTime.bestPowerWatts - previousRecord.bestPowerWatts) / previousRecord.bestPowerWatts) * 1000) / 10,
+      effortCount: chronological.length,
+      recordCount: recordBreakers.length,
+    };
+  }).sort((a, b) => a.durationSeconds - b.durationSeconds);
+  timeline.sort((a, b) => Date.parse(b.effort.startedAt) - Date.parse(a.effort.startedAt) || a.durationSeconds - b.durationSeconds);
+  return { algorithmVersion: POWER_RECORDS_ALGORITHM_VERSION, records, timeline };
+}
+
 export type CyclingVo2Effort = {
   startedAt: string;
   fiveMinutePowerWatts: number;
