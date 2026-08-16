@@ -26,6 +26,7 @@ import { AUTOMATIC_SYNC_INTERVAL_MS, classifyRide, type ClassificationConfidence
 import { buildCyclingMarkdown, cyclingMarkdownFilename, cyclingRideMarkdownFilename } from "@/lib/markdown-export";
 import { buildTrainingLoadModel, describeTrainingLoad } from "@/lib/training-load";
 import { buildRideIntentionZwo, rideIntentionZwoFilename } from "@/lib/ride-intentions";
+import { RIDE_IDEA_VERSION, sameRideIdea, type RideIdeaSelection, type SavedRideIdea } from "@/lib/ride-ideas";
 import type { OutdoorRouteAvailability } from "@/lib/outdoor-routes";
 import { recommendZwiftRoutes, ROUTE_INTENSITY_BANDS, ZWIFT_ROUTE_COUNT, ZWIFT_WORLDS } from "@/lib/zwift-routes";
 import type { ZwiftRotation } from "@/lib/zwift-world-rotation";
@@ -2168,6 +2169,8 @@ function PlanToday({ rides, recovery, setRecovery, recoverySaveState, saveRecove
   const [worldRotation, setWorldRotation] = useState<ZwiftRotation | null>(null);
   const [routeSurface, setRouteSurface] = useState<"indoor" | "outdoor">("indoor");
   const [outdoorRouteAvailability, setOutdoorRouteAvailability] = useState<OutdoorRouteAvailability | null>(null);
+  const [savedRideIdea, setSavedRideIdea] = useState<SavedRideIdea | null>(null);
+  const [rideIdeaSaveState, setRideIdeaSaveState] = useState<"idle" | "loading" | "working" | "success" | "error">("loading");
   const [routeShuffleIndex, setRouteShuffleIndex] = useState(0);
   const [recentRouteIds, setRecentRouteIds] = useState<string[]>([]);
   const [planStartDate, setPlanStartDate] = useState(localDateKey);
@@ -2238,6 +2241,24 @@ function PlanToday({ rides, recovery, setRecovery, recoverySaveState, saveRecove
       });
     return () => { active = false; };
   }, []);
+
+  useEffect(() => {
+    let active = true;
+    void requestJson<{ rideIdea: SavedRideIdea | null }>(`/api/ride-ideas?date=${encodeURIComponent(planStartDate)}`, { cache: "no-store" }, "Saved ride idea could not be loaded.")
+      .then(({ rideIdea }) => {
+        if (!active) return;
+        setSavedRideIdea(rideIdea);
+        if (rideIdea) {
+          setRouteSurface(rideIdea.setting);
+          setSelectedRouteId(rideIdea.route.id);
+        }
+        setRideIdeaSaveState("idle");
+      })
+      .catch(() => {
+        if (active) setRideIdeaSaveState("error");
+      });
+    return () => { active = false; };
+  }, [planStartDate]);
 
   useEffect(() => {
     const updateCalendarDay = () => setPlanStartDate(localDateKey());
@@ -2447,7 +2468,28 @@ function PlanToday({ rides, recovery, setRecovery, recoverySaveState, saveRecove
   const selectedRoute = routeSuite.find((suggestion) => suggestion.route.id === selectedRouteId)
     ?? routeSuite.find((suggestion) => suggestion.recommended)
     ?? routeSuite[0];
+  const currentRideIdeaSelection: RideIdeaSelection = {
+    version: RIDE_IDEA_VERSION,
+    dateIso: planStartDate,
+    setting: "indoor",
+    route: {
+      id: selectedRoute.route.id,
+      name: selectedRoute.route.name,
+      provider: "zwift",
+      details: {
+        world: selectedRoute.route.world,
+        distanceMiles: selectedRoute.route.distanceMiles,
+        elevationFeet: selectedRoute.route.elevationFeet,
+        profile: selectedRoute.route.profile,
+        estimatedMinimumMinutes: selectedRoute.estimatedMinimumMinutes,
+        estimatedMaximumMinutes: selectedRoute.estimatedMaximumMinutes,
+      },
+    },
+    intention: selectedRoute.intention,
+    thresholds: { ftpWatts: currentFtp, weightKg: currentWeightKg, lthrBpm: currentLthr },
+  };
   const weeklyPlan = coach.weeklyPlan;
+  const currentRideIdeaIsSaved = sameRideIdea(savedRideIdea, currentRideIdeaSelection);
   const prediction = insights?.prediction;
   const projectedFromFtp = prediction?.midpointWatts ?? currentFtp;
   const projection = projectFtpGoal(projectedFromFtp, goalTarget, referenceDate.toISOString());
@@ -2484,6 +2526,27 @@ function PlanToday({ rides, recovery, setRecovery, recoverySaveState, saveRecove
       setActionMessage(error instanceof Error ? error.message : "The workout could not be exported.");
     }
   };
+
+  const saveSelectedRideIdea = async () => {
+    setRideIdeaSaveState("working");
+    setActionMessage("");
+    try {
+      const payload = await requestJson<{ rideIdea: SavedRideIdea }>("/api/ride-ideas", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(currentRideIdeaSelection),
+      }, "Today’s ride idea could not be saved.");
+      setSavedRideIdea(payload.rideIdea);
+      setRideIdeaSaveState("success");
+      setActionState("success");
+      setActionMessage(`${payload.rideIdea.route.name} saved as today’s ride idea`);
+    } catch (error) {
+      setRideIdeaSaveState("error");
+      setActionState("error");
+      setActionMessage(error instanceof Error ? error.message : "Today’s ride idea could not be saved.");
+    }
+  };
+
 
   return (
     <div className="phase-three-layout">
@@ -2538,6 +2601,11 @@ function PlanToday({ rides, recovery, setRecovery, recoverySaveState, saveRecove
           <div><span className="eyebrow">Route ideas for today</span><h2>Choose what makes you want to ride</h2><p>Each route includes a flexible focus, terrain cues, and an optional stretch idea. Change the effort, shorten the route, or ignore the numbers whenever that makes the ride better.</p></div>
           <div className="route-surface-controls"><div className="route-surface-toggle" role="group" aria-label="Route setting"><button type="button" className={routeSurface === "indoor" ? "active" : ""} aria-pressed={routeSurface === "indoor"} onClick={() => setRouteSurface("indoor")}>Indoor</button><button type="button" className={routeSurface === "outdoor" ? "active" : ""} aria-pressed={routeSurface === "outdoor"} onClick={() => setRouteSurface("outdoor")}>Outdoor</button></div><span className={`small-badge ${workout.mode === "rest" ? "paused" : ""}`}>{workout.mode === "rest" ? "paused by rest guardrail" : "30 · 60 · 90 min"}</span></div>
         </div>
+        {savedRideIdea && <div className="saved-ride-idea" aria-live="polite">
+          <span><small>Saved for {savedRideIdea.dateIso === localDateKey() ? "today" : savedRideIdea.dateIso}</small><strong>{savedRideIdea.route.name} · {savedRideIdea.intention.title}</strong><em>{savedRideIdea.intention.duration.targetMinutes} min idea · {savedRideIdea.intention.power.lowWatts}–{savedRideIdea.intention.power.highWatts} W guide</em></span>
+          <span><small>{savedRideIdea.intention.evidence.confidence} confidence</small><strong>{savedRideIdea.setting === "indoor" ? "Indoor" : "Outdoor"} · {savedRideIdea.status}</strong><em>Thresholds frozen at {savedRideIdea.thresholds.ftpWatts} W FTP{savedRideIdea.thresholds.lthrBpm ? ` · ${savedRideIdea.thresholds.lthrBpm} bpm LTHR` : ""}</em></span>
+        </div>}
+
 
         <div className="route-indoor-content" hidden={routeSurface !== "indoor"}>
         <div className="route-deck" aria-live="polite">
@@ -2603,7 +2671,7 @@ function PlanToday({ rides, recovery, setRecovery, recoverySaveState, saveRecove
 
         <div className="route-suite-footer">
           <span>{workout.mode === "rest" ? "Rest is a useful option today; these routes will still be here later." : <><strong>Your current idea:</strong> {selectedRoute.route.name} · {selectedRoute.focus} · {selectedRoute.estimatedMinimumMinutes}–{selectedRoute.estimatedMaximumMinutes} min</>}</span>
-          <span className="route-source-links"><button type="button" className="route-export" disabled={selectedRoute.intention.disabled} onClick={downloadSelectedWorkout}>Download optional .ZWO</button><a href="https://support.zwift.com/zwift-worlds-and-cycling-routes-rk3PMBUht" target="_blank" rel="noreferrer">Official route details ↗</a><a href={worldRotation?.sourceUrl ?? "https://zwiftinsider.com/schedule/"} target="_blank" rel="noreferrer">World calendar ↗</a></span>
+          <span className="route-source-links"><button type="button" className="route-save" disabled={selectedRoute.intention.disabled || rideIdeaSaveState === "working" || currentRideIdeaIsSaved} onClick={() => void saveSelectedRideIdea()}>{rideIdeaSaveState === "working" ? "Saving…" : currentRideIdeaIsSaved ? "Saved for today" : savedRideIdea ? "Replace saved idea" : "Save today’s idea"}</button><button type="button" className="route-export" disabled={selectedRoute.intention.disabled} onClick={downloadSelectedWorkout}>Download optional .ZWO</button><a href="https://support.zwift.com/zwift-worlds-and-cycling-routes-rk3PMBUht" target="_blank" rel="noreferrer">Official route details ↗</a><a href={worldRotation?.sourceUrl ?? "https://zwiftinsider.com/schedule/"} target="_blank" rel="noreferrer">World calendar ↗</a></span>
         </div>
         </div>
 

@@ -275,3 +275,36 @@ export const recoveryRecommendations = sqliteTable("recovery_recommendations", {
   algorithmVersion: text("algorithm_version").notNull().default("phase1.1"),
   createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
 });
+
+export const rideIdeas = sqliteTable(
+  "ride_ideas",
+  {
+    id: text("id").primaryKey(),
+    riderId: text("rider_id").notNull().references(() => riders.id, { onDelete: "cascade" }),
+    version: text("version").notNull(),
+    dateIso: text("date_iso").notNull(),
+    status: text("status", { enum: ["selected", "completed", "replaced", "dismissed"] }).notNull().default("selected"),
+    setting: text("setting", { enum: ["indoor", "outdoor"] }).notNull(),
+    routeId: text("route_id").notNull(),
+    routeName: text("route_name").notNull(),
+    routeProvider: text("route_provider", { enum: ["zwift", "brouter"] }).notNull(),
+    routeDetailsJson: text("route_details_json").notNull().default("{}"),
+    intentionVersion: text("intention_version").notNull(),
+    intentionMode: text("intention_mode", { enum: ["rest", "recovery", "endurance", "tempo"] }).notNull(),
+    commitmentMinutes: integer("commitment_minutes").notNull(),
+    intentionJson: text("intention_json").notNull(),
+    ftpWatts: integer("ftp_watts").notNull(),
+    weightKg: real("weight_kg").notNull(),
+    lthrBpm: integer("lthr_bpm"),
+    confidence: text("confidence", { enum: ["low", "moderate", "high"] }).notNull(),
+    evidenceRationale: text("evidence_rationale").notNull(),
+    completedRideId: text("completed_ride_id").references(() => rides.id, { onDelete: "set null" }),
+    createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+    updatedAt: text("updated_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+  },
+  (table) => [
+    uniqueIndex("idx_ride_ideas_rider_date").on(table.riderId, table.dateIso),
+    index("idx_ride_ideas_rider_status_date").on(table.riderId, table.status, table.dateIso),
+    index("idx_ride_ideas_completed_ride").on(table.completedRideId),
+  ],
+);

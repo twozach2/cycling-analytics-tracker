@@ -10,6 +10,7 @@ import * as stravaStartRoute from "../app/api/integrations/strava/start/route";
 import * as stravaSyncRoute from "../app/api/integrations/strava/sync/route";
 import * as phaseThreeRoute from "../app/api/phase3/route";
 import * as recoveryRoute from "../app/api/recovery/route";
+import * as rideIdeasRoute from "../app/api/ride-ideas/route";
 import * as ridesRoute from "../app/api/rides/route";
 import * as zwiftWorldsRoute from "../app/api/zwift/worlds/route";
 import * as outdoorRoutesRoute from "./routes/outdoor-routes";
@@ -62,6 +63,8 @@ export function createApp() {
   app.patch("/api/rides", handle(ridesRoute.PATCH));
   app.get("/api/recovery", handle(recoveryRoute.GET));
   app.post("/api/recovery", handle(recoveryRoute.POST));
+  app.get("/api/ride-ideas", handle(rideIdeasRoute.GET));
+  app.post("/api/ride-ideas", handle(rideIdeasRoute.POST));
   app.post("/api/import", handle(importRoute.POST));
   app.get("/api/phase3", handle(phaseThreeRoute.GET));
   app.post("/api/phase3", handle(phaseThreeRoute.POST));

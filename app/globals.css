@@ -834,6 +834,14 @@ blockquote { margin: 16px 0 0; padding: 14px 16px; border-left: 3px solid var(--
 .outdoor-route-facts { display: grid; width: 100%; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 9px; }
 .outdoor-route-facts span { display: flex; flex-direction: column; gap: 5px; padding: 13px; border: 1px solid var(--line); border-radius: 7px; background: var(--panel-glass); } .outdoor-route-facts strong { font-size: 11px; } .outdoor-route-facts small { color: var(--muted); font-size: 8px; line-height: 1.45; }
 .route-export { min-height: 32px; padding: 0 10px; border: 1px solid var(--action); border-radius: 5px; background: var(--action); color: var(--action-text); font: 700 8px/1 var(--font-data); letter-spacing: .04em; text-transform: uppercase; cursor: pointer; }
+.saved-ride-idea { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 9px; margin-bottom: 14px; padding: 11px; border: 1px solid var(--action); border-radius: 8px; background: var(--panel-glass); }
+.saved-ride-idea > span { display: flex; min-width: 0; flex-direction: column; gap: 5px; padding: 8px; }
+.saved-ride-idea small { color: var(--muted); font: 700 7px/1 var(--font-data); letter-spacing: .06em; text-transform: uppercase; }
+.saved-ride-idea strong { font-size: 12px; line-height: 1.25; }
+.saved-ride-idea em { color: var(--muted); font-size: 8px; font-style: normal; line-height: 1.45; }
+.route-save { min-height: 32px; padding: 0 10px; border: 1px solid var(--ink); border-radius: 5px; background: var(--ink); color: var(--paper); font: 700 8px/1 var(--font-data); letter-spacing: .04em; text-transform: uppercase; cursor: pointer; }
+.route-save:hover:not(:disabled) { filter: brightness(1.15); }
+.route-save:disabled { cursor: default; opacity: .55; }
 .route-export:hover:not(:disabled) { filter: brightness(.94); }
 .route-export:focus-visible { outline: 3px solid rgba(184, 255, 56, .7); outline-offset: 2px; }
 .route-export:disabled { cursor: not-allowed; opacity: .5; }
@@ -1065,6 +1073,7 @@ blockquote { margin: 16px 0 0; padding: 14px 16px; border-left: 3px solid var(--
   .cadence-ride-summary > div { padding-right: 0; padding-left: 0; border-top: 1px solid var(--line); border-left: 0; }
   .route-surface-controls { width: 100%; align-items: flex-start; }
   .outdoor-route-facts { grid-template-columns: 1fr; }
+  .saved-ride-idea { grid-template-columns: 1fr; }
   .vo2-summary > div:first-child { border-top: 0; }
   .week-grid { grid-template-columns: 1fr; }
   .week-grid article { min-height: 105px; }
