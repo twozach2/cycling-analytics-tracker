@@ -25,6 +25,7 @@ import { projectFtpGoal } from "@/lib/phase3";
 import { AUTOMATIC_SYNC_INTERVAL_MS, classifyRide, type ClassificationConfidence, type RideContext, type RideTrainingType } from "@/lib/strava-sync";
 import { buildCyclingMarkdown, cyclingMarkdownFilename, cyclingRideMarkdownFilename } from "@/lib/markdown-export";
 import { buildTrainingLoadModel, describeTrainingLoad } from "@/lib/training-load";
+import { buildRideIntentionZwo, rideIntentionZwoFilename } from "@/lib/ride-intentions";
 import { recommendZwiftRoutes, ROUTE_INTENSITY_BANDS, ZWIFT_ROUTE_COUNT, ZWIFT_WORLDS } from "@/lib/zwift-routes";
 import type { ZwiftRotation } from "@/lib/zwift-world-rotation";
 
@@ -2413,7 +2414,17 @@ function PlanToday({ rides, recovery, setRecovery, recoverySaveState, saveRecove
   const workout = coach;
   const availableWorlds = worldRotation?.availableWorlds ?? ["Watopia"];
   const currentWeightPounds = Math.round(currentWeightKg * 2.2046226218);
-  const routeSuite = recommendZwiftRoutes(workout.mode, currentFtp, currentWeightKg, ZWIFT_WORLDS, routeShuffleIndex, recentRouteIds, currentLthr);
+  const routeSuite = recommendZwiftRoutes(
+    workout.mode,
+    currentFtp,
+    currentWeightKg,
+    ZWIFT_WORLDS,
+    routeShuffleIndex,
+    recentRouteIds,
+    currentLthr,
+    coach.confidence,
+    `${coach.state}: ${coach.detail}`,
+  );
   const routeIntensity = ROUTE_INTENSITY_BANDS[workout.mode];
   const routePowerMinimum = Math.round(currentFtp * routeIntensity.low);
   const routePowerMaximum = Math.round(currentFtp * routeIntensity.high);
@@ -2439,6 +2450,24 @@ function PlanToday({ rides, recovery, setRecovery, recoverySaveState, saveRecove
   const coachLoadStatus = coach.evidenceSummary.loadStatus === "established"
     ? coach.evidenceSummary.loadRatio !== null && coach.evidenceSummary.loadRatio > 1.3 ? "Fatigue elevated vs fitness" : "Established load history"
     : coach.evidenceSummary.loadStatus === "provisional" ? "Provisional 42-day history" : "History not ready";
+  const downloadSelectedWorkout = () => {
+    try {
+      const contents = buildRideIntentionZwo(selectedRoute.route.name, selectedRoute.intention);
+      const url = URL.createObjectURL(new Blob([contents], { type: "application/xml;charset=utf-8" }));
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = rideIntentionZwoFilename(selectedRoute.route.name, selectedRoute.intention);
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      window.setTimeout(() => URL.revokeObjectURL(url), 0);
+      setActionState("success");
+      setActionMessage(`${selectedRoute.route.name} flexible workout exported · ZWO`);
+    } catch (error) {
+      setActionState("error");
+      setActionMessage(error instanceof Error ? error.message : "The workout could not be exported.");
+    }
+  };
 
   return (
     <div className="phase-three-layout">
@@ -2536,15 +2565,17 @@ function PlanToday({ rides, recovery, setRecovery, recoverySaveState, saveRecove
                 </span>
 
                 <span className="route-prescription">
-                  <span><small>Power guide</small><strong>{suggestion.targetWatts}</strong></span>
+                  <span><small>Power guide</small><strong>{suggestion.intention.power.cue}</strong></span>
                   <span><small>Feel cue</small><strong>{suggestion.heartRateCue}</strong></span>
                 </span>
                 <span className="route-intention">
                   <span><small>Today’s idea</small><strong>{suggestion.focus}</strong></span>
                   <p>{suggestion.rideCue}</p>
+                  {suggestion.intention.optionalFocusBlocks.length > 0 && <p><strong>Optional focus:</strong> {suggestion.intention.optionalFocusBlocks.map((block) => `${block.label} · ${block.durationMinutes} min`).join(" · ")}</p>}
                   <p>{suggestion.terrainCue}</p>
                   <em><strong>Optional stretch:</strong> {suggestion.optionalStretch}</em>
-                  <small>{suggestion.encouragement}</small>
+                  <small>{suggestion.intention.encouragement} {suggestion.intention.flexibility}</small>
+                  <small>{suggestion.intention.evidence.confidence} confidence · {suggestion.intention.evidence.rationale}</small>
                 </span>
                 <span className="route-reason">{suggestion.reason}</span>
                 <span className="route-time-cue">{suggestion.timingCue}</span>
@@ -2555,7 +2586,7 @@ function PlanToday({ rides, recovery, setRecovery, recoverySaveState, saveRecove
 
         <div className="route-suite-footer">
           <span>{workout.mode === "rest" ? "Rest is a useful option today; these routes will still be here later." : <><strong>Your current idea:</strong> {selectedRoute.route.name} · {selectedRoute.focus} · {selectedRoute.estimatedMinimumMinutes}–{selectedRoute.estimatedMaximumMinutes} min</>}</span>
-          <span className="route-source-links"><a href="https://support.zwift.com/zwift-worlds-and-cycling-routes-rk3PMBUht" target="_blank" rel="noreferrer">Official route details ↗</a><a href={worldRotation?.sourceUrl ?? "https://zwiftinsider.com/schedule/"} target="_blank" rel="noreferrer">World calendar ↗</a></span>
+          <span className="route-source-links"><button type="button" className="route-export" disabled={selectedRoute.intention.disabled} onClick={downloadSelectedWorkout}>Download optional .ZWO</button><a href="https://support.zwift.com/zwift-worlds-and-cycling-routes-rk3PMBUht" target="_blank" rel="noreferrer">Official route details ↗</a><a href={worldRotation?.sourceUrl ?? "https://zwiftinsider.com/schedule/"} target="_blank" rel="noreferrer">World calendar ↗</a></span>
         </div>
       </section>
 

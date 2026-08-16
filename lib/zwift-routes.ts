@@ -1,7 +1,14 @@
-import { heartRateCueForMode } from "./heart-rate";
+import type { CoachConfidence } from "./coach";
+import {
+  buildRideIntention,
+  RIDE_DURATION_WINDOWS,
+  RIDE_INTENSITY_BANDS,
+  type RideIntention,
+  type RouteCommitment,
+} from "./ride-intentions";
 import type { WorkoutMode } from "./phase3";
 
-export type RouteCommitment = 30 | 60 | 90;
+export type { RouteCommitment } from "./ride-intentions";
 
 export const ZWIFT_WORLDS = [
   "Watopia",
@@ -36,6 +43,7 @@ export type RouteTimeWindow = {
 export type ZwiftRouteSuggestion = {
   commitment: RouteCommitment;
   route: ZwiftRoute;
+  intention: RideIntention;
   estimatedMinutes: number;
   estimatedMinimumMinutes: number;
   estimatedMaximumMinutes: number;
@@ -63,9 +71,7 @@ export type ZwiftRouteEstimate = {
 
 
 export const ROUTE_TIME_WINDOWS: Record<RouteCommitment, RouteTimeWindow> = {
-  30: { minimumMinutes: 20, maximumMinutes: 40 },
-  60: { minimumMinutes: 45, maximumMinutes: 75 },
-  90: { minimumMinutes: 75, maximumMinutes: 105 },
+  ...RIDE_DURATION_WINDOWS,
 };
 
 const route = (
@@ -171,12 +177,7 @@ export const ZWIFT_ROUTE_COUNT = routeList.length;
 
 const commitments: RouteCommitment[] = [30, 60, 90];
 
-export const ROUTE_INTENSITY_BANDS: Record<WorkoutMode, { low: number; high: number; heartRateCue: string }> = {
-  rest: { low: 0.45, high: 0.55, heartRateCue: "Optional only · RPE 1–2" },
-  recovery: { low: 0.5, high: 0.6, heartRateCue: "Easy breathing · RPE 2–3" },
-  endurance: { low: 0.6, high: 0.72, heartRateCue: "Conversational · RPE 3–4" },
-  tempo: { low: 0.76, high: 0.88, heartRateCue: "Controlled rise · RPE 6–7" },
-};
+export const ROUTE_INTENSITY_BANDS = RIDE_INTENSITY_BANDS;
 
 const modeReason: Record<WorkoutMode, Record<ZwiftRoute["profile"], string>> = {
   rest: {
@@ -201,22 +202,6 @@ const modeReason: Record<WorkoutMode, Record<ZwiftRoute["profile"], string>> = {
   },
 };
 
-const routeFocus: Record<WorkoutMode, string> = {
-  rest: "Save for a future ride",
-  recovery: "Easy movement",
-  endurance: "Aerobic endurance",
-  tempo: "Tempo exploration",
-};
-
-function rideCue(mode: WorkoutMode, commitment: RouteCommitment) {
-  if (mode === "rest") return "Today can be a rest day. Keep this route as something to look forward to.";
-  if (mode === "recovery") return "Ride as easily as feels good. Calm breathing and comfortable legs matter more than power.";
-  if (mode === "endurance") {
-    const steadyMinutes = commitment === 30 ? 20 : 30;
-    return `After an easy start, spend roughly ${steadyMinutes} minutes around Zone 2 when the terrain cooperates. Brief departures are normal.`;
-  }
-  return "Warm up easily, then use a few suitable flats or climbs for comfortably strong tempo stretches. Ride easy between them whenever you like.";
-}
 
 const terrainCue: Record<ZwiftRoute["profile"], string> = {
   flat: "Flat cue: find a relaxed cadence and let speed be whatever it is today.",
@@ -346,10 +331,11 @@ export function recommendZwiftRoutes(
   shuffleIndex = 0,
   recentRouteIds: readonly string[] = [],
   lthrBpm: number | null = null,
+  confidence: CoachConfidence = "low",
+  evidenceRationale?: string,
 ): ZwiftRouteSuggestion[] {
   if (!Number.isFinite(ftpWatts) || ftpWatts <= 0) throw new Error("A saved FTP is required for route recommendations.");
   if (!Number.isFinite(bodyWeightKg) || bodyWeightKg <= 0) throw new Error("A saved body weight is required for route recommendations.");
-  const watts = ROUTE_INTENSITY_BANDS[mode];
   const recommendedCommitment: RouteCommitment = mode === "recovery" || mode === "rest" ? 30 : 60;
   const allowedWorlds = new Set(worldPool.filter(isZwiftWorld));
   if (!allowedWorlds.size) ZWIFT_WORLDS.forEach((world) => allowedWorlds.add(world));
@@ -386,6 +372,14 @@ export function recommendZwiftRoutes(
       ))[0];
     const routeEstimate = estimateZwiftRouteTime(selectedRoute, ftpWatts, bodyWeightKg, mode);
     const estimatedMinutes = routeEstimate.midpointMinutes;
+    const intention = buildRideIntention({
+      mode,
+      commitment,
+      ftpWatts,
+      lthrBpm,
+      confidence,
+      evidenceRationale,
+    });
     selectedRouteIds.add(selectedRoute.id);
     selectedWorlds.add(selectedRoute.world);
 
@@ -393,20 +387,21 @@ export function recommendZwiftRoutes(
       commitment,
       route: selectedRoute,
       estimatedMinutes,
+      intention,
       estimatedMinimumMinutes: routeEstimate.minimumMinutes,
       estimatedMaximumMinutes: routeEstimate.maximumMinutes,
       timeWindow: window,
-      targetWatts: `${Math.round(ftpWatts * watts.low)}–${Math.round(ftpWatts * watts.high)} W`,
-      focus: routeFocus[mode],
-      rideCue: rideCue(mode, commitment),
+      targetWatts: `${intention.power.lowWatts}–${intention.power.highWatts} W`,
+      focus: intention.title,
+      rideCue: intention.primaryCue,
       terrainCue: terrainCue[selectedRoute.profile],
       optionalStretch: optionalStretch(mode, selectedRoute.profile),
-      encouragement: "This is an idea, not an assignment—change the effort, shorten the route, or simply enjoy the scenery.",
-      heartRateCue: heartRateCueForMode(mode, lthrBpm) ?? watts.heartRateCue,
+      encouragement: `${intention.encouragement} ${intention.flexibility}`,
+      heartRateCue: intention.heartRateCue,
       reason: `${selectedRoute.world} brings a change of scenery. ${modeReason[mode][selectedRoute.profile]}`,
-      timingCue: `Estimated ${routeEstimate.minimumMinutes}–${routeEstimate.maximumMinutes} min near ${routeEstimate.minimumPowerWatts}–${routeEstimate.maximumPowerWatts} W for today's ${routeFocus[mode].toLowerCase()} idea · matched to the ${window.minimumMinutes}–${window.maximumMinutes} min route window.`,
+      timingCue: `Estimated ${routeEstimate.minimumMinutes}–${routeEstimate.maximumMinutes} min near ${routeEstimate.minimumPowerWatts}–${routeEstimate.maximumPowerWatts} W for today's ${intention.title.toLowerCase()} idea · matched to the ${window.minimumMinutes}–${window.maximumMinutes} min route window.`,
       recommended: commitment === recommendedCommitment,
-      disabled: mode === "rest",
+      disabled: intention.disabled,
     };
   });
 }
