@@ -26,6 +26,7 @@ import { AUTOMATIC_SYNC_INTERVAL_MS, classifyRide, type ClassificationConfidence
 import { buildCyclingMarkdown, cyclingMarkdownFilename, cyclingRideMarkdownFilename } from "@/lib/markdown-export";
 import { buildTrainingLoadModel, describeTrainingLoad } from "@/lib/training-load";
 import { buildRideIntentionZwo, rideIntentionZwoFilename } from "@/lib/ride-intentions";
+import type { OutdoorRouteAvailability } from "@/lib/outdoor-routes";
 import { recommendZwiftRoutes, ROUTE_INTENSITY_BANDS, ZWIFT_ROUTE_COUNT, ZWIFT_WORLDS } from "@/lib/zwift-routes";
 import type { ZwiftRotation } from "@/lib/zwift-world-rotation";
 
@@ -2165,6 +2166,8 @@ function PlanToday({ rides, recovery, setRecovery, recoverySaveState, saveRecove
   const [actionMessage, setActionMessage] = useState("");
   const [selectedRouteId, setSelectedRouteId] = useState<string | null>(null);
   const [worldRotation, setWorldRotation] = useState<ZwiftRotation | null>(null);
+  const [routeSurface, setRouteSurface] = useState<"indoor" | "outdoor">("indoor");
+  const [outdoorRouteAvailability, setOutdoorRouteAvailability] = useState<OutdoorRouteAvailability | null>(null);
   const [routeShuffleIndex, setRouteShuffleIndex] = useState(0);
   const [recentRouteIds, setRecentRouteIds] = useState<string[]>([]);
   const [planStartDate, setPlanStartDate] = useState(localDateKey);
@@ -2220,6 +2223,19 @@ function PlanToday({ rides, recovery, setRecovery, recoverySaveState, saveRecove
       })
       .then((rotation) => { if (active) setWorldRotation(rotation); })
       .catch(() => { if (active) setWorldRotation(null); });
+    return () => { active = false; };
+  }, []);
+
+  useEffect(() => {
+    let active = true;
+    void requestJson<OutdoorRouteAvailability>("/api/routes/outdoor", { cache: "no-store" }, "Outdoor routing status could not be loaded.")
+      .then((availability) => { if (active) setOutdoorRouteAvailability(availability); })
+      .catch(() => {
+        if (active) setOutdoorRouteAvailability({
+          status: "not_configured", engine: "brouter", localOnly: true, canGenerate: false,
+          message: "Outdoor routing status is temporarily unavailable. Indoor route ideas remain fully available.",
+        });
+      });
     return () => { active = false; };
   }, []);
 
@@ -2520,9 +2536,10 @@ function PlanToday({ rides, recovery, setRecovery, recoverySaveState, saveRecove
       <section className="route-suite panel full-width">
         <div className="section-heading route-suite-heading">
           <div><span className="eyebrow">Route ideas for today</span><h2>Choose what makes you want to ride</h2><p>Each route includes a flexible focus, terrain cues, and an optional stretch idea. Change the effort, shorten the route, or ignore the numbers whenever that makes the ride better.</p></div>
-          <span className={`small-badge ${workout.mode === "rest" ? "paused" : ""}`}>{workout.mode === "rest" ? "paused by rest guardrail" : "30 · 60 · 90 min"}</span>
+          <div className="route-surface-controls"><div className="route-surface-toggle" role="group" aria-label="Route setting"><button type="button" className={routeSurface === "indoor" ? "active" : ""} aria-pressed={routeSurface === "indoor"} onClick={() => setRouteSurface("indoor")}>Indoor</button><button type="button" className={routeSurface === "outdoor" ? "active" : ""} aria-pressed={routeSurface === "outdoor"} onClick={() => setRouteSurface("outdoor")}>Outdoor</button></div><span className={`small-badge ${workout.mode === "rest" ? "paused" : ""}`}>{workout.mode === "rest" ? "paused by rest guardrail" : "30 · 60 · 90 min"}</span></div>
         </div>
 
+        <div className="route-indoor-content" hidden={routeSurface !== "indoor"}>
         <div className="route-deck" aria-live="polite">
           <span className="route-deck-copy"><small>Any-world mode · Personal route model</small><strong>{currentWeightPounds} lb · {Math.round(routeIntensity.low * 100)}–{Math.round(routeIntensity.high * 100)}% FTP · about {routePowerMinimum}–{routePowerMaximum} W average</strong><em>Times use today&apos;s suggested effort, your FTP, body weight, distance, and climbing. {ZWIFT_WORLDS.length} workout-accessible worlds · {ZWIFT_ROUTE_COUNT} curated routes. In rotation now: {availableWorlds.join(" · ")}.</em></span>
           <button type="button" className="route-shuffle" onClick={() => {
@@ -2587,6 +2604,20 @@ function PlanToday({ rides, recovery, setRecovery, recoverySaveState, saveRecove
         <div className="route-suite-footer">
           <span>{workout.mode === "rest" ? "Rest is a useful option today; these routes will still be here later." : <><strong>Your current idea:</strong> {selectedRoute.route.name} · {selectedRoute.focus} · {selectedRoute.estimatedMinimumMinutes}–{selectedRoute.estimatedMaximumMinutes} min</>}</span>
           <span className="route-source-links"><button type="button" className="route-export" disabled={selectedRoute.intention.disabled} onClick={downloadSelectedWorkout}>Download optional .ZWO</button><a href="https://support.zwift.com/zwift-worlds-and-cycling-routes-rk3PMBUht" target="_blank" rel="noreferrer">Official route details ↗</a><a href={worldRotation?.sourceUrl ?? "https://zwiftinsider.com/schedule/"} target="_blank" rel="noreferrer">World calendar ↗</a></span>
+        </div>
+        </div>
+
+        <div className={`outdoor-route-gate ${outdoorRouteAvailability?.canGenerate ? "ready" : ""}`} hidden={routeSurface !== "outdoor"}>
+          <span className="eyebrow">Local outdoor routing</span>
+          <h3>{outdoorRouteAvailability?.canGenerate ? "BRouter is ready" : "Outdoor loops need one more setup step"}</h3>
+          <p>{outdoorRouteAvailability?.message ?? "Checking the local route engine…"}</p>
+          <div className="outdoor-route-facts">
+            <span><strong>Private by design</strong><small>Start points and generated geometry stay on this device.</small></span>
+            <span><strong>No silent map download</strong><small>Regional route data will require an explicit rider choice.</small></span>
+            <span><strong>Same ride intention</strong><small>Outdoor choices use the same time, effort, confidence, and encouragement model.</small></span>
+          </div>
+          <button type="button" className="route-shuffle" onClick={() => setRouteSurface("indoor")}>Use indoor routes now</button>
+          <small>{outdoorRouteAvailability?.canGenerate ? "Starting-point and three-loop controls are the next delivery slice." : "The packaged route engine and regional-data consent flow are still in progress."}</small>
         </div>
       </section>
 
