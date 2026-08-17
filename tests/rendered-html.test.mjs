@@ -21,10 +21,11 @@ test("the local server serves the built Vite application shell", async () => {
 });
 
 test("keeps the dashboard features while removing hosted runtime dependencies", async () => {
-  const [index, packageJson, dashboard, methodology, theme, styles, manifest, server, database, fileStore] = await Promise.all([
+  const [index, packageJson, dashboard, progress, methodology, theme, styles, manifest, server, database, fileStore] = await Promise.all([
     readFile(new URL("../index.html", import.meta.url), "utf8"),
     readFile(new URL("../package.json", import.meta.url), "utf8"),
     readFile(new URL("../app/CyclingDashboard.tsx", import.meta.url), "utf8"),
+    readFile(new URL("../app/views/Progress.tsx", import.meta.url), "utf8"),
     readFile(new URL("../app/views/Methodology.tsx", import.meta.url), "utf8"),
     readFile(new URL("../app/theme.ts", import.meta.url), "utf8"),
     readFile(new URL("../app/globals.css", import.meta.url), "utf8"),
@@ -33,7 +34,7 @@ test("keeps the dashboard features while removing hosted runtime dependencies", 
     readFile(new URL("../server/platform/db.ts", import.meta.url), "utf8"),
     readFile(new URL("../server/platform/file-store.ts", import.meta.url), "utf8"),
   ]);
-  const interfaceSource = [dashboard, methodology, theme].join("\n");
+  const interfaceSource = [dashboard, progress, methodology, theme].join("\n");
 
   assert.match(index, /Cycling Analytics/);
   assert.match(index, /manifest\.webmanifest/);
@@ -55,6 +56,11 @@ test("keeps the dashboard features while removing hosted runtime dependencies", 
   assert.doesNotMatch(dashboard, /Cadence stream needed/);
 
   assert.match(dashboard, /label: "Coach"/);
+  assert.match(dashboard, /label: "Progress"/);
+  assert.match(progress, /Your progress, without cherry-picking/);
+  assert.match(progress, /All history/);
+  assert.match(progress, /Every axis starts at zero/);
+  assert.match(progress, /Descriptive view/);
   assert.match(dashboard, /Coach Mode ·/);
   assert.match(dashboard, /Every input stays visible/);
   assert.match(dashboard, /What today’s riding contributed/);
@@ -69,6 +75,10 @@ test("keeps the dashboard features while removing hosted runtime dependencies", 
   assert.match(dashboard, /Future days are low-confidence placeholders/);
   assert.match(dashboard, /Route ideas for today/);
   assert.match(dashboard, /Shuffle routes/);
+  assert.match(dashboard, /Generate 3 loops/);
+  assert.match(dashboard, /Download map & retry/);
+  assert.match(dashboard, /Remove downloaded maps/);
+  assert.match(dashboard, /OpenStreetMap contributors/);
   assert.match(dashboard, /Export \.md/);
   assert.match(dashboard, /Export this ride/);
   assert.match(dashboard, /Virtual \/ Indoor/);

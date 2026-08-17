@@ -1,8 +1,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { parseOutdoorRouteRequest } from "../lib/outdoor-routes.ts";
+import { parseOutdoorRouteRequest, parseOutdoorSegmentDownloadRequest } from "../lib/outdoor-routes.ts";
 import { BRouterError } from "../server/services/brouter.ts";
-import { GET, POST, outdoorRouteAvailability } from "../server/routes/outdoor-routes.ts";
+import { DELETE, GET, POST, PUT, outdoorRouteAvailability } from "../server/routes/outdoor-routes.ts";
 import { createApp } from "../server/app.ts";
 
 test("outdoor routing stays unavailable until a loopback engine is configured", async () => {
@@ -16,7 +16,7 @@ test("outdoor routing stays unavailable until a loopback engine is configured", 
   });
   assert.equal(outdoorRouteAvailability({ CYCLING_BROUTER_URL: "https://example.com" }).canGenerate, false);
 
-  const response = GET(new Request("http://127.0.0.1/api/routes/outdoor"), { environment: {} });
+  const response = await GET(new Request("http://127.0.0.1/api/routes/outdoor"), { environment: {}, segmentDirectory: "ignored", summarizeSegments: async () => ({ segments: [], totalBytes: 0 }) });
   assert.equal(response.status, 200);
   assert.equal((await response.json() as { status: string }).status, "not_configured");
 });
@@ -26,6 +26,37 @@ test("the local application exposes outdoor routing availability", async () => {
   const response = await createApp().request("http://127.0.0.1/api/routes/outdoor");
   if (previous === undefined) delete process.env.CYCLING_BROUTER_URL; else process.env.CYCLING_BROUTER_URL = previous;
   assert.equal((await response.json() as { status: string }).status, "not_configured");
+});
+
+test("regional map downloads require explicit consent and expose removable local data", async () => {
+  assert.throws(() => parseOutdoorSegmentDownloadRequest({ segment: "W105_N35.rd5", consent: false }), /Confirm/);
+  assert.deepEqual(parseOutdoorSegmentDownloadRequest({ segment: "W105_N35.rd5", consent: true }), { segment: "W105_N35.rd5", consent: true });
+  let downloaded = false;
+  const dependencies = {
+    environment: { CYCLING_BROUTER_URL: "http://127.0.0.1:17777" },
+    segmentDirectory: "private-routing-data",
+    summarizeSegments: async () => downloaded
+      ? { segments: [{ name: "W105_N35.rd5", bytes: 20_000_000 }], totalBytes: 20_000_000 }
+      : { segments: [], totalBytes: 0 },
+    ensureSegment: async (segment: string, directory: string) => {
+      assert.equal(segment, "W105_N35.rd5");
+      assert.equal(directory, "private-routing-data");
+      downloaded = true;
+      return { tile: segment, filePath: `${directory}/${segment}`, sourceUrl: `https://brouter.de/brouter/segments4/${segment}`, bytes: 20_000_000, cached: false };
+    },
+    clearSegments: async () => {
+      downloaded = false;
+      return { removedSegments: 1, removedBytes: 20_000_000 };
+    },
+  };
+  const denied = await PUT(new Request("http://127.0.0.1/api/routes/outdoor", { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify({ segment: "W105_N35.rd5", consent: false }) }), dependencies);
+  assert.equal(denied.status, 400);
+  const accepted = await PUT(new Request("http://127.0.0.1/api/routes/outdoor", { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify({ segment: "W105_N35.rd5", consent: true }) }), dependencies);
+  assert.equal(accepted.status, 200);
+  assert.equal((await accepted.json() as { regionalData: { totalBytes: number } }).regionalData.totalBytes, 20_000_000);
+  const removed = await DELETE(new Request("http://127.0.0.1/api/routes/outdoor", { method: "DELETE" }), dependencies);
+  assert.equal(removed.status, 200);
+  assert.equal((await removed.json() as { removedSegments: number }).removedSegments, 1);
 });
 
 

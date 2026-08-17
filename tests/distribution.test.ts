@@ -10,6 +10,7 @@ test("desktop packaging ships only compiled app code plus runtime resources", as
   assert.match(config, /dist-electron\/\*\*\/\*/);
   assert.match(config, /from: drizzle[\s\S]*to: drizzle/);
   assert.match(config, /cycling-analytics-icon-512\.png/);
+  assert.match(config, /from: resources\/brouter[\s\S]*to: brouter/);
   assert.match(config, /target: nsis/);
   assert.match(config, /target: dmg/);
   assert.match(config, /target: AppImage/);
@@ -19,6 +20,8 @@ test("desktop packaging ships only compiled app code plus runtime resources", as
   assert.doesNotMatch(config, /server\/\*\*|tests\/\*\*/);
   assert.match(desktopMain, /CYCLING_WEB_DIR\s*=\s*path\.join\(app\.getAppPath\(\),\s*"dist"\)/);
   assert.match(desktopMain, /zoomFactor:\s*1\.1/);
+  assert.match(desktopMain, /startBundledBRouter/);
+  assert.match(desktopMain, /CYCLING_BROUTER_URL/);
   assert.doesNotMatch(desktopMain, /CYCLING_WEB_DIR\s*=\s*app\.isPackaged/);
   assert.doesNotMatch(desktopMain, /CYCLING_WEB_DIR\s*=\s*path\.join\(process\.resourcesPath,\s*"dist"\)/);
 });
@@ -31,6 +34,8 @@ test("release workflow builds natively on all three operating systems", async ()
   assert.match(workflow, /npm run dist:win/);
   assert.match(workflow, /npm run dist:mac/);
   assert.match(workflow, /npm run dist:linux/);
+  assert.equal((workflow.match(/npm run prepare:brouter-runtime/g) ?? []).length, 3);
+  assert.equal((workflow.match(/actions\/setup-java@v4/g) ?? []).length, 3);
   assert.match(workflow, /actions\/upload-artifact@v6/);
   assert.match(workflow, /MAC_SIGNING_AVAILABLE/);
   assert.doesNotMatch(workflow, /BEGIN (?:RSA )?PRIVATE KEY|APPLE_APP_SPECIFIC_PASSWORD:\s+[^$]/);
@@ -51,6 +56,8 @@ test("persistent browser preview uses isolated data and ports", async () => {
   assert.match(launcher, /previewApiPort = 8723/);
   assert.match(launcher, /CYCLING_DATA_DIR: previewDataDirectory/);
   assert.match(launcher, /isCyclingPreviewReady/);
+  assert.match(launcher, /startBundledBRouter/);
+  assert.match(launcher, /CYCLING_BROUTER_URL: brouterSidecar\.baseUrl/);
   assert.match(packageJson.scripts["preview:install-shortcut"], /install-web-preview-shortcut\.ps1/);
   assert.match(launcher, /seedPreviewFromDesktop/);
   assert.doesNotMatch(launcher, /secrets\.json/);

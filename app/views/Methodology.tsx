@@ -1,5 +1,6 @@
 import { METHOD_DEFINITIONS } from "@/lib/markdown-export";
 import { themeOptions, type ThemeId } from "@/app/theme";
+import { FtpHistoryEditor } from "@/app/views/FtpHistoryEditor";
 
 type MethodologyProps = {
   currentFtp: number;
@@ -10,13 +11,14 @@ type MethodologyProps = {
   installPromptAvailable: boolean;
   isStandaloneApp: boolean;
   installDesktopApp: () => Promise<void>;
+  onFtpHistoryChanged: (currentFtpWatts: number) => Promise<void>;
 };
 
 function Stat({ label, value, unit }: { label: string; value: string; unit?: string }) {
   return <div className="stat"><span>{label}</span><strong>{value} {unit && <small>{unit}</small>}</strong></div>;
 }
 
-export function Methodology({ currentFtp, currentWeightKg, currentLthr, theme, setTheme, installPromptAvailable, isStandaloneApp, installDesktopApp }: MethodologyProps) {
+export function Methodology({ currentFtp, currentWeightKg, currentLthr, theme, setTheme, installPromptAvailable, isStandaloneApp, installDesktopApp, onFtpHistoryChanged }: MethodologyProps) {
   return <div className="method-layout">
     <section className="theme-card panel">
       <div className="section-heading"><div><span className="eyebrow">Appearance</span><h2>Choose your ride room</h2><p>Four complete palettes, tuned for clarity in different light.</p></div></div>
@@ -54,6 +56,7 @@ export function Methodology({ currentFtp, currentWeightKg, currentLthr, theme, s
     </section>
     <section className="method-hero panel-dark"><span className="eyebrow light">Explainable by design</span><h2>No mystery score.</h2><p>Every recommendation is assembled from visible inputs, conservative rules, and versioned calculations. Pain always overrides the number.</p><div className="version-stamp"><span>Current ruleset</span><strong>v3.6</strong></div></section>
     <section className="method-list panel"><div className="section-heading"><div><span className="eyebrow">Metric dictionary</span><h2>What the app calculates</h2></div></div>{METHOD_DEFINITIONS.map((method) => <article key={method.id} className="method-row"><span>{method.id}</span><div><strong>{method.title}</strong><code>{method.formula}</code><p>{method.note}</p></div></article>)}</section>
-    <section className="config-card panel"><div className="section-heading"><div><span className="eyebrow">Athlete configuration</span><h2>Current working values</h2></div></div><div className="config-grid"><Stat label="FTP" value={String(currentFtp)} unit="W" /><Stat label="Body weight" value={String(Math.round(currentWeightKg * 2.2046226218))} unit="lb" /><Stat label="FTP / weight" value={(currentFtp / currentWeightKg).toFixed(2)} unit="W/kg" /><Stat label="LTHR" value={currentLthr === null ? "Not set" : String(currentLthr)} unit={currentLthr === null ? undefined : "bpm"} /><Stat label="Zone 2 target" value={String(Math.round(currentFtp * 2 / 3))} unit="W" /></div><p className="chart-note"><i /> FTP, body weight, and optional LTHR can be updated from Plan Today. Every ride keeps its own FTP snapshot; heart-rate distributions record the LTHR used and should be reprocessed after a threshold change.</p></section>
+    <section className="config-card panel"><div className="section-heading"><div><span className="eyebrow">Athlete configuration</span><h2>Current working values</h2></div></div><div className="config-grid"><Stat label="FTP" value={String(currentFtp)} unit="W" /><Stat label="Body weight" value={String(Math.round(currentWeightKg * 2.2046226218))} unit="lb" /><Stat label="FTP / weight" value={(currentFtp / currentWeightKg).toFixed(2)} unit="W/kg" /><Stat label="LTHR" value={currentLthr === null ? "Not set" : String(currentLthr)} unit={currentLthr === null ? undefined : "bpm"} /><Stat label="Zone 2 target" value={String(Math.round(currentFtp * 2 / 3))} unit="W" /></div><p className="chart-note"><i /> Current FTP can be confirmed from Plan Today or corrected across historical date ranges below. Heart-rate distributions record the LTHR used and should be reprocessed after a threshold change.</p></section>
+    <FtpHistoryEditor onChanged={onFtpHistoryChanged} />
   </div>;
 }

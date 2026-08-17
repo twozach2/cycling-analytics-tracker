@@ -8,6 +8,8 @@ import {
   buildRoundTripSeeds,
   destinationPoint,
   parseBRouterGeoJson,
+  segmentDownloadUrlForTile,
+  validateSegmentTileName,
   segmentDownloadUrl,
   segmentTileName,
   type RoundTripSeed,
@@ -46,6 +48,14 @@ test("maps coordinates to BRouter's five-degree regional segment names", () => {
   assert.equal(segmentTileName({ latitude: 47, longitude: 7 }), "E5_N45.rd5");
   assert.equal(segmentTileName({ latitude: -0.1, longitude: -0.1 }), "W5_S5.rd5");
   assert.equal(segmentDownloadUrl(denver), "https://brouter.de/brouter/segments4/W105_N35.rd5");
+});
+
+test("regional segment names are validated before constructing download URLs", () => {
+  assert.equal(validateSegmentTileName("W105_N35.rd5"), "W105_N35.rd5");
+  assert.equal(segmentDownloadUrlForTile("W105_N35.rd5"), "https://brouter.de/brouter/segments4/W105_N35.rd5");
+  assert.throws(() => validateSegmentTileName("../../secret.rd5"), /invalid/);
+  assert.throws(() => validateSegmentTileName("W106_N35.rd5"), /invalid/);
+  assert.throws(() => validateSegmentTileName("W185_N35.rd5"), /invalid/);
 });
 
 test("builds three closed, deterministic loop seeds around a rider-selected start", () => {

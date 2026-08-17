@@ -51,8 +51,24 @@ export function segmentTileName(coordinate: GeoCoordinate) {
   return `${segmentAxis(coordinate.longitude, "E", "W")}_${segmentAxis(coordinate.latitude, "N", "S")}.rd5`;
 }
 
+export function validateSegmentTileName(value: string) {
+  const tile = value.trim();
+  const match = /^([EW])(\d{1,3})_([NS])(\d{1,2})\.rd5$/.exec(tile);
+  if (!match) throw new Error("Regional routing segment is invalid.");
+  const longitude = Number(match[2]);
+  const latitude = Number(match[4]);
+  if (longitude > 180 || latitude > 90 || longitude % SEGMENT_DEGREES !== 0 || latitude % SEGMENT_DEGREES !== 0) {
+    throw new Error("Regional routing segment is invalid.");
+  }
+  return tile;
+}
+
+export function segmentDownloadUrlForTile(tile: string) {
+  return `${BROUTER_SEGMENT_BASE_URL}/${validateSegmentTileName(tile)}`;
+}
+
 export function segmentDownloadUrl(coordinate: GeoCoordinate) {
-  return `${BROUTER_SEGMENT_BASE_URL}/${segmentTileName(coordinate)}`;
+  return segmentDownloadUrlForTile(segmentTileName(coordinate));
 }
 
 export function destinationPoint(start: GeoCoordinate, distanceKm: number, bearingDegrees: number): GeoCoordinate {

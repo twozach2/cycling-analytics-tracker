@@ -4,12 +4,14 @@ import path from "node:path";
 import { app, BrowserWindow, dialog, safeStorage, session, shell } from "electron";
 import { LOCAL_APP_ORIGIN, isLocalAppUrl, isTrustedExternalUrl } from "./security";
 import type { startServer as StartServerFunction } from "../server/index";
+import type { BRouterSidecar } from "./brouter-sidecar";
 
 type LocalServer = ReturnType<typeof StartServerFunction>;
 
 const hasSingleInstanceLock = app.requestSingleInstanceLock();
 let mainWindow: BrowserWindow | null = null;
 let localServer: LocalServer | null = null;
+let brouterSidecar: BRouterSidecar | null = null;
 
 if (!hasSingleInstanceLock) app.quit();
 
@@ -69,12 +71,29 @@ async function startDesktopApp() {
     ? path.join(process.resourcesPath, "drizzle")
     : path.join(app.getAppPath(), "drizzle");
 
-  const [{ startServer }, { setSecretStore }, { SafeStorageSecretStore }] = await Promise.all([
+  const [{ startServer }, { setSecretStore }, { SafeStorageSecretStore }, { startBundledBRouter }, { brouterSegmentsDirectory, routingDataDirectory }] = await Promise.all([
     import("../server/index"),
     import("../server/platform/secret-store"),
     import("../server/platform/safe-storage-secret-store"),
+    import("./brouter-sidecar"),
+    import("../server/platform/paths"),
   ]);
   setSecretStore(new SafeStorageSecretStore(safeStorage));
+  const routeResourceRoot = app.isPackaged ? process.resourcesPath : path.join(app.getAppPath(), "resources");
+  try {
+    brouterSidecar = await startBundledBRouter({
+      resourceRoot: routeResourceRoot,
+      segmentDirectory: brouterSegmentsDirectory(),
+      customProfileDirectory: path.join(routingDataDirectory(), "brouter", "customprofiles"),
+    });
+    if (brouterSidecar) process.env.CYCLING_BROUTER_URL = brouterSidecar.baseUrl;
+    else delete process.env.CYCLING_BROUTER_URL;
+  } catch (error) {
+    delete process.env.CYCLING_BROUTER_URL;
+    const detail = error instanceof Error ? error.message : String(error);
+    console.error("Bundled BRouter could not start:", error);
+    await writeFile(path.join(process.env.CYCLING_DATA_DIR, "routing-error.log"), `${detail}\n`, "utf8").catch(() => undefined);
+  }
   const server = startServer(8722);
   localServer = server;
   await once(server, "listening");
@@ -101,6 +120,8 @@ if (hasSingleInstanceLock) {
 }
 
 app.on("before-quit", () => {
+  brouterSidecar?.stop();
+  brouterSidecar = null;
   localServer?.close();
   localServer = null;
   void import("../server/platform/db").then(({ closeDb }) => closeDb());

@@ -4,6 +4,8 @@ const TRUSTED_EXTERNAL_HOSTS = new Set([
   "strava.com",
   "www.strava.com",
   "developer.garmin.com",
+  "brouter.de",
+  "www.openstreetmap.org",
 ]);
 
 export function isLocalAppUrl(candidate: string) {

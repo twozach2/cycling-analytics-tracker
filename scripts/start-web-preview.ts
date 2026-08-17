@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import Database from "better-sqlite3";
+import { startBundledBRouter, type BRouterSidecar } from "../electron/brouter-sidecar";
 
 const projectRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const previewHost = "127.0.0.1";
@@ -132,6 +133,7 @@ function stopServiceProcess(serviceProcess: ChildProcess) {
 }
 
 async function main() {
+  let brouterSidecar: BRouterSidecar | null = null;
   if (await isCyclingPreviewReady()) {
     console.log(`Cycling Analytics Preview is already running at ${previewUrl}`);
     openPreview();
@@ -151,6 +153,16 @@ async function main() {
 
   console.log(`Persistent preview data: ${previewDataDirectory}`);
   console.log("Keep this window open while using the preview. Press Ctrl+C to stop it.");
+  try {
+    brouterSidecar = await startBundledBRouter({
+      resourceRoot: path.join(projectRoot, "resources"),
+      segmentDirectory: path.join(previewDataDirectory, "routing", "brouter", "segments4"),
+      customProfileDirectory: path.join(previewDataDirectory, "routing", "brouter", "customprofiles"),
+    });
+    console.log(brouterSidecar ? `Local BRouter ready at ${brouterSidecar.baseUrl}` : "No generated BRouter bundle found; outdoor routes remain optional.");
+  } catch (error) {
+    console.error(`Local BRouter could not start: ${error instanceof Error ? error.message : error}`);
+  }
 
   const serviceCommand = process.platform === "win32"
     ? (process.env.ComSpec || "cmd.exe")
@@ -166,6 +178,7 @@ async function main() {
       CYCLING_MIGRATIONS_DIR: path.join(projectRoot, "drizzle"),
       CYCLING_API_PORT: String(previewApiPort),
       PORT: String(previewApiPort),
+      ...(brouterSidecar ? { CYCLING_BROUTER_URL: brouterSidecar.baseUrl } : {}),
     },
     stdio: "inherit",
   });
@@ -175,7 +188,7 @@ async function main() {
     process.exitCode = 1;
   });
 
-  const stopServices = () => stopServiceProcess(serviceProcess);
+  const stopServices = () => { brouterSidecar?.stop(); stopServiceProcess(serviceProcess); };
   process.once("SIGINT", stopServices);
   process.once("SIGTERM", stopServices);
 
@@ -196,6 +209,7 @@ async function main() {
       if (signal) console.log(`Preview services stopped (${signal}).`);
       process.off("SIGINT", stopServices);
       process.off("SIGTERM", stopServices);
+      brouterSidecar?.stop();
       resolve();
     });
   });

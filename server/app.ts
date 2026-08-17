@@ -9,6 +9,7 @@ import * as stravaDisconnectRoute from "../app/api/integrations/strava/disconnec
 import * as stravaStartRoute from "../app/api/integrations/strava/start/route";
 import * as stravaSyncRoute from "../app/api/integrations/strava/sync/route";
 import * as phaseThreeRoute from "../app/api/phase3/route";
+import * as ftpHistoryRoute from "../app/api/ftp-history/route";
 import * as recoveryRoute from "../app/api/recovery/route";
 import * as rideIdeasRoute from "../app/api/ride-ideas/route";
 import * as ridesRoute from "../app/api/rides/route";
@@ -68,9 +69,15 @@ export function createApp() {
   app.post("/api/import", handle(importRoute.POST));
   app.get("/api/phase3", handle(phaseThreeRoute.GET));
   app.post("/api/phase3", handle(phaseThreeRoute.POST));
+  app.get("/api/ftp-history", handle(ftpHistoryRoute.GET));
+  app.post("/api/ftp-history", handle(ftpHistoryRoute.POST));
+  app.patch("/api/ftp-history", handle(ftpHistoryRoute.PATCH));
+  app.delete("/api/ftp-history", handle(ftpHistoryRoute.DELETE));
   app.get("/api/zwift/worlds", handle(zwiftWorldsRoute.GET));
   app.get("/api/routes/outdoor", handle(outdoorRoutesRoute.GET));
   app.post("/api/routes/outdoor", handle(outdoorRoutesRoute.POST));
+  app.put("/api/routes/outdoor", handle(outdoorRoutesRoute.PUT));
+  app.delete("/api/routes/outdoor", handle(outdoorRoutesRoute.DELETE));
   app.get("/api/integrations/strava/start", handle(stravaStartRoute.GET));
   app.get("/api/integrations/strava/callback", handle(stravaCallbackRoute.GET));
   app.post("/api/integrations/strava/sync", handle(stravaSyncRoute.POST));

@@ -11,6 +11,15 @@ export type OutdoorRouteAvailability = {
   message: string;
 };
 
+export type OutdoorRegionalDataSummary = {
+  segments: Array<{ name: string; bytes: number }>;
+  totalBytes: number;
+};
+
+export type OutdoorRouteStatus = OutdoorRouteAvailability & {
+  regionalData: OutdoorRegionalDataSummary;
+};
+
 export type OutdoorRouteRequest = {
   start: GeoCoordinate;
   targetDistanceKm: number;
@@ -20,6 +29,11 @@ export type OutdoorRouteResponse = {
   engine: "brouter";
   localOnly: true;
   candidates: BRouterRouteCandidate[];
+};
+
+export type OutdoorSegmentDownloadRequest = {
+  segment: string;
+  consent: true;
 };
 
 export type OutdoorRouteError = {
@@ -47,4 +61,12 @@ export function parseOutdoorRouteRequest(value: unknown): OutdoorRouteRequest {
   if (longitude < -180 || longitude > 180) throw new Error("Longitude must be between -180 and 180 degrees.");
   if (targetDistanceKm < 5 || targetDistanceKm > 300) throw new Error("Target distance must be between 5 and 300 km.");
   return { start: { latitude, longitude }, targetDistanceKm };
+}
+
+export function parseOutdoorSegmentDownloadRequest(value: unknown): OutdoorSegmentDownloadRequest {
+  if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("Regional routing download request must be an object.");
+  const record = value as Record<string, unknown>;
+  if (record.consent !== true) throw new Error("Confirm the regional map download before continuing.");
+  if (typeof record.segment !== "string" || !record.segment.trim()) throw new Error("A regional routing segment is required.");
+  return { segment: record.segment.trim(), consent: true };
 }

@@ -46,3 +46,10 @@ yarn-error.log*
 /outputs/
 /work/
 /.local-data/
+
+# generated native BRouter bundle (rebuilt per target platform)
+/resources/brouter/runtime/
+/resources/brouter/profiles2/
+/resources/brouter/brouter-server.jar
+/resources/brouter/LICENSE-BRouter.txt
+/resources/brouter/runtime-manifest.json

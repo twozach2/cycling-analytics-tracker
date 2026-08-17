@@ -19,6 +19,10 @@ extraResources:
       - "**/*"
   - from: public/cycling-analytics-icon-512.png
     to: cycling-analytics-icon-512.png
+  - from: resources/brouter
+    to: brouter
+    filter:
+      - "**/*"
 
 asar: true
 npmRebuild: false

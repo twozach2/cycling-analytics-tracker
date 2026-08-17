@@ -1,8 +1,10 @@
 import { ChangeEvent, DragEvent, useCallback, useEffect, useRef, useState } from "react";
 import { themeOptions, type ThemeId } from "@/app/theme";
 import { Methodology } from "@/app/views/Methodology";
+import { Progress } from "@/app/views/Progress";
 import { requestJson } from "@/lib/api-client";
 import { parseActivityFile, type DetectedActivity } from "@/lib/activity-parser";
+import type { ProgressRide } from "@/lib/progress";
 import { saveThenRefresh } from "@/lib/import-transaction";
 import { buildCadenceOverview, hasCadenceDistribution, type CadenceAnalyticsRide, type CadenceCohortSummary } from "@/lib/cadence";
 import { buildComparableRouteCohorts, buildZone2BenchmarkCohort, COMPARABILITY_VERSION, ZONE2_BENCHMARK_PROTOCOL, ZONE2_BENCHMARK_VERSION } from "@/lib/comparability";
@@ -25,16 +27,36 @@ import { projectFtpGoal } from "@/lib/phase3";
 import { AUTOMATIC_SYNC_INTERVAL_MS, classifyRide, type ClassificationConfidence, type RideContext, type RideTrainingType } from "@/lib/strava-sync";
 import { buildCyclingMarkdown, cyclingMarkdownFilename, cyclingRideMarkdownFilename } from "@/lib/markdown-export";
 import { buildTrainingLoadModel, describeTrainingLoad } from "@/lib/training-load";
-import { buildRideIntentionZwo, rideIntentionZwoFilename } from "@/lib/ride-intentions";
+import { buildOutdoorRouteGpx, buildRideIntentionZwo, outdoorRouteGpxFilename, pairOutdoorRouteCandidates, rideIntentionZwoFilename, type OutdoorRouteChoice, type RouteCommitment } from "@/lib/ride-intentions";
 import { RIDE_IDEA_VERSION, sameRideIdea, type RideIdeaSelection, type SavedRideIdea } from "@/lib/ride-ideas";
-import type { OutdoorRouteAvailability } from "@/lib/outdoor-routes";
+import type { OutdoorRouteError, OutdoorRouteResponse, OutdoorRouteStatus } from "@/lib/outdoor-routes";
 import { recommendZwiftRoutes, ROUTE_INTENSITY_BANDS, ZWIFT_ROUTE_COUNT, ZWIFT_WORLDS } from "@/lib/zwift-routes";
 import type { ZwiftRotation } from "@/lib/zwift-world-rotation";
 
-type View = "dashboard" | "plan" | "rides" | "import" | "method";
+type View = "dashboard" | "plan" | "progress" | "rides" | "import" | "method";
 type DataMode = "loading" | "demo" | "saved" | "unavailable";
 type RideEnvironment = "virtual" | "indoor" | "outdoor";
 type WorkoutSubtype = "trainer_workout" | "race" | null;
+
+const OUTDOOR_DISTANCE_DEFAULTS: Record<RouteCommitment, number> = { 30: 12, 60: 24, 90: 36 };
+
+function outdoorRoutePath(choice: OutdoorRouteChoice) {
+  const coordinates = choice.route.coordinates;
+  if (coordinates.length < 2) return "";
+  const longitudes = coordinates.map(([longitude]) => longitude);
+  const latitudes = coordinates.map(([, latitude]) => latitude);
+  const minimumLongitude = Math.min(...longitudes);
+  const maximumLongitude = Math.max(...longitudes);
+  const minimumLatitude = Math.min(...latitudes);
+  const maximumLatitude = Math.max(...latitudes);
+  const longitudeSpan = Math.max(0.000001, maximumLongitude - minimumLongitude);
+  const latitudeSpan = Math.max(0.000001, maximumLatitude - minimumLatitude);
+  return coordinates.map(([longitude, latitude], index) => {
+    const x = 7 + ((longitude - minimumLongitude) / longitudeSpan) * 106;
+    const y = 63 - ((latitude - minimumLatitude) / latitudeSpan) * 56;
+    return `${index === 0 ? "M" : "L"}${x.toFixed(2)},${y.toFixed(2)}`;
+  }).join(" ");
+}
 
 type BeforeInstallPromptEvent = Event & {
   prompt: () => Promise<void>;
@@ -266,9 +288,10 @@ const powerDuration = [
 const navItems: Array<{ id: View; label: string; glyph: string }> = [
   { id: "dashboard", label: "Dashboard", glyph: "01" },
   { id: "plan", label: "Coach", glyph: "02" },
-  { id: "rides", label: "Ride log", glyph: "03" },
-  { id: "import", label: "Import", glyph: "04" },
-  { id: "method", label: "Method", glyph: "05" },
+  { id: "progress", label: "Progress", glyph: "03" },
+  { id: "rides", label: "Ride log", glyph: "04" },
+  { id: "import", label: "Import", glyph: "05" },
+  { id: "method", label: "Method", glyph: "06" },
 ];
 
 const UI_PREFERENCES_KEY = "cycling-analytics:ui-preferences";
@@ -435,6 +458,24 @@ const coachAnalyticsRide = (ride: Ride): CoachRide => ({
   powerHeartRateRatio: ride.powerHeartRateRatio,
   classificationConfidence: ride.classificationConfidence ?? "low",
   dataQualityLevel: qualityForRide(ride).level,
+});
+
+const progressAnalyticsRide = (ride: Ride): ProgressRide => ({
+  id: ride.id,
+  name: ride.name,
+  date: rideStartedAt(ride),
+  environment: ride.environment ?? (ride.indoor ? "indoor" : "outdoor"),
+  trainingType: ride.type,
+  distanceMiles: ride.distanceMiles,
+  movingTimeSeconds: ride.movingTimeSeconds,
+  elevationFeet: ride.elevationFeet,
+  trainingLoad: ride.trainingLoad,
+  averagePower: ride.averagePower,
+  normalizedPower: ride.normalizedPower,
+  ftpAtRideWatts: ride.ftpAtRideWatts ?? null,
+  averageHeartRate: ride.averageHeartRate,
+  averageCadence: ride.averageCadence,
+  powerHeartRateRatio: ride.powerHeartRateRatio,
 });
 
 
@@ -1251,6 +1292,7 @@ export default function CyclingDashboard() {
     dashboard: { eyebrow: "Your training at a glance", title: "Ride with the trend." },
     plan: { eyebrow: "Evidence-gated training guidance", title: "Coach Mode" },
     rides: { eyebrow: "Your complete history", title: "Ride log" },
+    progress: { eyebrow: "Your complete training history", title: "Progress" },
     import: { eyebrow: "Files + connected sources", title: "Import" },
     method: { eyebrow: "Transparent calculations", title: "Method" },
   };
@@ -1329,6 +1371,7 @@ export default function CyclingDashboard() {
             <PerformanceDetails rides={rides} currentFtp={currentFtp} currentLthr={currentLthr} nowMs={dashboardNowMs} />
           </details>
         </div>}
+        {view === "progress" && <Progress rides={rides.map(progressAnalyticsRide)} />}
         {view === "plan" && <PlanToday
           rides={rides}
           recovery={recovery}
@@ -1397,6 +1440,10 @@ export default function CyclingDashboard() {
           installPromptAvailable={installPrompt !== null}
           isStandaloneApp={isStandaloneApp}
           installDesktopApp={installDesktopApp}
+          onFtpHistoryChanged={async (ftpWatts) => {
+            setCurrentFtp(ftpWatts);
+            await refreshSavedRides();
+          }}
         />}
       </section>
     </main>
@@ -2168,7 +2215,16 @@ function PlanToday({ rides, recovery, setRecovery, recoverySaveState, saveRecove
   const [selectedRouteId, setSelectedRouteId] = useState<string | null>(null);
   const [worldRotation, setWorldRotation] = useState<ZwiftRotation | null>(null);
   const [routeSurface, setRouteSurface] = useState<"indoor" | "outdoor">("indoor");
-  const [outdoorRouteAvailability, setOutdoorRouteAvailability] = useState<OutdoorRouteAvailability | null>(null);
+  const [outdoorRouteAvailability, setOutdoorRouteAvailability] = useState<OutdoorRouteStatus | null>(null);
+  const [outdoorLatitude, setOutdoorLatitude] = useState(() => typeof window === "undefined" ? "" : window.localStorage.getItem("cycling-analytics:outdoor-latitude") ?? "");
+  const [outdoorLongitude, setOutdoorLongitude] = useState(() => typeof window === "undefined" ? "" : window.localStorage.getItem("cycling-analytics:outdoor-longitude") ?? "");
+  const [outdoorCommitment, setOutdoorCommitment] = useState<RouteCommitment>(60);
+  const [outdoorDistanceKm, setOutdoorDistanceKm] = useState(OUTDOOR_DISTANCE_DEFAULTS[60]);
+  const [outdoorCandidates, setOutdoorCandidates] = useState<OutdoorRouteResponse["candidates"]>([]);
+  const [selectedOutdoorRouteId, setSelectedOutdoorRouteId] = useState<string | null>(null);
+  const [outdoorRouteState, setOutdoorRouteState] = useState<"idle" | "working" | "downloading" | "success" | "error">("idle");
+  const [outdoorRouteMessage, setOutdoorRouteMessage] = useState("");
+  const [requiredOutdoorSegment, setRequiredOutdoorSegment] = useState<string | null>(null);
   const [savedRideIdea, setSavedRideIdea] = useState<SavedRideIdea | null>(null);
   const [rideIdeaSaveState, setRideIdeaSaveState] = useState<"idle" | "loading" | "working" | "success" | "error">("loading");
   const [routeShuffleIndex, setRouteShuffleIndex] = useState(0);
@@ -2231,12 +2287,13 @@ function PlanToday({ rides, recovery, setRecovery, recoverySaveState, saveRecove
 
   useEffect(() => {
     let active = true;
-    void requestJson<OutdoorRouteAvailability>("/api/routes/outdoor", { cache: "no-store" }, "Outdoor routing status could not be loaded.")
+    void requestJson<OutdoorRouteStatus>("/api/routes/outdoor", { cache: "no-store" }, "Outdoor routing status could not be loaded.")
       .then((availability) => { if (active) setOutdoorRouteAvailability(availability); })
       .catch(() => {
         if (active) setOutdoorRouteAvailability({
           status: "not_configured", engine: "brouter", localOnly: true, canGenerate: false,
           message: "Outdoor routing status is temporarily unavailable. Indoor route ideas remain fully available.",
+          regionalData: { segments: [], totalBytes: 0 },
         });
       });
     return () => { active = false; };
@@ -2250,7 +2307,8 @@ function PlanToday({ rides, recovery, setRecovery, recoverySaveState, saveRecove
         setSavedRideIdea(rideIdea);
         if (rideIdea) {
           setRouteSurface(rideIdea.setting);
-          setSelectedRouteId(rideIdea.route.id);
+          if (rideIdea.setting === "indoor") setSelectedRouteId(rideIdea.route.id);
+          else setSelectedOutdoorRouteId(rideIdea.route.id);
         }
         setRideIdeaSaveState("idle");
       })
@@ -2468,7 +2526,7 @@ function PlanToday({ rides, recovery, setRecovery, recoverySaveState, saveRecove
   const selectedRoute = routeSuite.find((suggestion) => suggestion.route.id === selectedRouteId)
     ?? routeSuite.find((suggestion) => suggestion.recommended)
     ?? routeSuite[0];
-  const currentRideIdeaSelection: RideIdeaSelection = {
+  const indoorRideIdeaSelection: RideIdeaSelection = {
     version: RIDE_IDEA_VERSION,
     dateIso: planStartDate,
     setting: "indoor",
@@ -2488,8 +2546,137 @@ function PlanToday({ rides, recovery, setRecovery, recoverySaveState, saveRecove
     intention: selectedRoute.intention,
     thresholds: { ftpWatts: currentFtp, weightKg: currentWeightKg, lthrBpm: currentLthr },
   };
+
+  const generateOutdoorRoutes = async () => {
+    const latitude = Number(outdoorLatitude);
+    const longitude = Number(outdoorLongitude);
+    if (!Number.isFinite(latitude) || latitude < -90 || latitude > 90 || !Number.isFinite(longitude) || longitude < -180 || longitude > 180) {
+      setOutdoorRouteState("error");
+      setOutdoorRouteMessage("Enter valid starting latitude and longitude coordinates.");
+      return;
+    }
+    if (!Number.isFinite(outdoorDistanceKm) || outdoorDistanceKm < 5 || outdoorDistanceKm > 300) {
+      setOutdoorRouteState("error");
+      setOutdoorRouteMessage("Choose a target distance between 5 and 300 km.");
+      return;
+    }
+    setOutdoorRouteState("working");
+    setOutdoorRouteMessage("Generating three private loop options…");
+    setRequiredOutdoorSegment(null);
+    window.localStorage.setItem("cycling-analytics:outdoor-latitude", String(latitude));
+    window.localStorage.setItem("cycling-analytics:outdoor-longitude", String(longitude));
+    try {
+      const response = await fetch("/api/routes/outdoor", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ start: { latitude, longitude }, targetDistanceKm: outdoorDistanceKm }),
+      });
+      const payload = await response.json() as OutdoorRouteResponse | OutdoorRouteError;
+      if (!response.ok) {
+        const failure = payload as OutdoorRouteError;
+        if (failure.code === "missing_segment" && failure.requiredSegment) setRequiredOutdoorSegment(failure.requiredSegment);
+        throw new Error(failure.error || "Outdoor routes could not be generated.");
+      }
+      const result = payload as OutdoorRouteResponse;
+      setOutdoorCandidates(result.candidates);
+      setSelectedOutdoorRouteId(result.candidates[0]?.id ?? null);
+      setOutdoorRouteState("success");
+      setOutdoorRouteMessage(`${result.candidates.length} local loop choices generated. Coordinates stayed on this device.`);
+    } catch (error) {
+      setOutdoorCandidates([]);
+      setOutdoorRouteState("error");
+      setOutdoorRouteMessage(error instanceof Error ? error.message : "Outdoor routes could not be generated.");
+    }
+  };
+
+  const downloadRequiredOutdoorSegment = async () => {
+    if (!requiredOutdoorSegment) return;
+    setOutdoorRouteState("downloading");
+    setOutdoorRouteMessage(`Downloading ${requiredOutdoorSegment} to private app storage…`);
+    try {
+      const response = await fetch("/api/routes/outdoor", {
+        method: "PUT",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ segment: requiredOutdoorSegment, consent: true }),
+      });
+      const payload = await response.json() as { regionalData?: OutdoorRouteStatus["regionalData"]; error?: string };
+      if (!response.ok) throw new Error(payload.error ?? "Regional routing data could not be downloaded.");
+      if (payload.regionalData && outdoorRouteAvailability) setOutdoorRouteAvailability({ ...outdoorRouteAvailability, regionalData: payload.regionalData });
+      setRequiredOutdoorSegment(null);
+      setOutdoorRouteMessage("Regional map data saved locally. Retrying your route choices…");
+      await generateOutdoorRoutes();
+    } catch (error) {
+      setOutdoorRouteState("error");
+      setOutdoorRouteMessage(error instanceof Error ? error.message : "Regional routing data could not be downloaded.");
+    }
+  };
+
+  const removeOutdoorRoutingData = async () => {
+    if (!window.confirm("Remove every downloaded BRouter regional map file from this device? You can download a region again later.")) return;
+    setOutdoorRouteState("working");
+    try {
+      const response = await fetch("/api/routes/outdoor", { method: "DELETE" });
+      const payload = await response.json() as { regionalData?: OutdoorRouteStatus["regionalData"]; removedSegments?: number; error?: string };
+      if (!response.ok) throw new Error(payload.error ?? "Regional routing data could not be removed.");
+      if (payload.regionalData && outdoorRouteAvailability) setOutdoorRouteAvailability({ ...outdoorRouteAvailability, regionalData: payload.regionalData });
+      setOutdoorCandidates([]);
+      setSelectedOutdoorRouteId(null);
+      setOutdoorRouteState("success");
+      setOutdoorRouteMessage(`${payload.removedSegments ?? 0} downloaded map ${(payload.removedSegments ?? 0) === 1 ? "file" : "files"} removed.`);
+    } catch (error) {
+      setOutdoorRouteState("error");
+      setOutdoorRouteMessage(error instanceof Error ? error.message : "Regional routing data could not be removed.");
+    }
+  };
+
+  const downloadOutdoorFile = (contents: string, filename: string, mimeType: string, message: string) => {
+    const url = URL.createObjectURL(new Blob([contents], { type: mimeType }));
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = filename;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    window.setTimeout(() => URL.revokeObjectURL(url), 0);
+    setActionState("success");
+    setActionMessage(message);
+  };
+
+  const exportOutdoorGpx = () => {
+    if (!selectedOutdoorRoute) return;
+    downloadOutdoorFile(buildOutdoorRouteGpx(selectedOutdoorRoute), outdoorRouteGpxFilename(selectedOutdoorRoute), "application/gpx+xml;charset=utf-8", `${selectedOutdoorRoute.name} exported · GPX`);
+  };
+
+  const exportOutdoorWorkout = () => {
+    if (!selectedOutdoorRoute) return;
+    downloadOutdoorFile(buildRideIntentionZwo(selectedOutdoorRoute.name, selectedOutdoorRoute.intention), rideIntentionZwoFilename(selectedOutdoorRoute.name, selectedOutdoorRoute.intention), "application/xml;charset=utf-8", `${selectedOutdoorRoute.name} flexible workout exported · ZWO`);
+  };
+  const outdoorIntention = (routeSuite.find((suggestion) => suggestion.commitment === outdoorCommitment) ?? selectedRoute).intention;
+  const outdoorChoices = pairOutdoorRouteCandidates(outdoorCandidates, outdoorIntention);
+  const selectedOutdoorRoute = outdoorChoices.find((choice) => choice.id === selectedOutdoorRouteId) ?? outdoorChoices[0] ?? null;
+  const outdoorRideIdeaSelection: RideIdeaSelection | null = selectedOutdoorRoute ? {
+    version: RIDE_IDEA_VERSION,
+    dateIso: planStartDate,
+    setting: "outdoor",
+    route: {
+      id: selectedOutdoorRoute.id,
+      name: selectedOutdoorRoute.name,
+      provider: "brouter",
+      details: {
+        distanceKm: Math.round(selectedOutdoorRoute.route.distanceKm * 10) / 10,
+        ascentMeters: Math.round(selectedOutdoorRoute.route.ascentMeters),
+        estimatedMinutes: selectedOutdoorRoute.estimatedMinutes,
+        targetDistanceKm: outdoorDistanceKm,
+        startLatitude: Number(outdoorLatitude),
+        startLongitude: Number(outdoorLongitude),
+      },
+    },
+    intention: selectedOutdoorRoute.intention,
+    thresholds: { ftpWatts: currentFtp, weightKg: currentWeightKg, lthrBpm: currentLthr },
+  } : null;
+  const currentRideIdeaSelection = routeSurface === "outdoor" && outdoorRideIdeaSelection ? outdoorRideIdeaSelection : indoorRideIdeaSelection;
   const weeklyPlan = coach.weeklyPlan;
-  const currentRideIdeaIsSaved = sameRideIdea(savedRideIdea, currentRideIdeaSelection);
+  const currentRideIdeaIsSaved = routeSurface === "outdoor" && !outdoorRideIdeaSelection ? false : sameRideIdea(savedRideIdea, currentRideIdeaSelection);
   const prediction = insights?.prediction;
   const projectedFromFtp = prediction?.midpointWatts ?? currentFtp;
   const projection = projectFtpGoal(projectedFromFtp, goalTarget, referenceDate.toISOString());
@@ -2528,6 +2715,12 @@ function PlanToday({ rides, recovery, setRecovery, recoverySaveState, saveRecove
   };
 
   const saveSelectedRideIdea = async () => {
+    if (routeSurface === "outdoor" && !outdoorRideIdeaSelection) {
+      setRideIdeaSaveState("error");
+      setActionState("error");
+      setActionMessage("Generate and select an outdoor loop before saving today’s idea.");
+      return;
+    }
     setRideIdeaSaveState("working");
     setActionMessage("");
     try {
@@ -2681,11 +2874,46 @@ function PlanToday({ rides, recovery, setRecovery, recoverySaveState, saveRecove
           <p>{outdoorRouteAvailability?.message ?? "Checking the local route engine…"}</p>
           <div className="outdoor-route-facts">
             <span><strong>Private by design</strong><small>Start points and generated geometry stay on this device.</small></span>
-            <span><strong>No silent map download</strong><small>Regional route data will require an explicit rider choice.</small></span>
+            <span><strong>Consent before maps</strong><small>Regional route data downloads only after you approve the named file.</small></span>
             <span><strong>Same ride intention</strong><small>Outdoor choices use the same time, effort, confidence, and encouragement model.</small></span>
           </div>
-          <button type="button" className="route-shuffle" onClick={() => setRouteSurface("indoor")}>Use indoor routes now</button>
-          <small>{outdoorRouteAvailability?.canGenerate ? "Starting-point and three-loop controls are the next delivery slice." : "The packaged route engine and regional-data consent flow are still in progress."}</small>
+          {outdoorRouteAvailability?.canGenerate ? <>
+            <div className="outdoor-route-builder">
+              <div className="outdoor-commitments" role="group" aria-label="Outdoor ride time commitment">
+                {([30, 60, 90] as const).map((commitment) => <button type="button" key={commitment} className={outdoorCommitment === commitment ? "active" : ""} aria-pressed={outdoorCommitment === commitment} onClick={() => { setOutdoorCommitment(commitment); setOutdoorDistanceKm(OUTDOOR_DISTANCE_DEFAULTS[commitment]); }}>{commitment} min</button>)}
+              </div>
+              <div className="outdoor-route-inputs">
+                <label><span>Start latitude</span><input type="number" min="-90" max="90" step="0.000001" value={outdoorLatitude} onChange={(event) => setOutdoorLatitude(event.target.value)} placeholder="39.7392" /></label>
+                <label><span>Start longitude</span><input type="number" min="-180" max="180" step="0.000001" value={outdoorLongitude} onChange={(event) => setOutdoorLongitude(event.target.value)} placeholder="-104.9903" /></label>
+                <label><span>Target distance</span><span className="outdoor-distance-input"><input type="number" min="5" max="300" step="1" value={outdoorDistanceKm} onChange={(event) => setOutdoorDistanceKm(Number(event.target.value))} /><em>km</em></span></label>
+                <button type="button" className="primary-button" disabled={outdoorRouteState === "working" || outdoorRouteState === "downloading" || workout.mode === "rest"} onClick={() => void generateOutdoorRoutes()}>{outdoorRouteState === "working" ? "Generating…" : "Generate 3 loops"}</button>
+              </div>
+              <small>Coordinates are saved only in this app’s local preferences. They are sent to the loopback BRouter process—not to a geocoder or cloud routing service.</small>
+            </div>
+            {requiredOutdoorSegment && <div className="regional-map-consent" role="alert">
+              <div><span>Regional map required</span><strong>{requiredOutdoorSegment}</strong><p>BRouter needs this OpenStreetMap/elevation file to calculate the loop. It will be stored in private app data and can be removed below.</p></div>
+              <button type="button" className="primary-button" disabled={outdoorRouteState === "downloading"} onClick={() => void downloadRequiredOutdoorSegment()}>{outdoorRouteState === "downloading" ? "Downloading…" : "Download map & retry"}</button>
+            </div>}
+            <p className={`outdoor-route-status ${outdoorRouteState}`} aria-live="polite">{outdoorRouteMessage || "Enter a start point and choose how much time you have."}</p>
+            {outdoorChoices.length > 0 && <>
+              <div className="outdoor-choice-grid" role="radiogroup" aria-label="Choose an outdoor loop">
+                {outdoorChoices.map((choice) => {
+                  const isSelected = selectedOutdoorRoute?.id === choice.id;
+                  return <button type="button" key={choice.id} className={`outdoor-choice ${isSelected ? "selected" : ""}`} aria-pressed={isSelected} onClick={() => setSelectedOutdoorRouteId(choice.id)}>
+                    <span className="outdoor-route-preview"><svg viewBox="0 0 120 70" role="img" aria-label={`${choice.name} route outline`}><path className="outdoor-preview-grid" d="M6 18H114M6 35H114M6 52H114M30 6V64M60 6V64M90 6V64" /><path className="outdoor-preview-route" d={outdoorRoutePath(choice)} /></svg><em>N</em></span>
+                    <span className="outdoor-choice-head"><small>{isSelected ? "Selected loop" : "Local option"}</small><strong>{choice.name}</strong></span>
+                    <span className="outdoor-choice-facts"><span><small>Distance</small><strong>{(choice.route.distanceKm * 0.621371).toFixed(1)} mi</strong></span><span><small>Climbing</small><strong>{Math.round(choice.route.ascentMeters * 3.28084)} ft</strong></span><span><small>BRouter time</small><strong>{choice.estimatedMinutes === null ? "Variable" : `${choice.estimatedMinutes} min`}</strong></span></span>
+                    <span className="outdoor-choice-cue"><small>{choice.intention.title}</small><strong>{choice.intention.primaryCue}</strong><em>{choice.intention.flexibility}</em></span>
+                  </button>;
+                })}
+              </div>
+              <div className="outdoor-choice-footer"><span><strong>{selectedOutdoorRoute?.name}</strong> · {selectedOutdoorRoute?.intention.power.cue}</span><span><button type="button" className="route-save" disabled={!selectedOutdoorRoute || rideIdeaSaveState === "working" || currentRideIdeaIsSaved} onClick={() => void saveSelectedRideIdea()}>{currentRideIdeaIsSaved ? "Saved for today" : savedRideIdea ? "Replace saved idea" : "Save today’s idea"}</button><button type="button" className="route-export" onClick={exportOutdoorGpx}>Download GPX</button><button type="button" className="route-export" onClick={exportOutdoorWorkout}>Optional .ZWO</button></span></div>
+            </>}
+            <div className="routing-data-control"><span><strong>{outdoorRouteAvailability.regionalData.segments.length} regional map {outdoorRouteAvailability.regionalData.segments.length === 1 ? "file" : "files"} · {(outdoorRouteAvailability.regionalData.totalBytes / 1_048_576).toFixed(1)} MB stored locally</strong><small>Routing by <a href="https://brouter.de/brouter/" target="_blank" rel="noreferrer">BRouter</a> · data © <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noreferrer">OpenStreetMap contributors</a></small></span>{outdoorRouteAvailability.regionalData.segments.length > 0 && <button type="button" onClick={() => void removeOutdoorRoutingData()}>Remove downloaded maps</button>}</div>
+          </> : <>
+            <button type="button" className="route-shuffle" onClick={() => setRouteSurface("indoor")}>Use indoor routes now</button>
+            <small>The packaged local route engine is not available in this build. Indoor suggestions still use the full intention model.</small>
+          </>}
         </div>
       </section>
 

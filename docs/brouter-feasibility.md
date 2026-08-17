@@ -54,6 +54,8 @@ Phase 2's matrix passed on `windows-latest`, `macos-latest`, and `ubuntu-latest`
 
 ## Packaging plan if the matrix passes
 
+Implemented on the coaching-product branch: release jobs now build the pinned server and native minimal runtime on each target OS; Electron manages the loopback sidecar; regional files remain rider-approved app data; attribution and removal controls ship with the route UI.
+
 1. Build and checksum BRouter from the pinned MIT-licensed source in the release pipeline.
 2. Build one minimal Java runtime per target OS/architecture with `jlink`.
 3. Package the JAR, selected profiles, lookup data, and runtime under Electron `extraResources`.

@@ -40,7 +40,12 @@ jobs:
         with:
           node-version: 22
           cache: npm
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
       - run: npm ci
+      - run: npm run prepare:brouter-runtime
       - run: npm run dist:win
       - uses: actions/upload-artifact@v6
         with:
@@ -66,7 +71,12 @@ jobs:
         with:
           node-version: 22
           cache: npm
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
       - run: npm ci
+      - run: npm run prepare:brouter-runtime
       - name: Build signed and notarized packages
         if: env.MAC_SIGNING_AVAILABLE == 'true'
         run: npm run dist:mac
@@ -92,7 +102,12 @@ jobs:
         with:
           node-version: 22
           cache: npm
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
       - run: npm ci
+      - run: npm run prepare:brouter-runtime
       - run: npm run dist:linux
       - uses: actions/upload-artifact@v6
         with:

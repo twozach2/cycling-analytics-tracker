@@ -1,5 +1,5 @@
 import { createWriteStream } from "node:fs";
-import { mkdir, rename, rm, stat } from "node:fs/promises";
+import { mkdir, readdir, rename, rm, stat } from "node:fs/promises";
 import path from "node:path";
 import { Readable } from "node:stream";
 import type { ReadableStream as NodeReadableStream } from "node:stream/web";
@@ -9,8 +9,9 @@ import {
   buildBRouterRequestUrl,
   buildRoundTripSeeds,
   parseBRouterGeoJson,
-  segmentDownloadUrl,
+  segmentDownloadUrlForTile,
   segmentTileName,
+  validateSegmentTileName,
   type BRouterRouteCandidate,
   type GeoCoordinate,
   type RoundTripSeed,
@@ -106,6 +107,11 @@ export interface RegionalSegmentResult {
   cached: boolean;
 }
 
+export interface RegionalSegmentSummary {
+  segments: Array<{ name: string; bytes: number }>;
+  totalBytes: number;
+}
+
 async function existingFileSize(filePath: string) {
   try {
     const details = await stat(filePath);
@@ -120,8 +126,16 @@ export async function ensureRegionalSegment(
   segmentDirectory: string,
   fetchImpl: typeof fetch = fetch,
 ): Promise<RegionalSegmentResult> {
-  const tile = segmentTileName(coordinate);
-  const sourceUrl = segmentDownloadUrl(coordinate);
+  return ensureRegionalSegmentByTile(segmentTileName(coordinate), segmentDirectory, fetchImpl);
+}
+
+export async function ensureRegionalSegmentByTile(
+  requestedTile: string,
+  segmentDirectory: string,
+  fetchImpl: typeof fetch = fetch,
+): Promise<RegionalSegmentResult> {
+  const tile = validateSegmentTileName(requestedTile);
+  const sourceUrl = segmentDownloadUrlForTile(tile);
   await mkdir(segmentDirectory, { recursive: true });
   const filePath = path.join(segmentDirectory, tile);
   const cachedBytes = await existingFileSize(filePath);
@@ -160,6 +174,28 @@ export async function ensureRegionalSegment(
       ? error
       : new BRouterError("download_failed", error instanceof Error ? error.message : "Regional data download failed.");
   }
+}
+
+export async function regionalSegmentSummary(segmentDirectory: string): Promise<RegionalSegmentSummary> {
+  await mkdir(segmentDirectory, { recursive: true });
+  const segments: RegionalSegmentSummary["segments"] = [];
+  for (const name of await readdir(segmentDirectory)) {
+    try {
+      validateSegmentTileName(name);
+    } catch {
+      continue;
+    }
+    const details = await stat(path.join(segmentDirectory, name));
+    if (details.isFile() && details.size > 0) segments.push({ name, bytes: details.size });
+  }
+  segments.sort((left, right) => left.name.localeCompare(right.name));
+  return { segments, totalBytes: segments.reduce((total, segment) => total + segment.bytes, 0) };
+}
+
+export async function clearRegionalSegments(segmentDirectory: string) {
+  const before = await regionalSegmentSummary(segmentDirectory);
+  for (const segment of before.segments) await rm(path.join(segmentDirectory, segment.name), { force: true });
+  return { removedSegments: before.segments.length, removedBytes: before.totalBytes };
 }
 
 export interface BRouterLaunchOptions {

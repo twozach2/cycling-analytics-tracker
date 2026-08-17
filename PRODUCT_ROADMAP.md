@@ -6,7 +6,8 @@
 - Phase 0 complete in `46a3cb9`.
 - Phase 1 complete in `a861224`.
 - Phase 2 complete in `9296337`; the real-sidecar matrix passed on Windows, macOS, and Linux in [Actions run 31913288748](https://github.com/twozach2/cycling-analytics-tracker/actions/runs/31913288748).
-- Phase 3 in progress: the shared ride-intention model, optional `.ZWO`/GPX exporters, typed outdoor-route API, indoor/outdoor selector, and persisted daily route/intention selection are implemented; production BRouter packaging, regional-data consent, and live outdoor controls remain.
+- Phase 3 complete locally: shared ride intentions, indoor/outdoor choices, persisted daily selections, optional `.ZWO`/GPX exports, a packaged loopback BRouter runtime, explicit regional-map consent/removal, and live three-loop controls are implemented.
+- Cross-cutting progress view implemented: full-history ride graphs, shared filters, zero-based axes, missing-signal coverage, and mixed-context interpretation guardrails.
 Branch: `codex/coaching-product`
 
 ## Product thesis
