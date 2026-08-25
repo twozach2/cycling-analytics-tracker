@@ -308,3 +308,30 @@ export const rideIdeas = sqliteTable(
     index("idx_ride_ideas_completed_ride").on(table.completedRideId),
   ],
 );
+
+export const coachReflections = sqliteTable(
+  "coach_reflections",
+  {
+    id: text("id").primaryKey(),
+    riderId: text("rider_id").notNull().references(() => riders.id, { onDelete: "cascade" }),
+    rideIdeaId: text("ride_idea_id").notNull().references(() => rideIdeas.id, { onDelete: "cascade" }),
+    rideIdeaUpdatedAt: text("ride_idea_updated_at").notNull().default(""),
+    rideId: text("ride_id").notNull().references(() => rides.id, { onDelete: "cascade" }),
+    dateIso: text("date_iso").notNull(),
+    reflectionVersion: text("reflection_version").notNull(),
+    matchConfidence: text("match_confidence", { enum: ["low", "moderate", "high"] }).notNull(),
+    reflectionJson: text("reflection_json").notNull(),
+    beforeMode: text("before_mode", { enum: ["rest", "recovery", "endurance", "tempo"] }).notNull(),
+    nextMode: text("next_mode", { enum: ["rest", "recovery", "endurance", "tempo"] }).notNull(),
+    adaptationVersion: text("adaptation_version").notNull(),
+    adaptationSummary: text("adaptation_summary").notNull(),
+    adaptationReasonsJson: text("adaptation_reasons_json").notNull().default("[]"),
+    createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+    updatedAt: text("updated_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+  },
+  (table) => [
+    uniqueIndex("idx_coach_reflections_idea_revision").on(table.rideIdeaId, table.rideIdeaUpdatedAt),
+    index("idx_coach_reflections_rider_date").on(table.riderId, table.dateIso),
+    index("idx_coach_reflections_ride").on(table.rideId),
+  ],
+);

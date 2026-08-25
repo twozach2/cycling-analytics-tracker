@@ -21,10 +21,11 @@ test("the local server serves the built Vite application shell", async () => {
 });
 
 test("keeps the dashboard features while removing hosted runtime dependencies", async () => {
-  const [index, packageJson, dashboard, progress, methodology, theme, styles, manifest, server, database, fileStore] = await Promise.all([
+  const [index, packageJson, dashboard, coachReflection, progress, methodology, theme, styles, manifest, server, database, fileStore] = await Promise.all([
     readFile(new URL("../index.html", import.meta.url), "utf8"),
     readFile(new URL("../package.json", import.meta.url), "utf8"),
     readFile(new URL("../app/CyclingDashboard.tsx", import.meta.url), "utf8"),
+    readFile(new URL("../app/views/CoachReflection.tsx", import.meta.url), "utf8"),
     readFile(new URL("../app/views/Progress.tsx", import.meta.url), "utf8"),
     readFile(new URL("../app/views/Methodology.tsx", import.meta.url), "utf8"),
     readFile(new URL("../app/theme.ts", import.meta.url), "utf8"),
@@ -34,7 +35,7 @@ test("keeps the dashboard features while removing hosted runtime dependencies", 
     readFile(new URL("../server/platform/db.ts", import.meta.url), "utf8"),
     readFile(new URL("../server/platform/file-store.ts", import.meta.url), "utf8"),
   ]);
-  const interfaceSource = [dashboard, progress, methodology, theme].join("\n");
+  const interfaceSource = [dashboard, coachReflection, progress, methodology, theme].join("\n");
 
   assert.match(index, /Cycling Analytics/);
   assert.match(index, /manifest\.webmanifest/);
@@ -65,6 +66,11 @@ test("keeps the dashboard features while removing hosted runtime dependencies", 
   assert.match(dashboard, /Every input stays visible/);
   assert.match(dashboard, /What today’s riding contributed/);
   assert.match(dashboard, /never to a pass\/fail score/);
+  assert.match(coachReflection, /Post-ride reflection/);
+  assert.match(coachReflection, /What changed and why/);
+  assert.match(coachReflection, /No result is being forced/);
+  assert.match(coachReflection, /Choose the ride you meant/);
+  assert.match(coachReflection, /deterministic local analytics/);
   assert.match(dashboard, /Choose what makes you want to ride/);
   assert.match(dashboard, /Optional stretch:/);
   assert.match(dashboard, /42-day fitness/);
@@ -95,7 +101,11 @@ test("keeps the dashboard features while removing hosted runtime dependencies", 
   assert.match(styles, /select:disabled \{ color: var\(--muted\); -webkit-text-fill-color: var\(--muted\); opacity: 1; \}/);
   assert.match(styles, /\.environment-tag, \.workout-tag .*color: var\(--tag-text\)/);
   assert.match(styles, /\.environment-tag\.environment-virtual \{ background: var\(--tag-zone-bg\); \}/);
+  assert.match(styles, /container-name: ride-detail/);
+  assert.match(styles, /@container ride-detail \(max-width: 760px\)/);
   assert.match(styles, /\.coach-reflection-grid/);
+  assert.match(styles, /\.intention-reflection/);
+  assert.match(styles, /\.adaptation-feed-list/);
   assert.match(styles, /\.route-intention/);
   assert.match(styles, /\.workload-equation/);
   assert.match(manifest, /"display": "standalone"/);

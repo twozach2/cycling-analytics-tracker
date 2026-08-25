@@ -1,6 +1,7 @@
 import { ChangeEvent, DragEvent, useCallback, useEffect, useRef, useState } from "react";
 import { themeOptions, type ThemeId } from "@/app/theme";
 import { Methodology } from "@/app/views/Methodology";
+import { CoachReflection } from "@/app/views/CoachReflection";
 import { Progress } from "@/app/views/Progress";
 import { requestJson } from "@/lib/api-client";
 import { parseActivityFile, type DetectedActivity } from "@/lib/activity-parser";
@@ -9,6 +10,7 @@ import { saveThenRefresh } from "@/lib/import-transaction";
 import { buildCadenceOverview, hasCadenceDistribution, type CadenceAnalyticsRide, type CadenceCohortSummary } from "@/lib/cadence";
 import { buildComparableRouteCohorts, buildZone2BenchmarkCohort, COMPARABILITY_VERSION, ZONE2_BENCHMARK_PROTOCOL, ZONE2_BENCHMARK_VERSION } from "@/lib/comparability";
 import { buildCoachReport, type CoachRide } from "@/lib/coach";
+import type { CoachIntentionReflection, ReflectionCandidate } from "@/lib/coach-reflections";
 import { assessRideDataQuality, type RideDataQuality } from "@/lib/data-quality";
 import { HEART_RATE_ZONES, aggregateHeartRateZones, describeHeartRateDistribution, heartRateZoneRange, type HeartRateZoneDistribution } from "@/lib/heart-rate";
 import {
@@ -2142,6 +2144,14 @@ type StravaSettings = {
   storage: "owner-only-file" | "operating-system-encrypted";
 };
 
+type CoachReflectionsResponse = {
+  rideIdea: SavedRideIdea | null;
+  reflection: CoachIntentionReflection | null;
+  history: CoachIntentionReflection[];
+  candidates: ReflectionCandidate[];
+  awaitingReason: string | null;
+};
+
 function PowerRecordsCard({ history }: { history: PowerRecordHistoryView | null | undefined }) {
   const preferredDurations = new Set([5, 60, 300, 1200, 3600, 5400]);
   const featured = (history?.records ?? []).filter((record) => preferredDurations.has(record.durationSeconds));
@@ -2227,6 +2237,11 @@ function PlanToday({ rides, recovery, setRecovery, recoverySaveState, saveRecove
   const [requiredOutdoorSegment, setRequiredOutdoorSegment] = useState<string | null>(null);
   const [savedRideIdea, setSavedRideIdea] = useState<SavedRideIdea | null>(null);
   const [rideIdeaSaveState, setRideIdeaSaveState] = useState<"idle" | "loading" | "working" | "success" | "error">("loading");
+  const [intentionReflection, setIntentionReflection] = useState<CoachIntentionReflection | null>(null);
+  const [reflectionHistory, setReflectionHistory] = useState<CoachIntentionReflection[]>([]);
+  const [reflectionCandidates, setReflectionCandidates] = useState<ReflectionCandidate[]>([]);
+  const [reflectionAwaitingReason, setReflectionAwaitingReason] = useState("");
+  const [reflectionState, setReflectionState] = useState<"idle" | "loading" | "linking" | "ready" | "error">("loading");
   const [routeShuffleIndex, setRouteShuffleIndex] = useState(0);
   const [recentRouteIds, setRecentRouteIds] = useState<string[]>([]);
   const [planStartDate, setPlanStartDate] = useState(localDateKey);
@@ -2317,6 +2332,31 @@ function PlanToday({ rides, recovery, setRecovery, recoverySaveState, saveRecove
       });
     return () => { active = false; };
   }, [planStartDate]);
+
+  const rideReflectionFingerprint = rides.map((ride) => `${ride.id}:${rideStartedAt(ride)}:${ride.trainingLoad}:${ride.type}:${ride.environment ?? ""}`).join("|");
+  useEffect(() => {
+    let active = true;
+    void requestJson<CoachReflectionsResponse>("/api/coach-reflections", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ dateIso: planStartDate }),
+    }, "Post-ride reflection could not be loaded.")
+      .then((payload) => {
+        if (!active) return;
+        if (payload.rideIdea) setSavedRideIdea(payload.rideIdea);
+        setIntentionReflection(payload.reflection);
+        setReflectionHistory(payload.history);
+        setReflectionCandidates(payload.candidates);
+        setReflectionAwaitingReason(payload.awaitingReason ?? "");
+        setReflectionState("ready");
+      })
+      .catch((error) => {
+        if (!active) return;
+        setReflectionAwaitingReason(error instanceof Error ? error.message : "Post-ride reflection could not be loaded.");
+        setReflectionState("error");
+      });
+    return () => { active = false; };
+  }, [planStartDate, savedRideIdea?.id, savedRideIdea?.updatedAt, rideReflectionFingerprint]);
 
   useEffect(() => {
     const updateCalendarDay = () => setPlanStartDate(localDateKey());
@@ -2740,6 +2780,26 @@ function PlanToday({ rides, recovery, setRecovery, recoverySaveState, saveRecove
     }
   };
 
+  const linkReflectionRide = async (rideId: string) => {
+    setReflectionState("linking");
+    try {
+      const payload = await requestJson<CoachReflectionsResponse>("/api/coach-reflections", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ dateIso: planStartDate, rideId }),
+      }, "The selected ride could not be linked.");
+      if (payload.rideIdea) setSavedRideIdea(payload.rideIdea);
+      setIntentionReflection(payload.reflection);
+      setReflectionHistory(payload.history);
+      setReflectionCandidates(payload.candidates);
+      setReflectionAwaitingReason(payload.awaitingReason ?? "");
+      setReflectionState("ready");
+    } catch (error) {
+      setReflectionAwaitingReason(error instanceof Error ? error.message : "The selected ride could not be linked.");
+      setReflectionState("error");
+    }
+  };
+
 
   return (
     <div className="phase-three-layout">
@@ -2759,6 +2819,15 @@ function PlanToday({ rides, recovery, setRecovery, recoverySaveState, saveRecove
           <article className="reflection-next"><span>A friendly next step</span><strong>{coach.rideReflection.nextSuggestion}</strong><small>The next suggestion adapts to your riding and recovery—never to a pass/fail score.</small></article>
         </div>
       </section>
+
+      {(savedRideIdea || reflectionHistory.length > 0) && <CoachReflection
+        reflection={intentionReflection}
+        history={reflectionHistory}
+        candidates={reflectionCandidates}
+        awaitingReason={reflectionAwaitingReason}
+        state={reflectionState}
+        onChooseRide={linkReflectionRide}
+      />}
 
 
       <section className={`coach-reasoning panel full-width state-${coach.state}`}>
